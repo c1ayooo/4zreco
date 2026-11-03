@@ -35,6 +35,7 @@ type Guard struct {
 	attribSamps map[string][]AttribSample
 	reg         *hook.Registry
 	interceptor *intercept.Interceptor // optional; nil disables user-configured rules
+	egress      *EgressGuard           // optional; 出口审查(平台敏感指纹拦截)，nil 关闭
 }
 
 // AttribSample 是一条 blocked/error 归因的最近样本（B6）：planner 只看计数时对不上
@@ -90,8 +91,57 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		_ = json.Unmarshal(ev.Input, &in)
 		cmd = in.Text
 	}
+	// 出口审查：出站内容含平台敏感指纹（LLM key/jwt.key/PG 密码等）即 deny，
+	// 先于一切其他检查——命中时命令原文本身可能带秘密，不能落盘，审计只记 kind。
+	if res, stop := g.checkEgress(ev, cmd); stop {
+		return res
+	}
 	g.record(ev.ToolName, "allow", "", cmd)
 	return g.applyIntercept(ctx, ev)
+}
+
+// SetEgress 装配出口审查的敏感指纹集合（server 侧进程内共享一份，见
+// server/egressguard.go）。nil = 关闭。
+func (g *Guard) SetEgress(e *EgressGuard) {
+	g.mu.Lock()
+	g.egress = e
+	g.mu.Unlock()
+}
+
+// checkEgress 是 PreToolUse 第一道：对 Bash 类命令全文与 WebFetch 的 url/body
+// 做敏感指纹检查，命中 → deny("操作包含平台敏感信息，禁止外发")。
+func (g *Guard) checkEgress(ev hook.Event, cmd string) (hook.Result, bool) {
+	g.mu.Lock()
+	e := g.egress
+	g.mu.Unlock()
+	if e == nil {
+		return hook.Result{}, false
+	}
+	var texts []string
+	if cmd != "" {
+		texts = append(texts, cmd)
+	}
+	if ev.ToolName == "WebFetch" {
+		var in struct {
+			URL  string `json:"url"`
+			Body string `json:"body"`
+		}
+		if json.Unmarshal(ev.Input, &in) == nil {
+			texts = append(texts, in.URL, in.Body)
+		}
+	}
+	for _, text := range texts {
+		if text == "" {
+			continue
+		}
+		if kind, hit := e.Check(text); hit {
+			// 审计/日志只记 kind：命令原文可能本身就含敏感信息，不落盘；
+			// block 文案也不带命中内容，防止把指纹回显给模型。
+			g.record(ev.ToolName, "block", "出口审查:命中平台敏感指纹("+kind+")", "")
+			return g.block(ev.ToolName, systemBlockMessage("操作包含平台敏感信息，禁止外发"), ""), true
+		}
+	}
+	return hook.Result{}, false
 }
 
 // applyIntercept evaluates user-configured intercept rules against the tool call.

@@ -268,6 +268,7 @@ type Manager struct {
 	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
 	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
 	interceptor *intercept.Interceptor // user-configured tool-call interception rules
+	egress      *guard.EgressGuard     // 进程级出口审查指纹集合（平台敏感信息外发拦截），见 server/egressguard.go
 	vulnintel   *vulnintel.Store       // public CVE/KEV intel store (agent search_vulns reads it)
 	nucleiDir   string                 // local nuclei-templates checkout (synced by vulnintel goroutine)
 	// 漏洞情报同步的互斥与状态：定时循环与页面「立即同步」共用一把锁，保证同一时刻
@@ -580,7 +581,7 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := pg.EnsureLLMUsageTable(); err != nil {
 		log.Printf("[llmusage] create table: %v", err)
 	}
-	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
+	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg), egress: guard.NewEgressGuard()}
 	if proxyAddr != "" {
 		tr, err := traffic.Open(filepath.Join(dir, "traffic"), proxyAddr)
 		if err != nil {
@@ -1145,7 +1146,18 @@ func unixNanoOrZero(t *time.Time) int64 {
 	return t.UnixNano()
 }
 
-func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Interceptor) *Task {
+// taskFromPG builds a Task with its per-task Guard. The Guard carries the
+// process-wide egress fingerprint set (平台敏感信息外发拦截) and the tarpit
+// circuit-breaker (每 host 抓取预算，内存计数随任务生命周期)。
+func taskFromPG(pt *pgdb.Task, m *Manager, store *pgdb.ExplorationStore) *Task {
+	ic := m.interceptor
+	g := guard.NewWithInterceptor(ic)
+	if m.egress != nil {
+		g.SetEgress(m.egress) // 出口审查：进程级共享指纹集合
+	}
+	if m.pg != nil && store != nil {
+		g.SetTarpit(newTarpitConfig(m.pg, store)) // tarpit 熔断(每任务计数,重启清零)
+	}
 	return &Task{
 		ID: strconv.FormatInt(pt.ID, 10), ExpID: pt.ExplorationID,
 		Name:       pt.Name,
@@ -1163,7 +1175,7 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
 		CoverageEnabled: pt.CoverageEnabled,
 		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
-		Store: store, Guard: guard.NewWithInterceptor(ic), notify: make(chan struct{}, 1),
+		Store: store, Guard: g, notify: make(chan struct{}, 1),
 	}
 }
 
@@ -1214,7 +1226,7 @@ func (m *Manager) CreateTaskWithOptions(description, goal string, opts pgdb.Task
 	if err != nil {
 		return nil, err
 	}
-	t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor)
+	t := taskFromPG(pt, m, m.pg.Exploration(pt.ExplorationID))
 	m.mu.Lock()
 	m.tasks[t.ID] = t
 	m.active = t.ID
@@ -1413,7 +1425,7 @@ func (m *Manager) LoadExisting() []*Task {
 		if _, ok := m.tasks[id]; ok {
 			continue
 		}
-		t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor)
+		t := taskFromPG(pt, m, m.pg.Exploration(pt.ExplorationID))
 		m.tasks[id] = t
 		loaded = append(loaded, t)
 	}
