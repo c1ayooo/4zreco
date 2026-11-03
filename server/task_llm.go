@@ -708,6 +708,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	wk.SetRunTimeout(time.Duration(s.agentRunSeconds("worker")) * time.Second)
 	wk.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	wk.SetWebSearch(s.webSearchFor("worker"))
+	wk.SetUAResolver(s.uaForTask) // 按任务稳定分配的客户端 UA → BashEnv ZRECO_UA
 	wk.SetConstraintInject(s.constraintInjectWorker) // 操作约束注入 worker(可配置,默认开)
 	// 任务级登录凭据（v0.4.8）：装配时读一次并注入 worker system prompt。
 	// 认证配置当前只在创建任务时录入；若以后加编辑接口，需要在保存后 invalidate

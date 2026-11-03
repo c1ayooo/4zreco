@@ -272,6 +272,9 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	// interactive_shell is on, so Bash points at shell_open for interactive programs
 	// without ever referencing a tool that isn't injected (§14.1/§14.2).
 	const bashInteractiveShellNote = "\n\n需要【交互输入】的程序（msfconsole / ssh 交互登录 / mysql、psql、python 等 REPL / 密码或 yes/no 提示 / nc 反弹 shell）不要用 Bash（它没有 stdin、会卡住），改用 shell_open 开交互会话（用完 shell_close）。一次性、非交互命令仍用 Bash。"
+	// bashUANote 只绑 worker 的 Bash 描述：只有 worker 的 BashEnv 注入了 ZRECO_UA
+	// （见 worker.go uaEnv），其他 agent 无此变量、说明不 dangling。
+	const bashUANote = "\n\nHTTP 客户端(curl/httpx 等)统一使用 $ZRECO_UA 作为 User-Agent(本任务稳定分配,任务内不要更换);禁止在库 TLS 之外再堆 UA 伪装(UA/TLS 指纹失配正是反 AI 蜜罐的触发器);疑似反 AI 陷阱的目标改用 browser MCP 访问。"
 	agent.ToolResolve = func(ctx context.Context, agentKey string, tools []actool.CoreTool) []actool.CoreTool {
 		rows, err := pg.ListTools()
 		if err != nil {
@@ -358,6 +361,9 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 			}
 			if interactive {
 				bashNote += bashInteractiveShellNote
+			}
+			if agentKey == "worker" {
+				bashNote += bashUANote
 			}
 		}
 		if bashNote != "" {

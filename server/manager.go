@@ -337,6 +337,9 @@ const (
 	settingVulnIntelOn = "vulnintel_enabled"
 	// NVD API key（可选）：匿名 5 req/30s，配 key 50 req/30s，首次回填快 ~10 倍。
 	settingNvdApiKey = "nvd_api_key"
+	// 客户端 UA 池(JSON 字符串数组)：worker 的 BashEnv 按 hash(taskID) 稳定分配
+	// 一个(见 agent/uapool.go)。空/非法 = 默认池(两条主流 Chrome UA)。
+	settingWebUAPool = "web_ua_pool"
 	settingWorkers   = "workers"
 	settingLLMRecord = "llm_record"
 	// 冷节点压缩的输出预算与墙钟上限。默认 0 = 用代码里的默认值

@@ -91,6 +91,9 @@ type Worker struct {
 	// maxTokensFn resolves the per-reply output cap in tokens, on the same
 	// per-run basis. nil or 0 = send no cap and let the endpoint decide.
 	maxTokensFn func() int
+	// uaFn resolves this task's稳定分配的客户端 UA(settings web_ua_pool,
+	// hash(taskID) % len(pool))。Read per run;nil/空 = 不注入 ZRECO_UA。
+	uaFn func(taskID int64) string
 }
 
 // WorkerSessionID returns the stable transcript key used by a worker intent.
@@ -203,6 +206,20 @@ func (w *Worker) SetProxy(addr, caCert string) { w.proxyAddr, w.proxyCACert = ad
 // SetWebSearch selects the web_search backend for this worker (off by default).
 func (w *Worker) SetWebSearch(o WebSearchOpts) { w.webSearch = o }
 
+// SetUAResolver wires a resolver returning the task's稳定分配的客户端 UA
+// (settings web_ua_pool)。nil/unset 或返回空 = 不注入 ZRECO_UA。Read per run,
+// like nonStreaming.
+func (w *Worker) SetUAResolver(fn func(taskID int64) string) { w.uaFn = fn }
+
+// uaForTask returns this run's stable client UA; empty when no resolver or the
+// resolver yields empty (BashEnv then stays proxy-only).
+func (w *Worker) uaForTask(taskID int64) string {
+	if w.uaFn == nil {
+		return ""
+	}
+	return w.uaFn(taskID)
+}
+
 // proxyEnv builds the Bash-subprocess env that routes child-command HTTP through
 // the egress proxy (the recording MITM when capture is on, or the global proxy
 // directly when it is off) and, only when a MITM CA is present, makes the common
@@ -233,6 +250,15 @@ func proxyEnv(proxyAddr, caCert string) []string {
 		)
 	}
 	return env
+}
+
+// uaEnv 在 Bash env 上追加 ZRECO_UA(按任务稳定分配的客户端 UA,worker 的
+// curl/httpx 等 HTTP 客户端统一使用,任务内不更换)。ua 为空原样返回。
+func uaEnv(env []string, ua string) []string {
+	if ua == "" {
+		return env
+	}
+	return append(env, "ZRECO_UA="+ua)
 }
 
 // workerDefaultTmpl is the built-in EDITABLE body (段 [A]) of the worker system
@@ -555,8 +581,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		DeepSeekSearchAPIKey:  w.webSearch.DeepSeekAPIKey,
 		DeepSeekSearchModel:   w.webSearch.DeepSeekModel,
 		WebSearchProxy:        w.webSearch.Proxy,
-		// Bash 子命令的 HTTP 默认走记录代理 + 信任其 CA（工具无需 -x/-k）。
-		BashEnv:    proxyEnv(w.proxyAddr, w.proxyCACert),
+		// Bash 子命令的 HTTP 默认走记录代理 + 信任其 CA（工具无需 -x/-k）;另注入
+		// ZRECO_UA=本任务稳定分配的客户端 UA(curl/httpx 等统一使用,任务内不更换)。
+		BashEnv:    uaEnv(proxyEnv(w.proxyAddr, w.proxyCACert), w.uaForTask(taskID)),
 		WorkingDir: runDir,
 		MaxTurns:   w.maxTurns, // 0 = unlimited (configurable in agent management)
 		// 墙钟预算,轮边界判,不打断半路;0 = 不限。有任务级 deadline 时夹逼到 min(自身预算,

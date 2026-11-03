@@ -453,6 +453,20 @@ func (s *Server) webSearchFor(key string) agent.WebSearchOpts {
 	return o
 }
 
+// uaForTask 返回本任务稳定分配的客户端 UA：池子读 settings 键 web_ua_pool
+// (JSON 字符串数组,每次 run 现读、改池即时生效),未配置用默认池;选择是
+// hash(taskID) % len(pool),同一任务永远同一个。无 DB 时直接给默认池结果。
+func (s *Server) uaForTask(taskID int64) string {
+	if s.m == nil || s.m.pg == nil {
+		return agent.PickUA(nil, taskID)
+	}
+	raw, _, err := s.m.pg.GetSetting(settingWebUAPool)
+	if err != nil {
+		raw = ""
+	}
+	return agent.PickUA(agent.UAPoolFromSetting(raw), taskID)
+}
+
 // nonStreamingResolver returns a resolver capturing a profile's streaming choice.
 // The agents read it per run; a profile change rebuilds the agents (applyLLM),
 // so the captured value is always the one in effect for this build.
