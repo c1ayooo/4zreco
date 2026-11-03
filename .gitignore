@@ -1,0 +1,70 @@
+# 编译产物
+/4zreco
+/4zreco.exe
+/4zreco-*
+/artex
+/artex.exe
+/artex-*
+/dist/
+*.zip
+SHA256SUMS
+
+# 前端开发产物
+/web/node_modules/
+/web/.next/
+/web/src/.next/
+/web/out/
+/web/.turbo/
+/web/.vercel/
+
+# Go embed 编译产物（构建时生成，不提交）
+/server/webui/dist/
+/server/web/
+
+# 环境与敏感配置
+.env
+*.pem
+*.key
+*.crt
+config.json
+*.sqlite
+*.db
+
+# 数据目录
+/data/
+/pgdata/
+/transcripts/
+*.sqlite
+*.db
+
+# 运行时日志
+*.log
+
+# 自更新暂存 / 回滚件
+/4zreco.new
+/4zreco.new.sha256
+/4zreco.old
+/4zreco.upgrade.json
+
+# IDE/编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS 生成
+.DS_Store
+Thumbs.db
+
+# 测试产物
+*-events.csv
+/bench/
+/Dockerfile.bench
+/Dockerfile.bench.v2
+
+# Python 缓存
+__pycache__/
+*.pyc
+.build-tmp/
+peers/

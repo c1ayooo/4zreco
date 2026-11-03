@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-4zreco}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-4zreco}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-4zreco} -d ${POSTGRES_DB:-4zreco}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  4zreco:
+    # 镜像在 GHCR 与 Docker Hub 双源发布；默认走 GHCR（发布工作流必然推送），
+    # 需要换源时用 ZRECO_IMAGE 覆盖。
+    image: ${ZRECO_IMAGE:-ghcr.io/c1ayooo/4zreco}:${ZRECO_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ZRECO_PG_DSN: postgres://${POSTGRES_USER:-4zreco}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-4zreco}?sslmode=disable
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ZRECO_LLM_PROVIDER: ${ZRECO_LLM_PROVIDER:-}
+      ZRECO_LLM_MODEL: ${ZRECO_LLM_MODEL:-}
+      ZRECO_LLM_BASE_URL: ${ZRECO_LLM_BASE_URL:-}
+      ZRECO_LLM_PROXY: ${ZRECO_LLM_PROXY:-}
+    ports:
+      - "8787:8787"
+      - "127.0.0.1:8788:8788"
+      # 回连端口映射(按需放开):容器内 MSF/listener 监听的端口要映射到宿主,
+      # agent 才能收到 reverse shell。示例(解除注释并按需改):
+      # - "4444-4450:4444-4450"
+    volumes:
+      # 把数据目录（含 jwt.key、SQLite 等）绑定到项目根目录的 data/，
+      # 方便在宿主机直接查看/备份，容器重建也不丢。
+      - ./data:/app/data
+      # 把项目根目录的 skills 挂进容器（覆盖镜像内置的 /app/skills）；
+      # 改 skill 无需重建镜像，容器读的就是宿主机这份。
+      - ./skills:/app/skills
+    restart: unless-stopped
+
+volumes:
+  pgdata:
