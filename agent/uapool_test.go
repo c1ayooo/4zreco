@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// 批 5 B4:默认池存在且是主流 Chrome(Windows x64);settings 未配置/非法时回落默认池。
+// B4:默认池存在且是主流 Chrome(Windows x64);settings 未配置/非法时回落默认池。
 func TestUAPoolDefaults(t *testing.T) {
 	pool := DefaultUAPool()
 	if len(pool) < 2 {
@@ -30,7 +30,7 @@ func TestUAPoolDefaults(t *testing.T) {
 	}
 }
 
-// 批 5 B4:同任务稳定(每次调用同一个),不同任务可不同,空池回落默认。
+// B4:同任务稳定(每次调用同一个),不同任务可不同,空池回落默认。
 func TestUAPickStable(t *testing.T) {
 	pool := DefaultUAPool()
 	first := PickUA(pool, 42)
@@ -52,11 +52,11 @@ func TestUAPickStable(t *testing.T) {
 	}
 }
 
-// 批 5 B4:BashEnv 注入——ua 非空追加 ARTEX_UA,为空原样返回。
+// B4:BashEnv 注入——ua 非空追加 ZRECO_UA,为空原样返回。
 func TestUAEnv(t *testing.T) {
 	env := uaEnv(nil, "UA-X")
-	if len(env) != 1 || env[0] != "ARTEX_UA=UA-X" {
-		t.Fatalf("uaEnv should append ARTEX_UA, got %v", env)
+	if len(env) != 1 || env[0] != "ZRECO_UA=UA-X" {
+		t.Fatalf("uaEnv should append ZRECO_UA, got %v", env)
 	}
 	base := []string{"HTTP_PROXY=http://127.0.0.1:8080"}
 	got := uaEnv(base, "")

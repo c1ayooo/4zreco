@@ -10,6 +10,7 @@ package guard
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"regexp"
 	"sync"
 	"time"
@@ -36,6 +37,7 @@ type Guard struct {
 	reg         *hook.Registry
 	interceptor *intercept.Interceptor // optional; nil disables user-configured rules
 	egress      *EgressGuard           // optional; 出口审查(平台敏感指纹拦截)，nil 关闭
+	tarpit      *tarpitState           // optional; tarpit 熔断(每 host 抓取预算)，nil 关闭
 }
 
 // AttribSample 是一条 blocked/error 归因的最近样本（B6）：planner 只看计数时对不上
@@ -97,6 +99,9 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		return res
 	}
 	g.record(ev.ToolName, "allow", "", cmd)
+	// tarpit 熔断：每 host 抓取计数，超预算写一次 hint 提示 planner 停派该方向，
+	// 之后对该 host 仍 warn 放行（不硬 block，防误杀真实大站）。
+	g.checkTarpit(ev)
 	return g.applyIntercept(ctx, ev)
 }
 
@@ -137,7 +142,7 @@ func (g *Guard) checkEgress(ev hook.Event, cmd string) (hook.Result, bool) {
 		if kind, hit := e.Check(text); hit {
 			// 审计/日志只记 kind：命令原文可能本身就含敏感信息，不落盘；
 			// block 文案也不带命中内容，防止把指纹回显给模型。
-			g.record(ev.ToolName, "block", "出口审查:命中平台敏感指纹("+kind+")", "")
+			log.Printf("[guard][egress] 命中平台敏感指纹(%s),%s 外发已拦截", kind, ev.ToolName)
 			return g.block(ev.ToolName, systemBlockMessage("操作包含平台敏感信息，禁止外发"), ""), true
 		}
 	}

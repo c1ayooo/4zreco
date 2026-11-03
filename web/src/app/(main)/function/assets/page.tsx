@@ -95,6 +95,33 @@ function statusTone(code: number) {
   return "text-muted-foreground";
 }
 
+// 蜜罐静态签名徽标：score>0 才显示，hover 展开命中签名证据（JSON 数组文本，
+// 解析失败按原文展示）。≥0.9 红「蜜罐」，其余琥珀「疑似」。
+function HoneypotBadge({ score, evidence }: { score?: number; evidence?: string }) {
+  if (!score || score <= 0) return <span className="text-xs text-muted-foreground">—</span>;
+  let sigs = evidence || "";
+  try {
+    const arr = JSON.parse(evidence || "[]") as unknown;
+    if (Array.isArray(arr) && arr.length > 0) sigs = arr.join("\n");
+  } catch {
+    /* 证据非 JSON 数组时按原文展示 */
+  }
+  const high = score >= 0.9;
+  return (
+    <span
+      title={`蜜罐评分 ${score.toFixed(2)}\n命中签名:\n${sigs}`}
+      className={cn(
+        "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none",
+        high
+          ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+          : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+      )}
+    >
+      {high ? "蜜罐" : "疑似"}
+    </span>
+  );
+}
+
 const PAGE_SIZES = [25, 50, 100, 200];
 
 const TABS: { key: string; label: string; icon: LucideIcon }[] = [
@@ -590,7 +617,7 @@ export default function AssetsPage() {
         <TabsContent value="service" className="mt-0 flex min-h-0 flex-1 flex-col gap-2">
           {searchBox}
           <AssetCard
-            cols={["", "服务", "域名", "IP", "端口", "状态码", "标题", "指纹", "认证", ""]}
+            cols={["", "服务", "域名", "IP", "端口", "状态码", "标题", "蜜罐", "指纹", "认证", ""]}
             loaded={loaded}
             total={total}
             page={page}
@@ -645,6 +672,9 @@ export default function AssetsPage() {
                   </TableCell>
                   <TableCell className="max-w-[12rem] truncate text-xs" title={a.page_title}>
                     {a.page_title || "—"}
+                  </TableCell>
+                  <TableCell>
+                    <HoneypotBadge score={a.honeypot_score} evidence={a.honeypot_evidence} />
                   </TableCell>
                   <TableCell>
                     <Chips items={a.technologies ?? []} />

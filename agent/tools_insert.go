@@ -11,6 +11,7 @@ import (
 
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/c1ayooo/4zreco/db"
+	"github.com/c1ayooo/4zreco/honeydetect"
 )
 
 // assetInterceptCandidates 提取一条待插入资产输入项的 域名/IP/URL 候选串，用于资产拦截匹配。
@@ -108,6 +109,9 @@ type assetInputItem struct {
 	Auth          []map[string]any `json:"auth"`
 	ServiceName   string           `json:"service_name"`
 	ServiceIP     string           `json:"service_ip"` // optional enrichment IP
+	// banner 是协议握手横幅（SSH 版本串、SMTP 问候等，nmap/nc 直接可见），
+	// 可选；蜜罐静态签名识别（honeydetect）用它做子串匹配。
+	Banner string `json:"banner"`
 
 	// ---- service (other) ----
 	Port  int    `json:"port"`
@@ -308,6 +312,12 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 							IP:            svcIP,
 							TaskID:        taskID,
 						})
+						if err == nil {
+							// 落库后跑蜜罐静态签名（title/banner/port），best-effort。
+							t.evaluateHoneypot(id, honeydetect.ServiceView{
+								Port: urlPort(item.URL), Banner: item.Banner, Title: item.PageTitle,
+							})
+						}
 					} else {
 						id, err = t.as.UpsertOtherService(db.UpsertOtherServiceReq{
 							Domain:      item.Domain,
@@ -317,6 +327,12 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 							Auth:        item.Auth,
 							TaskID:      taskID,
 						})
+						if err == nil {
+							// 落库后跑蜜罐静态签名（port/banner），best-effort。
+							t.evaluateHoneypot(id, honeydetect.ServiceView{
+								Port: item.Port, Banner: item.Banner,
+							})
+						}
 					}
 
 				case "endpoint":

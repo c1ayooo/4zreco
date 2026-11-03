@@ -21,6 +21,7 @@ import (
 	pgdb "github.com/c1ayooo/4zreco/db"
 	"github.com/c1ayooo/4zreco/enrich"
 	"github.com/c1ayooo/4zreco/guard"
+	"github.com/c1ayooo/4zreco/honeydetect"
 	"github.com/c1ayooo/4zreco/intercept"
 	"github.com/c1ayooo/4zreco/traffic"
 	"github.com/c1ayooo/4zreco/vulnintel"
@@ -341,8 +342,11 @@ const (
 	// 客户端 UA 池(JSON 字符串数组)：worker 的 BashEnv 按 hash(taskID) 稳定分配
 	// 一个(见 agent/uapool.go)。空/非法 = 默认池(两条主流 Chrome UA)。
 	settingWebUAPool = "web_ua_pool"
-	settingWorkers   = "workers"
-	settingLLMRecord = "llm_record"
+	// tarpit 熔断的每 host 抓取预算(默认 40)：同 host WebFetch 超过这个次数即写
+	// hint 提示 planner 停派该方向(见 guard/tarpit.go)。<=0/非法 = 默认值。
+	settingTarpitFetchBudget = "tarpit_fetch_budget"
+	settingWorkers           = "workers"
+	settingLLMRecord         = "llm_record"
 	// 冷节点压缩的输出预算与墙钟上限。默认 0 = 用代码里的默认值
 	// (32768 token / 20 分钟)。这两个值存在的原因见 agent.Compactor.outTokens:
 	// 思考型模型(强制 adaptive thinking)的思考长度随 max_tokens 预算线性膨胀,
@@ -559,6 +563,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	// 蜜罐签名库：dataDir/signatures/honeypot.json 存在则优先于内嵌库（按 mtime
+	// 热更新，便于不落盘发版地运营签名库）；缺失/损坏回落内嵌库，永不空载。
+	honeydetect.SetSignaturesPath(filepath.Join(dir, "signatures", "honeypot.json"))
 	dsn, source, err := pgdb.DSN()
 	if err != nil {
 		return nil, err
@@ -1176,6 +1183,33 @@ func taskFromPG(pt *pgdb.Task, m *Manager, store *pgdb.ExplorationStore) *Task {
 		CoverageEnabled: pt.CoverageEnabled,
 		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
 		Store: store, Guard: g, notify: make(chan struct{}, 1),
+	}
+}
+
+// newTarpitConfig 装配 tarpit 熔断：预算读 settings 键 tarpit_fetch_budget
+// （每次调用现读，改设置即时生效；非法/<=0 由 guard 回落默认 40）；熔断回调写一条
+// hint 节点进探索图，提示停派该 host 方向（planner 每轮 graph overview 必读 hints）。
+func newTarpitConfig(pg *pgdb.DB, store *pgdb.ExplorationStore) guard.TarpitConfig {
+	return guard.TarpitConfig{
+		Budget: func() int {
+			v, _, err := pg.GetSetting(settingTarpitFetchBudget)
+			if err != nil {
+				return 0 // 读取失败 → guard 回落默认预算
+			}
+			n, _ := strconv.Atoi(strings.TrimSpace(v))
+			return n
+		},
+		Hint: func(host string, count int) {
+			if store == nil {
+				return
+			}
+			if _, err := store.AddNode(pgdb.KindHint, map[string]any{
+				"text": fmt.Sprintf("【tarpit 熔断】host %s 的抓取调用已达 %d 次，超过预算，疑似 tarpit 迷宫类反爬虫陷阱。请停止向该 host 派发抓取/爬虫类意图，改走其他侦察面；平台侧已对该 host 转为 warn 放行计数。", host, count),
+				"kind": "tarpit", "host": host, "count": count,
+			}, 0, "active", "guard", nil); err != nil {
+				log.Printf("[guard][tarpit] 写 hint 失败: %v", err)
+			}
+		},
 	}
 }
 

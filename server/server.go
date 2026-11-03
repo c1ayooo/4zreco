@@ -171,6 +171,9 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
 	s.jwtKey.Store(key)
+	// 出口审查：注册平台敏感指纹（jwt.key 已就绪、PG 可用；LLM profile 变更经
+	// reapplyActiveProfile 重注册）。best-effort，失败只影响拦截面。
+	s.registerEgressFingerprints()
 	s.listeners = listener.NewManager()
 	agent.SetListenerManager(s.listeners)
 	agent.SetConnectBackResolver(func(port int) agent.ConnectBack {
@@ -440,6 +443,8 @@ func (s *Server) reapplyActiveProfile() {
 		log.Printf("[engine] reapply active profile failed: %v", err)
 		return
 	}
+	// profile 增删/换 key 后指纹集会过期，这里整类替换（llm_api_key）。
+	s.registerEgressFingerprints()
 	log.Printf("[engine] LLM reapplied from active profile: %s / %s", cfg.Provider(), cfg.Model)
 }
 

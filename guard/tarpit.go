@@ -15,7 +15,6 @@ import (
 	"log"
 	"net/url"
 	"strconv"
-	"sync"
 
 	"github.com/Autumn-27/norma/hook"
 )
@@ -116,6 +115,3 @@ func (g *Guard) checkTarpit(ev hook.Event) {
 func tarpitMessage(host string, count, budget int) string {
 	return "疑似 tarpit 迷宫(" + host + ",抓取 " + strconv.Itoa(count) + " 次,预算 " + strconv.Itoa(budget) + ")"
 }
-
-// tarpitMu 只是占位以保持 import 集合稳定（tarpitState 经 Guard.mu 串行化）。
-var _ = sync.Mutex{}

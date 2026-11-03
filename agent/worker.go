@@ -349,7 +349,8 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	if t := hosttools.SummaryText(); t != "" {
 		out += "\n\n【本机可用工具】\n" + t
 	}
-	return out
+	// workerAntiTrapRules（反 AI 蜜罐红线）是代码固定尾，不可被 DB 正文覆盖。
+	return out + workerAntiTrapRules
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:

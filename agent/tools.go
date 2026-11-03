@@ -495,6 +495,19 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 		hsum = append(hsum, hint)
 	}
 	out["hints"] = hsum
+	// 疑似蜜罐资产清单（静态签名命中，score>0，上限 20 条，评分降序）。
+	// 单信号只降级不封锁——处置纪律在 planner 系统提示固定尾（plannerHoneypotRules）。
+	if t.as != nil && t.taskID > 0 {
+		if pots, err := t.as.HoneypotAssetsByTask(t.taskID, 20); err == nil && len(pots) > 0 {
+			plist := make([]map[string]any, 0, len(pots))
+			for _, p := range pots {
+				plist = append(plist, map[string]any{
+					"id": p.ID, "asset": p.Label, "score": p.Score, "signatures": p.Evidence,
+				})
+			}
+			out["honeypot_assets"] = plist
+		}
+	}
 	// lineage from the exploration edges: an intent's parents (what it
 	// derived_from — possibly several facts combined) and its yields (the
 	// facts/findings it produced). factFrom maps a fact → the intent that
