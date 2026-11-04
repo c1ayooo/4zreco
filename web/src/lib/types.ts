@@ -38,6 +38,7 @@ export interface Task {
   source_task_ids?: string[]; // directly related tasks inherited as read-only context
   archive_blocked_by_task_id?: string; // live direct dependent that must be archived first
   company_ids?: number[]; // associated company scopes; current company assets join the task at creation
+  project_id?: number; // 归属项目(创建时定;未挂=undefined)
   coverage_enabled?: boolean; // 资产覆盖度功能开关(创建时定,默认开)；false=不计算/不展示覆盖度
   // 任务级登录凭据（脱敏视图；未配置为省略）
   auth_config?: TaskAuthConfigView;
@@ -765,6 +766,34 @@ export interface Conversation {
   llm_profile_id?: number;
   pinned?: boolean;
   pinned_at?: string | null;
+  project_id?: number; // 归属项目(未挂=undefined)
+  task_id?: number; // 关联任务(未关联=undefined)
+  created_at: string;
+  updated_at: string;
+}
+
+// ---- Projects (任务/对话的归属主轴) ----
+// 项目范围规则：结构镜像企业范围(company_scope)，仅作组织定义。
+export interface ProjectScope {
+  id: number;
+  project_id: number;
+  kind: "domain" | "ip" | "cidr" | "icp" | "keyword";
+  domain?: string;
+  net?: string;
+  value?: string;
+  raw: string;
+  reason?: string;
+  created_at: string;
+}
+
+export interface Project {
+  id: number;
+  name: string;
+  description?: string;
+  status: "active" | "archived";
+  task_count: number;
+  conversation_count: number;
+  scope: ProjectScope[];
   created_at: string;
   updated_at: string;
 }

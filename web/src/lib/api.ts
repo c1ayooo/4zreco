@@ -16,6 +16,7 @@ import type {
   ArchiveBatchItem,
   Asset,
   AssetInterceptRule,
+  Project,
   AssetInterceptRuleInput,
   Audit,
   BatchCategoryItem,
@@ -272,8 +273,12 @@ export const api = {
     post<{ ok: boolean }>("/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 
   // ---- tasks ----
-  tasks: () =>
-    get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({ tasks: arr(r.tasks), active: r.active ?? "" })),
+  // projectId 传了就按任务归属项目过滤（client 端过滤；TaskDTO 带 project_id）。0/省略=全部。
+  tasks: (input?: { projectId?: number }) =>
+    get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({
+      tasks: input?.projectId ? arr(r.tasks).filter((t) => t.project_id === input.projectId) : arr(r.tasks),
+      active: r.active ?? "",
+    })),
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
   createTask: (input: {
     name?: string;
@@ -289,6 +294,7 @@ export const api = {
     coverageEnabled?: boolean;
     interceptRules?: AssetInterceptRuleInput[];
     authConfig?: TaskAuthConfigInput;
+    projectId?: number;
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
@@ -305,6 +311,7 @@ export const api = {
       intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
       // 任务级登录凭据（v0.4.8）：密码/TOTP 只进 DB，API 永不回传。
       auth_config: input.authConfig?.enabled ? input.authConfig : undefined,
+      project_id: input.projectId ?? null,
     }),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
@@ -1139,11 +1146,30 @@ export const api = {
     patch<{ ok: boolean }>(`/agents/${key}`, { name, description }),
   deleteAgent: (key: string) => del<{ deleted: string }>(`/agents/${key}`),
 
+  // ---- projects (任务/对话的归属主轴) ----
+  // 后端 nil 切片序列化为 null(新项目无范围时 scope=null)，归一成 [] 免空调护。
+  projects: () =>
+    get<{ projects: Project[] }>("/projects").then((r) =>
+      arr(r.projects).map((p) => ({ ...p, scope: p.scope ?? [] })),
+    ),
+  createProject: (name: string, description = "") => post<Project>("/projects", { name, description }),
+  updateProject: (id: number, input: { name: string; description: string; status?: string }) =>
+    patch<Project>(`/projects/${id}`, input),
+  deleteProject: (id: number) => del<{ ok: boolean }>(`/projects/${id}`),
+  addProjectScope: (id: number, scope: string, reason = "") =>
+    post<{ added: number; skipped: number; invalid: number; errors: string[]; project: Project }>(
+      `/projects/${id}/scope`,
+      { scope, reason },
+    ).then((r) => ({ ...r, errors: r.errors ?? [] })), // Go 空切片→null，归一成 []
+
+  deleteProjectScope: (id: number, scopeId: number) =>
+    del<{ ok: boolean }>(`/projects/${id}/scope/${scopeId}`),
+
   // ---- conversations (chat page) ----
   conversations: () => get<{ conversations: Conversation[] }>("/conversations").then((r) => arr(r.conversations)),
   createConversation: (agent_key: string, title = "", llm_profile_id?: number | null) =>
     post<Conversation>("/conversations", { agent_key, title, llm_profile_id: llm_profile_id ?? null }),
-  updateConversation: (id: number, input: { title?: string; pinned?: boolean }) =>
+  updateConversation: (id: number, input: { title?: string; pinned?: boolean; project_id?: number; task_id?: number }) =>
     patch<Conversation>(`/conversations/${id}`, input),
   renameConversation: (id: number, title: string) => patch<Conversation>(`/conversations/${id}`, { title }),
   pinConversation: (id: number, pinned: boolean) => patch<Conversation>(`/conversations/${id}`, { pinned }),

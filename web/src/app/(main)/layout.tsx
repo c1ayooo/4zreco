@@ -15,6 +15,7 @@ import {
 } from "@/lib/preferences/layout";
 import { PREFERENCE_DEFAULTS } from "@/lib/preferences/preferences-config";
 import { cn } from "@/lib/utils";
+import { ProjectStoreProvider } from "@/stores/project/project-provider";
 
 import { MainContent } from "./_components/main-content";
 
@@ -68,7 +69,8 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
         } as React.CSSProperties
       }
     >
-      <AppSidebar variant={variant} collapsible={collapsible} />
+      <ProjectStoreProvider>
+        <AppSidebar variant={variant} collapsible={collapsible} />
       <SidebarInset
         className={cn(
           "[html[data-content-layout=centered]_&>*]:mx-auto",
@@ -81,6 +83,7 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
       >
         <MainContent>{children}</MainContent>
       </SidebarInset>
+      </ProjectStoreProvider>
     </SidebarProvider>
   );
 }

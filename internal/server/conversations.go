@@ -175,15 +175,40 @@ func (s *Server) pgRenameConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Title  *string `json:"title"`
-		Pinned *bool   `json:"pinned"`
+		Title     *string `json:"title"`
+		Pinned    *bool   `json:"pinned"`
+		ProjectID *int64  `json:"project_id"` // 归属项目;指向 0=取消挂载;省略=不改
+		TaskID    *int64  `json:"task_id"`    // 关联任务;指向 0=解除关联;省略=不改
 	}
 	if !decodeConversationRequest(w, r, &req) {
 		return
 	}
-	if req.Title == nil && req.Pinned == nil {
-		writeErr(w, 400, "至少需要提供 title 或 pinned")
+	if req.Title == nil && req.Pinned == nil && req.ProjectID == nil && req.TaskID == nil {
+		writeErr(w, 400, "至少需要提供 title、pinned、project_id 或 task_id")
 		return
+	}
+	if req.ProjectID != nil && *req.ProjectID > 0 {
+		if p, err := pg.Projects().GetProject(*req.ProjectID); err != nil || p.ID == 0 {
+			writeErr(w, 400, "项目不存在")
+			return
+		}
+	}
+	// 绑定任务时把项目对齐到任务所属项目（只给任务、未显式给项目的情形）；
+	// 显式给了项目且与任务项目冲突 → 拒绝，不静默改写用户选择。
+	if req.TaskID != nil && *req.TaskID > 0 {
+		t, err := pg.GetTask(*req.TaskID)
+		if err != nil || t == nil {
+			writeErr(w, 400, "任务不存在")
+			return
+		}
+		if t.ProjectID != nil && *t.ProjectID > 0 {
+			if req.ProjectID == nil || *req.ProjectID == 0 {
+				req.ProjectID = t.ProjectID
+			} else if *req.ProjectID != *t.ProjectID {
+				writeErr(w, 400, fmt.Sprintf("任务 #%d 属于项目 #%d，与所给项目 #%d 不一致", *req.TaskID, *t.ProjectID, *req.ProjectID))
+				return
+			}
+		}
 	}
 	if req.Title != nil {
 		title := strings.TrimSpace(*req.Title)
@@ -197,7 +222,9 @@ func (s *Server) pgRenameConversation(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Title = &title
 	}
-	updated, err := pg.UpdateConversation(c.ID, db.ConversationPatch{Title: req.Title, Pinned: req.Pinned})
+	updated, err := pg.UpdateConversation(c.ID, db.ConversationPatch{
+		Title: req.Title, Pinned: req.Pinned, ProjectID: req.ProjectID, TaskID: req.TaskID,
+	})
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return

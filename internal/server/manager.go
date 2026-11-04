@@ -58,6 +58,7 @@ type Task struct {
 	LLMFailoverReason  string  `json:"llm_failover_reason,omitempty"`
 	SourceTaskIDs      []int64 `json:"source_task_ids,omitempty"`
 	CompanyIDs         []int64 `json:"company_ids,omitempty"`
+	ProjectID          *int64  `json:"project_id,omitempty"` // 归属项目(创建时定,不可变)
 	Status             string  `json:"status"` // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
 	// 任务级超时(见 docs/任务级超时与收尾设计.md)。DeadlineAt/FirstRunAt 为 unix 秒,0=未设/未运行。
 	TimeoutSeconds       int                    `json:"timeout_seconds"`
@@ -138,6 +139,7 @@ type taskLifecycleState struct {
 	DeadlineAt    int64
 	SourceTaskIDs []int64
 	CompanyIDs    []int64
+	ProjectID     *int64
 	CategoryID    *int64
 	CategoryName  string
 }
@@ -165,6 +167,7 @@ func (t *Task) lifecycleSnapshotLocked() taskLifecycleState {
 		DeadlineAt:    t.DeadlineAt,
 		SourceTaskIDs: append([]int64(nil), t.SourceTaskIDs...),
 		CompanyIDs:    append([]int64(nil), t.CompanyIDs...),
+		ProjectID:     cloneInt64Ptr(t.ProjectID),
 		CategoryID:    cloneInt64Ptr(t.CategoryID),
 		CategoryName:  t.CategoryName,
 	}
@@ -189,6 +192,7 @@ func (t *Task) updateLifecycle(update func(*taskLifecycleState)) {
 	t.DeadlineAt = state.DeadlineAt
 	t.SourceTaskIDs = append(t.SourceTaskIDs[:0], state.SourceTaskIDs...)
 	t.CompanyIDs = append(t.CompanyIDs[:0], state.CompanyIDs...)
+	t.ProjectID = cloneInt64Ptr(state.ProjectID)
 	t.CategoryID = cloneInt64Ptr(state.CategoryID)
 	t.CategoryName = state.CategoryName
 	t.lifecycleMu.Unlock()
@@ -1196,6 +1200,7 @@ func taskFromPG(pt *pgdb.Task, m *Manager, store *pgdb.ExplorationStore) *Task {
 		LLMFailoverState: pt.LLMFailoverState, LLMFailoverReason: pt.LLMFailoverReason,
 		SourceTaskIDs:  append([]int64(nil), pt.SourceTaskIDs...),
 		CompanyIDs:     append([]int64(nil), pt.CompanyIDs...),
+		ProjectID:      cloneInt64Ptr(pt.ProjectID),
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
 		CoverageEnabled: pt.CoverageEnabled,
 		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
@@ -1254,6 +1259,28 @@ func (m *Manager) UpdateTaskMetadata(taskID string, patch pgdb.TaskPatch) (*Task
 		state.PinnedAt = unixOrZero(updated.PinnedAt)
 	})
 	return task, nil
+}
+
+// DetachProjectFromTasks clears the in-memory project association of a deleted
+// project's tasks. The DB side is the FK ON DELETE SET NULL; this keeps the
+// manager's lifecycle snapshots consistent without a restart.
+func (m *Manager) DetachProjectFromTasks(projectID int64) {
+	if projectID <= 0 {
+		return
+	}
+	m.mu.RLock()
+	live := make([]*Task, 0, 4)
+	for _, t := range m.tasks {
+		if t.ProjectID != nil && *t.ProjectID == projectID {
+			live = append(live, t)
+		}
+	}
+	m.mu.RUnlock()
+	for _, t := range live {
+		t.updateLifecycle(func(state *taskLifecycleState) {
+			state.ProjectID = nil
+		})
+	}
 }
 
 // CreateTask creates a task + its exploration and makes it active.

@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import {
   DndContext,
@@ -24,6 +25,7 @@ import {
   ChevronRightIcon,
   EyeIcon,
   FolderInputIcon,
+  FolderKanbanIcon,
   GripVerticalIcon,
   Loader2Icon,
   PaperclipIcon,
@@ -43,6 +45,8 @@ import {
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+
+import { useProjectStore } from "@/stores/project/project-provider";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
 import { StatusBadge } from "@/components/status-badge";
@@ -130,6 +134,7 @@ import type {
   DeleteTaskOptions,
   DeleteTaskResult,
   LLMProfile,
+  Project,
   Task,
   TaskArchive,
   TaskArchiveState,
@@ -391,9 +396,26 @@ export default function TasksPage() {
     );
   }, [categoryFilter, filtersHydrated, statusFilter]);
 
+  // 全局项目上下文：切换器选中项目时列表只显示该项目任务（0=全部）；
+  // ?project_id=N 深链把全局 store 切过去（用掉即清）。
+  const globalProjectId = useProjectStore((s) => s.projectId);
+  const setGlobalProject = useProjectStore((s) => s.setProject);
+  const projects = useProjectStore((s) => s.projects);
+  const router = useRouter();
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pid = Number(params.get("project_id") || "0");
+    if (pid > 0) {
+      setGlobalProject(pid);
+      // 用掉即清：SPA 内替换 URL，避免整页刷新。
+      void router.replace("/function/tasks");
+    }
+  }, [setGlobalProject, router]);
+
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     return tasks.filter((t) => {
+      if (globalProjectId > 0 && t.project_id !== globalProjectId) return false;
       if (statusFilter !== "all" && t.status !== statusFilter) return false;
       if (categoryFilter === UNCATEGORIZED_VALUE && t.category_id != null) return false;
       if (
@@ -411,12 +433,18 @@ export default function TasksPage() {
         t.id.toLowerCase().includes(q)
       );
     });
-  }, [tasks, query, statusFilter, categoryFilter]);
+  }, [tasks, query, statusFilter, categoryFilter, globalProjectId]);
 
   const sortNowSec = sortField === "duration" ? nowSec : 0;
   const ordered = React.useMemo(() => {
     return [...filtered].sort((left, right) => compareTasks(left, right, sortField, sortDirection, sortNowSec));
   }, [filtered, sortDirection, sortField, sortNowSec]);
+
+  const projectMap = React.useMemo(() => {
+    const m = new Map<number, string>();
+    for (const p of projects) m.set(p.id, p.name);
+    return m;
+  }, [projects]);
 
   const sortTasksBy = React.useCallback(
     (field: TaskSortField) => {
@@ -1036,6 +1064,7 @@ export default function TasksPage() {
                       // running 任务才吃 nowSec;其余行传 0 —— props 不变,memo 就能拦下每秒 tick
                       // 带来的整表重渲染,只让在跑的那几行走时长。
                       nowSec={task.status === "running" ? nowSec : 0}
+                      projectName={task.project_id ? projectMap.get(task.project_id) : undefined}
                       onDelete={deleteTask}
                       onControl={controlTask}
                       onRename={renameTask}
@@ -1211,6 +1240,7 @@ function ConcurrencySettingsDialog() {
 const TaskRow = React.memo(function TaskRow({
   task,
   nowSec,
+  projectName,
   onDelete,
   onControl,
   onRename,
@@ -1221,6 +1251,7 @@ const TaskRow = React.memo(function TaskRow({
 }: {
   task: Task;
   nowSec: number;
+  projectName?: string; // 归属项目名（未挂=undefined，不显示徽标）
   onDelete: (id: string, options: DeleteTaskOptions) => Promise<void>;
   onControl: (id: string, action: "pause" | "resume") => Promise<void>;
   onRename: (task: Task, name: string) => Promise<void>;
@@ -1246,6 +1277,16 @@ const TaskRow = React.memo(function TaskRow({
           <TaskNameEditor task={task} onRename={onRename} />
           {task.active && <StarIcon className="size-4 shrink-0 fill-amber-400 text-amber-400" />}
           {taskIsPinned(task) && <PinIcon className="size-4 shrink-0 text-primary" aria-label="已置顶" />}
+          {projectName && (
+            <Badge
+              variant="secondary"
+              className="shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal"
+              title={`归属项目：${projectName}`}
+            >
+              <FolderKanbanIcon className="size-3" />
+              {projectName}
+            </Badge>
+          )}
         </div>
       </TableCell>
       <TableCell className="max-w-40 text-muted-foreground">
@@ -3147,6 +3188,11 @@ function CreateTaskSheet({
   const [selectedTemplateID, setSelectedTemplateID] = React.useState<number | null>(null);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [companies, setCompanies] = React.useState<Company[]>([]);
+  const [projects, setProjects] = React.useState<Project[]>([]);
+  // 归属项目（可空）。打开面板默认挂全局当前项目；?create=1&project_id=N 深链预选。
+  const globalProjectId = useProjectStore((s) => s.projectId);
+  const globalProjectStatus = useProjectStore((s) => s.status);
+  const [projectId, setProjectId] = React.useState<number | null>(null);
   const [sourceTaskIDs, setSourceTaskIDs] = React.useState<string[]>([]);
   const [companyIDs, setCompanyIDs] = React.useState<number[]>([]);
   const [llmProfileIDs, setLLMProfileIDs] = React.useState<string[]>([]);
@@ -3182,7 +3228,24 @@ function CreateTaskSheet({
       .companies()
       .then(setCompanies)
       .catch(() => setCompanies([]));
+    api
+      .projects()
+      .then(setProjects)
+      .catch(() => setProjects([]));
   }, []);
+
+  // 面板打开时默认挂全局当前项目（仅一次）；深链 project_id=N 优先。
+  React.useEffect(() => {
+    if (!open) return;
+    const deep = Number(new URLSearchParams(window.location.search).get("project_id") || "0");
+    if (deep > 0 && projects.some((p) => p.id === deep && p.status === "active")) {
+      setProjectId(deep);
+      return;
+    }
+    if (globalProjectStatus === "ready" && globalProjectId > 0) {
+      setProjectId((cur) => cur ?? globalProjectId);
+    }
+  }, [open, projects, globalProjectId, globalProjectStatus]);
 
   // pickFiles uploads the chosen files into this draft's staging dir and appends their
   // absolute paths to the description; the task's agents open them by path via Read/Bash.
@@ -3242,6 +3305,7 @@ function CreateTaskSheet({
         authConfig: authCfg.enabled
           ? { ...authCfg, login_url: authCfg.login_url.trim(), username: authCfg.username?.trim() }
           : undefined,
+        projectId: projectId ?? undefined,
       });
       toast.success("任务已创建");
       setName("");
@@ -3251,6 +3315,7 @@ function CreateTaskSheet({
       setSelectedTemplateID(null);
       setSourceTaskIDs([]);
       setCompanyIDs([]);
+      setProjectId(null);
       setLLMProfileIDs([]);
       setTimeoutMin("");
       setHeartbeatMin("10");
@@ -3382,6 +3447,32 @@ function CreateTaskSheet({
               <FieldDescription>
                 最多关联 {MAX_SOURCE_TASKS}{" "}
                 个任务。实时只读继承所选任务的持久化黑板、资产范围及相关流量；新任务写入独立黑板。
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="task-project">归属项目（可选）</FieldLabel>
+              <Select
+                value={projectId ? String(projectId) : "none"}
+                onValueChange={(v) => setProjectId(v === "none" ? null : Number(v))}
+              >
+                <SelectTrigger id="task-project" className="w-full">
+                  <SelectValue placeholder="不挂项目" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="none">不挂项目</SelectItem>
+                    {projects
+                      .filter((p) => p.status === "active")
+                      .map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                挂到项目后：任务进入该项目的归集视图，项目范围（域名/网段）种成本任务的初始任务范围。
               </FieldDescription>
             </Field>
             <Field>

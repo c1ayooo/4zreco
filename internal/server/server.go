@@ -923,6 +923,13 @@ func (s *Server) Handler() http.Handler {
 	// --- 管理后台 API (PostgreSQL 数据源; 新版数据库与管理后台方案) ---
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.pgDeleteTask)
 	// Agents
+	// projects (任务/对话的归属主轴)
+	mux.HandleFunc("GET /api/projects", s.listProjects)
+	mux.HandleFunc("POST /api/projects", s.createProject)
+	mux.HandleFunc("PATCH /api/projects/{id}", s.updateProject)
+	mux.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
+	mux.HandleFunc("POST /api/projects/{id}/scope", s.addProjectScope)
+	mux.HandleFunc("DELETE /api/projects/{id}/scope/{sid}", s.deleteProjectScope)
 	// conversations (chat page)
 	mux.HandleFunc("GET /api/conversations", s.pgListConversations)
 	mux.HandleFunc("POST /api/conversations", s.pgCreateConversation)
@@ -1571,6 +1578,9 @@ type createTaskReq struct {
 	// AuthConfig 任务级目标登录凭据（v0.4.8）：worker 先登录再测；创建后可用
 	// POST /api/tasks/{id}/auth-check 做一次登录自检。密码/TOTP 只进 DB。
 	AuthConfig *db.TaskAuthConfig `json:"auth_config,omitempty"`
+	// ProjectID 归属项目（schema §D2）；省略/null=不挂。挂上后项目范围种成
+	// 本任务初始 task_scope（source='project'）。
+	ProjectID *int64 `json:"project_id,omitempty"`
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -1628,6 +1638,22 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 归属项目校验：项目必须存在且未归档才能挂新任务。
+	if req.ProjectID != nil && *req.ProjectID > 0 {
+		p, err := s.m.PG().Projects().GetProject(*req.ProjectID)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		if p.ID == 0 {
+			writeErr(w, 400, "归属项目不存在")
+			return
+		}
+		if p.Status != "active" {
+			writeErr(w, 400, "归属项目已归档，不能挂新任务")
+			return
+		}
+	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
@@ -1635,6 +1661,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		CoverageEnabled: req.CoverageEnabled,
 		InterceptRules:  interceptRules,
 		AuthConfig:      req.AuthConfig,
+		ProjectID:       req.ProjectID,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {

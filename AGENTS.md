@@ -25,7 +25,10 @@ cd web && NEXT_EXPORT=1 npx next build
 # 固定名 fixture 的唯一键，产生假失败）
 docker run -d --name 4zreco-audit-pg -e POSTGRES_PASSWORD=4zrecotest -e POSTGRES_USER=4zreco \
   -e POSTGRES_DB=4zreco -p 15432:5432 postgres:16-alpine
-docker exec 4zreco-audit-pg psql -U 4zreco -d postgres -c "DROP DATABASE IF EXISTS 4zreco_ci; CREATE DATABASE 4zreco_ci OWNER 4zreco"
+docker exec 4zreco-audit-pg psql -U 4zreco -d postgres -c 'DROP DATABASE IF EXISTS "4zreco_ci"'
+docker exec 4zreco-audit-pg psql -U 4zreco -d postgres -c 'CREATE DATABASE "4zreco_ci" OWNER "4zreco"'
+# 注意：库名以数字开头，SQL 里必须双引号包住（裸写 4zreco_ci 报 numeric literal 语法错）；
+# 两条语句分开跑（单条 -c 里 DROP+CREATE 会报 cannot run inside a transaction block）。
 ZRECO_PG_DSN="postgres://4zreco:4zrecotest@127.0.0.1:15432/4zreco_ci?sslmode=disable" go test -p 1 ./... -count=1
 
 # 发版构建（本机交叉编译验证用；正式发版靠 CI）
@@ -110,6 +113,8 @@ data/ dist/ *.key    运行态/构建产物（本地生成，已 gitignore，不
 `docs/深度优化方案-2026-10-31.md`（当前路线图）> `docs/产品全面体检-2026-10-31.md`（缺陷基线）>
 `docs/模型路由策略.md`（模型选型）> `docs/红队能力建设-2026-10-30.md`。部署与排障：`docs/部署手册.md`
 （含 LAN 源安装配方）。接手背景：`docs/项目交接文档.md`。
+项目主轴与对话绑定（projects/project_scope/任务对话挂载/切换器）：`docs/项目管理与对话绑定改造-2026-11-04.md`
+（明确不接资产围栏，project_scope 仅组织定义）。
 核心设计四篇：`docs/01-双图架构.md` ~ `docs/04-审批与拦截.md`。
 已完成的计划/历史快照在 `docs/archive/`（产品优化清单-2026-10-29、改名影响面、蜜罐迁移方案等），
 读它们了解背景可以，**别把它们当现行规范**。

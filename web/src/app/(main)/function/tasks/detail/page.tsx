@@ -5,9 +5,20 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
-import { ArchiveIcon, ArrowLeftIcon, BrainIcon, CheckIcon, CircleAlertIcon, PauseIcon, PlayIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArrowLeftIcon,
+  BrainIcon,
+  CheckIcon,
+  CircleAlertIcon,
+  FolderKanbanIcon,
+  PauseIcon,
+  PlayIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
+import { useProjectStore } from "@/stores/project/project-provider";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -207,6 +218,7 @@ function TaskDetailInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   const [task, setTask] = React.useState<Task | null>(null);
+  const projectOfTask = useProjectStore((s) => (task?.project_id ? s.projects.find((p) => p.id === task.project_id) : undefined));
   const [paused, setPaused] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState(searchParams.get("tab") || "sessions");
@@ -391,6 +403,18 @@ function TaskDetailInner() {
           <code className="hidden rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs sm:inline">
             {task.id}
           </code>
+          {projectOfTask && (
+            <Badge
+              asChild
+              variant="secondary"
+              className="hidden shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal sm:inline-flex"
+            >
+              <Link href="/function/projects" title={`归属项目：${projectOfTask.name}`}>
+                <FolderKanbanIcon className="size-3" />
+                {projectOfTask.name}
+              </Link>
+            </Badge>
+          )}
           <Separator orientation="vertical" className="mx-1 hidden h-4 sm:block" />
           <TaskLLMControl task={task} profiles={profiles} onUpdated={load} />
           <StatusBadge domain={terminal ? "task" : "engine"} value={terminal ? task.status : engineMode} dot />

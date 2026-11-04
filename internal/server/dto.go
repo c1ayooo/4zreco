@@ -60,6 +60,7 @@ type TaskDTO struct {
 	SourceTaskIDs      []string           `json:"source_task_ids"`
 	ArchiveBlockedBy   string             `json:"archive_blocked_by_task_id,omitempty"`
 	CompanyIDs         []int64            `json:"company_ids"`
+	ProjectID          *int64             `json:"project_id,omitempty"` // 归属项目(创建时定)
 	CoverageEnabled    bool               `json:"coverage_enabled"` // 资产覆盖度功能开关(创建时定)
 }
 
@@ -133,6 +134,7 @@ func taskDTO(t *Task, status string) TaskDTO {
 		LLMFailoverReason:  llmState.FailoverReason,
 		SourceTaskIDs:      sourceIDs,
 		CompanyIDs:         lifecycle.CompanyIDs,
+		ProjectID:          lifecycle.ProjectID,
 		CoverageEnabled:    t.CoverageEnabled,
 	}
 }

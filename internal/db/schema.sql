@@ -762,6 +762,52 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_task_scope_v2 ON task_scope(
 CREATE INDEX IF NOT EXISTS idx_ts_domain  ON task_scope(domain) WHERE kind IN ('root_domain','subdomain');
 CREATE INDEX IF NOT EXISTS idx_ts_net     ON task_scope USING GIST(net inet_ops) WHERE kind IN ('ip','cidr');
 CREATE INDEX IF NOT EXISTS idx_ts_company ON task_scope(company_id) WHERE kind = 'company';
+-- 项目主轴来源：任务挂项目时把 project_scope 种成本任务初始范围（规划上下文，非闸门）。
+ALTER TABLE task_scope DROP CONSTRAINT IF EXISTS task_scope_source_check;
+ALTER TABLE task_scope ADD CONSTRAINT task_scope_source_check
+    CHECK (source IN ('auto','agent','manual','project'));
+
+-- =====================================================================
+-- D2. 项目（任务/对话的归属主轴；范围仅作组织定义，不做执行侧强制）
+-- =====================================================================
+-- projects 是任务的授权/归属主轴：任务与对话挂 project_id，项目删除一律置空
+-- （FK ON DELETE SET NULL，不连带删除）。范围（project_scope）描述项目覆盖哪些
+-- 目标，供详情展示与任务创建时的范围种子——本项目不接资产围栏，无 authz 状态。
+CREATE TABLE IF NOT EXISTS projects (
+    id          BIGSERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+DROP TRIGGER IF EXISTS trg_projects_upd ON projects;
+CREATE TRIGGER trg_projects_upd BEFORE UPDATE ON projects
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 项目范围：结构镜像 company_scope（解析复用 ParseScopeInput 同款护栏）。
+-- domain 按后缀匹配根域及全部子域，cidr/ip 按网段包含，icp 精确相等，keyword 仅提示。
+CREATE TABLE IF NOT EXISTS project_scope (
+    id         BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL CHECK (kind IN ('domain','ip','cidr','icp','keyword')),
+    domain     TEXT,
+    net        CIDR,
+    value      TEXT,
+    raw        TEXT NOT NULL,
+    reason     TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_project_scope_domain UNIQUE (project_id, domain),
+    CONSTRAINT uq_project_scope_net    UNIQUE (project_id, net)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_project_scope_value
+    ON project_scope(project_id, kind, value) WHERE kind IN ('icp','keyword');
+CREATE INDEX IF NOT EXISTS idx_project_scope_project ON project_scope(project_id);
+
+-- 任务挂项目（对话侧挂列在其建表的 §I 段落后追加——schema 自上而下执行，
+-- 全新库上此处 conversations 还不存在）。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id) WHERE project_id IS NOT NULL;
 
 -- =====================================================================
 -- E. Agents / 提示词模板 / 变量目录
@@ -977,6 +1023,11 @@ CREATE TABLE IF NOT EXISTS conversations (
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_conversations_llm_profile ON conversations(llm_profile_id) WHERE llm_profile_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_conversations_pinned ON conversations(pinned_at DESC) WHERE pinned_at IS NOT NULL;
+-- 对话挂项目 + 关联任务（纯引用；任务/项目删除都置空，见 §D2）。
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(project_id) WHERE project_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_task ON conversations(task_id) WHERE task_id IS NOT NULL;
 DROP TRIGGER IF EXISTS trg_conversations_upd ON conversations;
 CREATE TRIGGER trg_conversations_upd BEFORE UPDATE ON conversations
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();

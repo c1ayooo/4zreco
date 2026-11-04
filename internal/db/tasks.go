@@ -35,6 +35,7 @@ type Task struct {
 	LLMFailoverReason  string     `json:"llm_failover_reason,omitempty"`
 	SourceTaskIDs      []int64    `json:"source_task_ids,omitempty"`
 	CompanyIDs         []int64    `json:"company_ids,omitempty"`
+	ProjectID          *int64     `json:"project_id,omitempty"` // 归属项目(schema §D2);项目删除置空
 	ParentRef          string     `json:"parent_ref,omitempty"` // 父任务 id(编排 spawn 记录;空=顶层)
 	CreatedAt          time.Time  `json:"created_at"`
 	CompletedAt        *time.Time `json:"completed_at,omitempty"` // 进入终态(done/failed/timeout)的时刻;非终态为 nil
@@ -161,6 +162,9 @@ type TaskCreateOptions struct {
 	InterceptRules []TaskInterceptRuleInput
 	// AuthConfig 是任务级目标登录凭据（v0.4.8）；nil=未配置。
 	AuthConfig *TaskAuthConfig
+	// ProjectID 是归属项目（schema §D2）；nil/0=不挂。>0 时项目范围（project_scope）
+	// 会种成本任务初始 task_scope（source='project'）——规划上下文，非闸门。
+	ProjectID *int64
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
@@ -227,6 +231,7 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		LLMProfileIDs:  append([]int64(nil), opts.LLMProfileIDs...),
 		SourceTaskIDs:  append([]int64(nil), opts.SourceTaskIDs...),
 		CompanyIDs:     append([]int64(nil), opts.CompanyIDs...),
+		ProjectID:      opts.ProjectID,
 		TimeoutSeconds: opts.TimeoutSeconds, PlanHeartbeatSeconds: opts.PlanHeartbeatSeconds,
 		CoverageEnabled: coverageEnabled,
 	}
@@ -237,10 +242,17 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		}
 	}
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, auth_config)
-VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10)
-RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, authJSON).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, auth_config, project_id)
+VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11)
+RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, authJSON, opts.ProjectID).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
+	}
+	// 任务挂项目：项目范围种成本任务初始 task_scope（source='project'），让规划器
+	// 第一轮就有范围可依、覆盖度分母完整。纯组织语义，本项目无执行侧围栏。
+	if opts.ProjectID != nil && *opts.ProjectID > 0 {
+		if err := insertTaskProjectScopeTx(tx, t.ID, *opts.ProjectID); err != nil {
+			return nil, err
+		}
 	}
 	if err := insertTaskRelations(tx, t.ID, opts.SourceTaskIDs); err != nil {
 		return nil, err
@@ -355,12 +367,12 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(auth_config::text,'null')`
+description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(auth_config::text,'null'), project_id`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	var authRaw string
-	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &authRaw); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &authRaw, &t.ProjectID); err != nil {
 		return nil, err
 	}
 	t.AuthConfig = ParseTaskAuth([]byte(authRaw))

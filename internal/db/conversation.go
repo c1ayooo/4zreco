@@ -56,22 +56,29 @@ type Conversation struct {
 	LLMProfileID *int64     `json:"llm_profile_id,omitempty"`
 	Pinned       bool       `json:"pinned"`
 	PinnedAt     *time.Time `json:"pinned_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// ProjectID/TaskID 是归属主轴绑定（schema §D2）：挂项目做归集，关联任务
+	// 便于从对话跳转；任务删除/项目删除都置空（FK ON DELETE SET NULL）。
+	ProjectID *int64     `json:"project_id,omitempty"`
+	TaskID    *int64     `json:"task_id,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // ConversationPatch updates only the fields whose pointers are non-nil.
+// ProjectID/TaskID follow PATCH semantics: omitted = unchanged, 0 = clear.
 type ConversationPatch struct {
-	Title  *string
-	Pinned *bool
+	Title     *string
+	Pinned    *bool
+	ProjectID *int64
+	TaskID    *int64
 }
 
-const convCols = `id, agent_key, title, llm_profile_id, pinned_at, created_at, updated_at`
+const convCols = `id, agent_key, title, llm_profile_id, pinned_at, project_id, task_id, created_at, updated_at`
 
 func scanConv(row interface{ Scan(...any) error }) (Conversation, error) {
 	var c Conversation
 	var pinnedAt sql.NullTime
-	err := row.Scan(&c.ID, &c.AgentKey, &c.Title, &c.LLMProfileID, &pinnedAt, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.AgentKey, &c.Title, &c.LLMProfileID, &pinnedAt, &c.ProjectID, &c.TaskID, &c.CreatedAt, &c.UpdatedAt)
 	if pinnedAt.Valid {
 		c.Pinned = true
 		c.PinnedAt = &pinnedAt.Time
@@ -169,8 +176,10 @@ func (d *DB) GetConversation(id int64) (*Conversation, error) {
 	return &c, nil
 }
 
-// UpdateConversation applies a partial title/pin mutation and returns the updated
-// row. Pinning an already-pinned conversation preserves its original pin order.
+// UpdateConversation applies a partial title/pin/project/task mutation and
+// returns the updated row. Pinning an already-pinned conversation preserves its
+// original pin order. ProjectID/TaskID pointers: non-nil updates the column
+// (value 0 = clear to NULL); nil leaves it unchanged.
 func (d *DB) UpdateConversation(id int64, patch ConversationPatch) (*Conversation, error) {
 	c, err := scanConv(d.QueryRow(`UPDATE conversations SET
 	title = CASE WHEN $2::boolean THEN $3 ELSE title END,
@@ -178,9 +187,12 @@ func (d *DB) UpdateConversation(id int64, patch ConversationPatch) (*Conversatio
 		WHEN $4::boolean IS NULL THEN pinned_at
 		WHEN $4::boolean THEN COALESCE(pinned_at, now())
 		ELSE NULL
-	END
+	END,
+	project_id = CASE WHEN $5::boolean THEN NULLIF($6, 0) ELSE project_id END,
+	task_id = CASE WHEN $7::boolean THEN NULLIF($8, 0) ELSE task_id END
 WHERE id=$1
-RETURNING `+convCols, id, patch.Title != nil, patch.Title, patch.Pinned))
+RETURNING `+convCols, id, patch.Title != nil, patch.Title, patch.Pinned,
+		patch.ProjectID != nil, patch.ProjectID, patch.TaskID != nil, patch.TaskID))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
