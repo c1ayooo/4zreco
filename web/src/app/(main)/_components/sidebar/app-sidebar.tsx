@@ -43,7 +43,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton asChild>
               <Link prefetch={false} href="/function/tasks">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logo.png" alt="4ZRECO" height={40} className="h-10 w-auto shrink-0" />
+                {/* 固定方形盒 + object-cover：无论缓存里是什么形状的旧图，渲染恒为 40×40 圆角方块 */}
+                <img src="/logo-mark.png" alt="4ZRECO" width={40} height={40} className="h-10 w-10 shrink-0 rounded-lg object-cover" />
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
