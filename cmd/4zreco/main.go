@@ -16,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/c1ayooo/4zreco/agent"
-	"github.com/c1ayooo/4zreco/config"
-	"github.com/c1ayooo/4zreco/selfupdate"
-	"github.com/c1ayooo/4zreco/server"
+	"github.com/c1ayooo/4zreco/internal/agent"
+	"github.com/c1ayooo/4zreco/internal/config"
+	"github.com/c1ayooo/4zreco/internal/selfupdate"
+	"github.com/c1ayooo/4zreco/internal/server"
 )
 
 // version is the build version, injected at release time via
@@ -103,12 +103,15 @@ func run() int {
 	settle := time.AfterFunc(selfupdate.SettleDelay, selfupdate.Settle)
 	defer settle.Stop()
 
-	skillDir := config.SkillDir()
-	if abs, err := filepath.Abs(skillDir); err == nil {
-		skillDir = abs
+	// 运行时目录唯一解析点：Base=可执行目录，Data=-data flag，Skills=三级优先级
+	// 解析（带 MkdirAll 副作用，只在主入口调一次）。
+	paths := config.NewPaths(*dataDir)
+	paths.Skills = config.SkillDir()
+	if abs, err := filepath.Abs(paths.Skills); err == nil {
+		paths.Skills = abs
 	}
-	log.Printf("[config] skill 目录: %s", skillDir)
-	srv := server.New(ctx, mgr, skillDir, *dataDir, config.BaseDir())
+	log.Printf("[config] skill 目录: %s", paths.Skills)
+	srv := server.New(ctx, mgr, paths)
 	defer srv.Close()
 	httpSrv := &http.Server{
 		Addr:              *addr,

@@ -90,7 +90,7 @@ def extract_from_file(path):
 
 
 def main():
-    server_dir = sys.argv[1] if len(sys.argv) > 1 else "server"
+    server_dir = sys.argv[1] if len(sys.argv) > 1 else "internal/server"
     out_path = sys.argv[2] if len(sys.argv) > 2 else "routes.json"
 
     all_routes = []

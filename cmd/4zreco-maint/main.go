@@ -28,9 +28,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c1ayooo/4zreco/agent"
-	"github.com/c1ayooo/4zreco/db"
-	"github.com/c1ayooo/4zreco/docpreview"
+	"github.com/c1ayooo/4zreco/internal/agent"
+	"github.com/c1ayooo/4zreco/internal/config"
+	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/docpreview"
 )
 
 const (
@@ -64,7 +65,9 @@ func main() {
 		fail(fmt.Errorf("连接数据库失败：%w", err))
 	}
 	if *dataDir == "" {
-		*dataDir = filepath.Join(filepath.Dir(*cfgPath), "data")
+		// 与主程序同一套推导（config.BaseDir()/data）：此前取 config.json 所在
+		// 目录，ZRECO_CONFIG 指到别处时两边会推出不同的数据根。
+		*dataDir = config.NewPaths("").Data
 	}
 	if err := pg.EnsureTaskArtifactsTable(); err != nil {
 		fail(fmt.Errorf("建表失败：%w", err))
@@ -132,7 +135,8 @@ func scanArtifacts(pg *db.DB, dataDir string) {
 	totalAdded, totalSkipped := 0, 0
 	for _, t := range tasks {
 		taskID := strconv.FormatInt(t.ID, 10)
-		root := filepath.Join(dataDir, "tasks", taskID)
+		paths := config.NewPaths(dataDir)
+		root := paths.TaskDir(taskID)
 		artDir := filepath.Join(root, artifactsDir)
 		if _, err := os.Stat(root); err != nil {
 			continue
@@ -225,6 +229,7 @@ func generatePreviews(pg *db.DB, dataDir string, onlyTask int64, all, force bool
 		fail(fmt.Errorf("previews 需要 --task <id> 或 --all"))
 	}
 	totalReady, totalSkip, totalFail := 0, 0, 0
+	paths := config.NewPaths(dataDir)
 	for _, taskID := range taskIDs {
 		list, err := pg.ListTaskArtifacts(taskID)
 		if err != nil {
@@ -240,7 +245,7 @@ func generatePreviews(pg *db.DB, dataDir string, onlyTask int64, all, force bool
 				continue
 			}
 			src := filepath.Join(dataDir, a.Storage)
-			outDir := filepath.Join(dataDir, "tasks", taskID, "artifacts", "previews", strconv.FormatInt(a.ID, 10))
+			outDir := filepath.Join(paths.TaskDir(taskID), artifactsDir, "previews", strconv.FormatInt(a.ID, 10))
 			pages, err := docpreview.Generate(context.Background(), src, outDir, docpreview.DefaultPages)
 			if err != nil {
 				state := "failed"
@@ -375,7 +380,7 @@ func resetPrompts(pg *db.DB, force bool) {
 // 写 0600 的附件，服务进程（4zreco 用户）读不了 → 图片 403。统一改为
 // 目录 0750 / 文件 0644（artifacts 目录本身在任务目录下，不对外）。
 func fixArtifactPermissions(dataDir string) {
-	root := filepath.Join(dataDir, "tasks")
+	root := config.NewPaths(dataDir).TasksRoot()
 	fixed := 0
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {

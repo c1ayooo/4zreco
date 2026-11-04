@@ -12,7 +12,7 @@
 
 用法：
     # 1) 先从源码提取路由
-    python scripts/extract_routes.py server /tmp/routes.json
+    python scripts/extract_routes.py internal/server /tmp/routes.json
 
     # 2) 跑巡检（token 从环境变量读，或用用户名密码自动登录换取）
     ARTEX_USERNAME=ARTEX ARTEX_PASSWORD=*** python scripts/apicontract.py \

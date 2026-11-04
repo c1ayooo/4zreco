@@ -701,7 +701,9 @@ deploy_docker(){
   # skills 要挂进容器：空目录挂载会覆盖镜像内置的 /app/skills，所以先从发行包取一份
   fetch_release
   local src="$TMP/unpack/4zreco-${VERSION#v}-${PKG_ARCH}"
-  mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/skills"
+  # nuclei-templates 同理：挂载覆盖镜像层，必须先建宿主目录（属主与 data/skills 一致），
+  # 首轮同步会把模板树 git clone 到这里，容器重建/升级不重下。
+  mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/skills" "$INSTALL_DIR/nuclei-templates"
   if [ ! -f "$INSTALL_DIR/skills/.keep" ] && [ -z "$(ls -A "$INSTALL_DIR/skills" 2>/dev/null)" ]; then
     [ -d "$src/skills" ] && cp -r "$src/skills/." "$INSTALL_DIR/skills/"
   fi

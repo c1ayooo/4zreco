@@ -2,9 +2,6 @@
 /4zreco
 /4zreco.exe
 /4zreco-*
-/artex
-/artex.exe
-/artex-*
 /dist/
 *.zip
 SHA256SUMS
@@ -16,10 +13,15 @@ SHA256SUMS
 /web/out/
 /web/.turbo/
 /web/.vercel/
+# 根级 .next：曾在 web/ 之外误跑 next build 的残留（勿提交，历史事故见 AGENTS.md）
+/.next/
+
+# 运行时自动下载（dev 跑 go run 时落在仓库根，见 internal/config/paths.go）
+/nuclei-templates/
 
 # Go embed 编译产物（构建时生成，不提交）
-/server/webui/dist/
-/server/web/
+/internal/server/webui/dist/
+/internal/server/web/
 
 # 环境与敏感配置
 .env
@@ -52,6 +54,9 @@ config.json
 *.swp
 *.swo
 *~
+
+# AI agent 本地会话状态（ZCode 等）
+/.zcode/
 
 # OS 生成
 .DS_Store

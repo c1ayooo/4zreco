@@ -68,33 +68,33 @@ git 历史里作为起点，v0.3.16 以来的 **160+ 提交、约 4 万行新增
 
 | 控制台登录（首次启动初始化管理员） | 总览：任务 / 漏洞 / 资产 / Token 消耗 |
 | :---: | :---: |
-| ![登录](screenshots/4zreco-login.png) | ![总览](screenshots/4zreco-dashboard.png) |
+| ![登录](assets/screenshots/4zreco-login.png) | ![总览](assets/screenshots/4zreco-dashboard.png) |
 
 **任务与资产**
 
 | 任务列表：目标进度、漏洞分布一屏可见 | 资产覆盖图：力导向布局，已测节点高亮 |
 | :---: | :---: |
-| ![任务列表](screenshots/4zreco-tasks.png) | ![资产覆盖图](screenshots/4zreco-assets-graph.png) |
+| ![任务列表](assets/screenshots/4zreco-tasks.png) | ![资产覆盖图](assets/screenshots/4zreco-assets-graph.png) |
 
 **证据与报告（SRC 交付的关键）**
 
 | 证据附件：截图 / 数据样本自动归档、缩略图预览 | 漏洞详情：摘要 + 现场截图 + PoC + 复测入口 |
 | :---: | :---: |
-| ![证据附件](screenshots/4zreco-evidence.png) | ![漏洞详情](screenshots/4zreco-finding-detail.png) |
+| ![证据附件](assets/screenshots/4zreco-evidence.png) | ![漏洞详情](assets/screenshots/4zreco-finding-detail.png) |
 
 | 现场截图：按漏洞归档，Word 报告自动嵌图 |
 | :---: |
-| ![现场截图](screenshots/4zreco-finding-shots.png) |
+| ![现场截图](assets/screenshots/4zreco-finding-shots.png) |
 
 **平台配置**
 
 | Agent 清单：8 个内置角色 + 自定义 | 宿主环境：63 件工具体检 + 一键装齐 |
 | :---: | :---: |
-| ![Agent](screenshots/4zreco-agents.png) | ![宿主环境](screenshots/4zreco-hostenv.png) |
+| ![Agent](assets/screenshots/4zreco-agents.png) | ![宿主环境](assets/screenshots/4zreco-hostenv.png) |
 
 | LLM 配置：多通道轮询 / 熔断 / 按角色路由 |
 | :---: |
-| ![LLM](screenshots/4zreco-llm.png) |
+| ![LLM](assets/screenshots/4zreco-llm.png) |
 
 ---
 

@@ -25,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/c1ayooo/4zreco/hostd"
-	"github.com/c1ayooo/4zreco/hosttools"
+	"github.com/c1ayooo/4zreco/internal/hostd"
+	"github.com/c1ayooo/4zreco/internal/hosttools"
 )
 
 // version 由构建时 -ldflags "-X main.version=..." 注入。

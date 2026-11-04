@@ -7,7 +7,7 @@
 #
 # 用法：
 #   ./scripts/devtest.sh                                # 全量（默认新建 4zreco_ci）
-#   ./scripts/devtest.sh ./agent/ -run TestGraphOverview
+#   ./scripts/devtest.sh ./internal/agent/ -run TestGraphOverview
 #   SKIP_FRESH=1 ./scripts/devtest.sh ./server/         # 复用现有库（快速迭代,可能假失败）
 set -euo pipefail
 cd "$(dirname "$0")/.."
