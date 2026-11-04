@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-11-04
+
+> 本仓库首个独立发版 tag（自原作者已删除仓库基线 v0.3.15 接手）。除下述功能外，
+> 本次同版包含仓库结构收拢：全部 Go 包迁入 `internal/`（import 路径改为
+> `github.com/c1ayooo/4zreco/internal/<pkg>`）、运行时目录解析收口
+> `internal/config/paths.go`、screenshots 并入 `assets/`、过期文档归档
+> `docs/archive/`、根级 `.next` 残留清出仓库。
+
+### 新增 — 项目管理与对话绑定（任务/对话挂项目）
+
+- **项目 = 任务/对话的归属主轴**（移植自同源 4zrec v0.5.x 项目主轴能力，裁剪版：
+  不接资产围栏——无 `assets.authz`、guard/intercept 不动，`project_scope` 仅作组织
+  定义）。schema 新增 `projects`/`project_scope`（解析复用 `ParseScopeInput` 同款
+  护栏：拒裸 TLD、网段下限）、`tasks.project_id`、`conversations.project_id/task_id`
+  （FK ON DELETE SET NULL，删项目/删任务自动置空，行不删）；`task_scope.source`
+  扩 `'project'`——建任务挂项目时项目范围种成本任务初始任务范围（规划器首轮即有
+  范围可依、覆盖度分母完整；纯规划上下文，非闸门）。
+- **API**：`GET/POST /api/projects`、`PATCH/DELETE /api/projects/{id}`、
+  `POST /{id}/scope`（多行解析：重复 skipped、非法拒绝并逐行报错）、
+  `DELETE /{id}/scope/{sid}`；conversations PATCH 扩为 title/pinned/project_id/task_id
+  部分更新（省略=不改，0=清除；绑定任务自动对齐任务所属项目，与显式项目冲突时 400）；
+  `POST /tasks` 接收 `project_id`（校验项目存在且未归档）。
+- **前端**：侧栏全局项目切换器（切换后落任务页；0=全部、不强制单项目——存量未挂
+  项目的任务/对话不受影响）；`/function/projects` 项目页（卡片列表、编辑、范围编辑
+  复用企业范围编辑器、删除仅解除挂载）；对话页 ProjectRow/TaskRow（草稿态默认挂
+  全局当前项目、绑定先于首条消息；已建会话可随时挂载/更换/解除）；建任务 Sheet
+  「归属项目」下拉；任务列表项目徽标 + 全局过滤 + `?project_id=` 深链；任务详情
+  头部项目徽标。
+- **验证**：真 PG 全量 `go test -p 1` 零失败；HTTP 层端到端烟测
+  `scripts/smoke-projects.sh` 16/16；Playwright UI 验收 11/11。过程中修复三处仅
+  真跑暴露的问题：CreateTask 响应缺 `project_id`、删项目后 manager 内存任务快照
+  不同步（`DetachProjectFromTasks`）、范围响应空切片 null 迭代崩溃。设计文档与
+  验收链路见 `docs/项目管理与对话绑定改造-2026-11-04.md`。
+
 > 以下 0.4.20 起为逐版详录；0.4.4–0.4.19 期间的发版见文末「0.4.4–0.4.19 发版概要」。
 
 ### 新增 — 红队自身防护与蜜罐识别（自同源分支 artex-c 移植，方案见 docs/蜜罐识别与出口防护迁移方案-2026-11-03.md）
