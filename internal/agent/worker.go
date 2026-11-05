@@ -10,16 +10,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hosttools"
 	"github.com/c1ayooo/4zreco/internal/intercept"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 )
+
+// KernelRunParams carries the route-A loop knobs the engine wires per intent run
+// (刀④)：nudge 预算（DB 计数）、装配指纹落库回调，以及指纹六元组里 P2 才接源的
+// 占位分量。零值 = 全部不介入。
+type KernelRunParams struct {
+	Nudge        Nudger
+	Checkpoint   func(sessionID, fingerprint string)
+	FPPromptVer  string // prompt 版本（SeedPromptVersioned；P2 接来源，暂空）
+	FPMCPDigest  string // MCP 连接摘要（不含临时状态；P2 接来源，暂空）
+	FPServeModel string // 模型 profile 名（P2 接来源，暂空）
+}
 
 // Worker is an LLM work agent (docs §4.4): it claims ONE intent, completes it
 // with real tools (Bash: kali tooling through the recording proxy), writes the
@@ -462,19 +474,27 @@ func renderWorkerGraphOverview(data map[string]any) string {
 // max_turns) and a per-kind breakdown of what was written back (so an intent that
 // explored but persisted nothing isn't mistaken for done, and the engine can log
 // facts/assets/findings separately instead of lumping them under "facts").
-func (w *Worker) Execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string)) (harness.TerminalReason, WriteCounts, error) {
-	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, "", "")
+func (w *Worker) Execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), params ...KernelRunParams) (harness.TerminalReason, WriteCounts, error) {
+	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, "", "", firstParams(params))
 }
 
 // ExecuteWithMessage runs the next turn in the same intent conversation with a
 // human-authored message. The HTTP handler does not edit the transcript;
 // agentcore records the message as a normal user turn when this Worker starts.
 // This keeps Worker continuation identical to the regular agent chat flow.
-func (w *Worker) ExecuteWithMessage(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string) (harness.TerminalReason, WriteCounts, error) {
-	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, strings.TrimSpace(requestID), strings.TrimSpace(message))
+func (w *Worker) ExecuteWithMessage(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string, params ...KernelRunParams) (harness.TerminalReason, WriteCounts, error) {
+	return w.execute(ctx, name, taskID, as, ts, intent, hooks, emit, enr, notifyFinding, strings.TrimSpace(requestID), strings.TrimSpace(message), firstParams(params))
 }
 
-func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string) (harness.TerminalReason, WriteCounts, error) {
+// firstParams 兼容可变参数：engine 现有调用逐个接线，未接线的调用方拿零值（全不介入）。
+func firstParams(params []KernelRunParams) KernelRunParams {
+	if len(params) > 0 {
+		return params[0]
+	}
+	return KernelRunParams{}
+}
+
+func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string, params KernelRunParams) (harness.TerminalReason, WriteCounts, error) {
 	tsx := NewToolSet(ts, name)
 	tsx.SetFindingRecorder(w.findingRecorder)
 	tsx.SetTaskID(taskID)
@@ -551,7 +571,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		sysBody += b
 	}
 	sysBody += "\n\n开始执行上面这条意图：只做它、只产生事实、assets、finding、做完即停。"
-	system, boundary := deferredSystem(sysBody, def)
+	system, _ := deferredSystem(sysBody, def)
+	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（system 分段拼一条
+	// system message，缓存交 provider 侧）。
 	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。
 	tc := taskClockFrom(ctx)
 	maxDur, clamped := clampMaxDuration(tc.DeadlineUnix, w.runTimeout)
@@ -559,10 +581,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if tc.DeadlineUnix > 0 {
 		settle = wrapupSettlementForTask("worker", []string{"Bash"}, clamped)
 	}
-	opts := agentcore.Options{
-		Provider:        w.prov,
+	opts := askernel.Options{
+		Model:           acllm.BridgeModel(w.prov),
 		SystemPrompt:    system,
-		DynamicBoundary: boundary,
 		Tools:           tools,
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
@@ -590,10 +611,6 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		// 墙钟预算,轮边界判,不打断半路;0 = 不限。有任务级 deadline 时夹逼到 min(自身预算,
 		// 距 deadline 剩余),让本 run 在任务到点时自然进收尾(见 taskclock.go)。
 		MaxDuration: maxDur,
-		// 命中预算(轮次 OR 时长)→ SDK 跑一轮收尾(隐藏 Bash),把已识别的写回,避免烂尾。
-		// clamped(被任务 deadline 夹逼)时用 PromptByReason:因超时=任务到点→任务超时词,
-		// 因步数=夹逼窗口内步数先耗尽→回落 per-run 词。非 clamped 维持纯 per-run。
-		Settlement: settle,
 		// large tool output spills to cmd-output/ with a head + pointer (SDK tool.Capture);
 		// full output preserved on disk. 单次上限收到 12000 字符（v0.4.29，同行对比 P0b）：
 		// 任务 5 实测 Bash 6833 次、单意图均 300 万 input——单条 30k(≈7.5k token) 的
@@ -606,6 +623,12 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		NonStreaming:       w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:          w.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
 	}
+	// 命中预算(轮次 OR 时长)→ 收尾机制(runKernel 的 settlement 分支,隐藏 Bash),
+	// 把已识别的写回,避免烂尾。clamped(被任务 deadline 夹逼)时用 PromptByReason:
+	// 因超时=任务到点→任务超时词,因步数=夹逼窗口内步数先耗尽→回落 per-run 词。
+	// 同一条链喂两处：gate 的 Pre/Post 半边（acllm.ToolHooks，结构兼容）+ driver
+	// 的 Stop 半边（harness.HookRunner——idleStopHooks 实现了完整三件套）。
+	var stopChain harness.HookRunner
 	if hooks != nil { // typed-nil guard: only set when concrete (avoids harness panic)
 		// 工具调用可观测：worker 的工具调用此前完全不可观测——journal 里只有 planner
 		// 心跳，worker 死活要靠翻 transcripts/*.jsonl 的 mtime 才确认得到。日志层套在
@@ -615,14 +638,15 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		// 时长——持续产出的 worker 不会被它打断（深度探索不受影响），空转的会被收。
 		// 详见 agent/idlestop.go 的注释。
 		logged := wrapToolLog(hooks, KindWorker, fmt.Sprintf("%s · #%d", name, intent.ID))
-		opts.Hooks = wrapIdleStop(logged, tsx.Writes, func(reason string) {
+		stopChain = wrapIdleStop(logged, tsx.Writes, func(reason string) {
 			logIdleStop(name, taskID, intent.ID, reason)
 		})
 	} else {
-		opts.Hooks = wrapIdleStop(toolLogSink(KindWorker), tsx.Writes, func(reason string) {
+		stopChain = wrapIdleStop(toolLogSink(KindWorker), tsx.Writes, func(reason string) {
 			logIdleStop(name, taskID, intent.ID, reason)
 		})
 	}
+	opts.Hooks = stopChain
 	if w.tx != nil { // persist raw LLM conversation; one file per worked intent
 		opts.Transcript = w.tx
 		opts.SessionID = WorkerSessionID(ts.ID(), intent.ID)
@@ -642,11 +666,10 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		input = "开始执行 system 里领到的意图：只做它、只产生事实、assets、finding、做完即停。"
 	}
 
-	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
-	noaSession := WorkerSessionID(ts.ID(), intent.ID)
-	enableNoa(&opts, w.noaEnabledFn, w.workDir, noaSession, noaWarn(noaSession))
-	ctx = attachSideCapture(ctx, &opts)
-	s := agentcore.NewSession(opts)
+	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警。
+	noaFallbackWarn(opts.OnWarn, w.noaEnabledFn, WorkerSessionID(ts.ID(), intent.ID))
+	ctx = attachSideCapture(ctx)
+	s := askernel.NewSession(opts)
 	defer s.Close() // release the session's background-task manager (temp dir + processes)
 
 	// Resume prior conversation if this intent was paused/blocked/exhausted and is
@@ -678,13 +701,24 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		}
 	}
 
-	// Budgets + settlement are owned by the SDK (MaxTurns/MaxDuration + Settlement):
-	// on hit it runs a wrap-up turn and finishes with ReasonMaxTurns/ReasonTimeout.
-	// MaxDuration now interrupts an in-flight tool at the wall-clock deadline and
-	// enters the wrap-up phase on the live ctx, so a run whose tool overran the budget
-	// still settles (no external hard-timeout backstop needed). ctx itself carries only
+	// Budgets + settlement are owned by the route-A driver (MaxTurns/MaxDuration
+	// → termmap 映射 → runKernel 的 settlement 分支，隐藏 Bash 跑收尾)。墙钟经
+	// Runner ctx 携带的 deadline 生效（4zrec 已接受的取舍）。ctx itself carries only
 	// pause / planner kill / shutdown, which the engine distinguishes and re-queues/stops.
-	_, reason, err := captureRunSession(ctx, s, input, emitWrap)
+	driver := kernelDriver{
+		stop:       stopChain,
+		nudge:      params.Nudge,
+		settle:     settle,
+		checkpoint: params.Checkpoint,
+		fpAgentKey: "worker",
+		fpPromptVer:    params.FPPromptVer,
+		// 解锁集种子真实来源：ToolAugment 装配的初始已解锁集合（评审第 1 轮 #1
+		// 修复——此前恒空串）。promptVersion/mcpDigest/modelProfile 仍为 P2 占位。
+		fpUnlockSeed:   askernel.UnlockSeed(def.UnlockSeed),
+		fpMCPDigest:    params.FPMCPDigest,
+		fpModelProfile: params.FPServeModel,
+	}
+	_, reason, err := captureRunSession(ctx, s, input, emitWrap, driver)
 	return reason, tsx.Writes(), err
 }
 

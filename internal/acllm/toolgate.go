@@ -94,6 +94,16 @@ type ToolGate struct {
 	// nothing. isErr reports actool.Result.IsError — the eino tool message
 	// cannot carry it (convert.go's ExtraIsError rides on the schema message).
 	OnResult func(callID, name, text string, isErr bool, extras []llm.Message)
+
+	// OnCallStart observes call INITIATION, synchronously at the top of the
+	// gate endpoint — before the permission pipeline, hooks and execution. The
+	// kernel cut wires it to the host's intercept audit trace (Trace.Start):
+	// in norma the tool_use event was yielded before execOne, so the guard's
+	// WithCall claim found the traced call; in eino the tools node races the
+	// event pump, so the bind must happen here to stay deterministic. input is
+	// the ArgsFromEino-decoded payload (the same bytes the hooks receive, so
+	// WithCall's key digest matches). nil = observe nothing.
+	OnCallStart func(callID, name string, input json.RawMessage)
 }
 
 // NewToolGate builds a gate over tools. maxConcurrency ≤ 0 defaults to 10
@@ -173,7 +183,11 @@ func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.Invok
 		return endpoint, nil // not kernel-managed; pass through untouched
 	}
 	return func(ctx context.Context, args string, _ ...tool.Option) (string, error) {
-		text, isErr, extras := g.execOne(ctx, t, tCtx.CallID, args)
+		input := ArgsFromEino(args)
+		if g.OnCallStart != nil {
+			g.OnCallStart(tCtx.CallID, t.Name(), input)
+		}
+		text, isErr, extras := g.execOne(ctx, t, tCtx.CallID, input)
 		if g.OnResult != nil {
 			g.OnResult(tCtx.CallID, t.Name(), text, isErr, extras)
 		}
@@ -183,7 +197,9 @@ func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.Invok
 
 // execOne resolves and runs a single tool call — norma harness execOne
 // ordering, verbatim. It never panics; failures become error results.
-func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID, args string) (text string, isErr bool, extras []llm.Message) {
+// input is pre-decoded (ArgsFromEino, done by the endpoint so OnCallStart and
+// the hooks see the same bytes).
+func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID string, input json.RawMessage) (text string, isErr bool, extras []llm.Message) {
 	fail := func(msg string) (string, bool, []llm.Message) { return msg, true, nil }
 
 	// 0. Deferred hard gate (V5 双保险): a locked deferred tool is not callable
@@ -194,8 +210,6 @@ func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID, args 
 	if g.deferred[t.Name()] && g.unlock != nil && !g.unlock.Has(t.Name()) {
 		return fail("Error: tool " + t.Name() + " is not unlocked in this session — load the skill that provides it first.")
 	}
-
-	input := ArgsFromEino(args)
 
 	// 1. Schema validation (FR-04.5). The eino ToolsNode parses JSON but does
 	//    not schema-validate; a tool may opt out (Spec.RawInput).

@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Autumn-27/norma/agentcore"
+	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/Autumn-27/norma/llm"
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -152,8 +153,8 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 			emit(r)
 		}
 	}
-	captureRun(ctx, agentcore.Options{
-		Provider:               prov,
+	captureRun(ctx, askernel.Options{
+		Model:                  acllm.BridgeModel(prov),
 		SystemPrompt:           []string{sys},
 		Tools:                  tools,
 		PermissionMode:         acperm.ModeBypass,

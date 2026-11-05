@@ -551,63 +551,48 @@ func (e *Engine) drainSteer(intentID int64) (string, bool) {
 // before each tool call it drains a queued course-correction (if any) and blocks the
 // call, handing the message back to the model — which re-plans its next step instead
 // of running the tool. No queued message → the guard behaves exactly as before.
-// 它同时负责「空转回合」的续跑（Stop）与「重复调用」拦截（PreToolUse，v0.4.28）。
+// 它负责「重复调用」拦截（PreToolUse，v0.4.28）。
+//
+// 「空转回合」续跑的 Stop 半边已随路线 A（刀④，方案 §3.1）上移到 runKernel driver：
+// 预算计数落 DB（每条意图总量），Stop 链由 idleStop → toolLog → 本层（无 Stop 实现，
+// 结构上满足 harness.HookRunner 的链经类型断言走 idleStop 的 Stop）……本层只保留
+// PreToolUse/PostToolUse，Stop 由外层 idleStopHooks 直接提供。
 type steerHooks struct {
 	inner harness.HookRunner
 	drain func() (string, bool)
-	// nudges 是本条意图已注入的空转续跑次数，上限 limit。指针:harness 持有的是
-	// steerHooks 的值拷贝，计数必须共享同一份。
-	nudges *atomic.Int64
-	// limit 是空转续跑的次数上限，由 Engine.emptyTurnNudgeLimit() 从「空响应重试
-	// 次数」解析而来。<=0 = 不介入(用户显式关掉了这层)。
-	limit int
-	// label 形如 "worker-1 · #42"，只用于日志。
-	label string
 	// repeats 是重复调用检测器（v0.4.28，PentAGI 机制自研）：同名工具+完全相同入参
 	// 连续 ≥3 次即拦截回喂纠正提示；同一串最多拦 2 次后放行兜底。nil = 不介入。
 	repeats *repeatTracker
+}
+
+// Stop 转发内层（guard 无 Stop 钩子注册 → no-op）。空转 nudge 不在这里——上移
+// runKernel，预算计数落 DB（IntentNudger）。
+func (h steerHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []string, string) {
+	if h.inner != nil {
+		return h.inner.Stop(ctx, messages)
+	}
+	return false, nil, ""
 }
 
 // 空转回合(只有思考、既无正文也无工具调用)续跑次数的默认值，与 SDK 空响应重试的
 // 内置默认(norma/llm/openai.go 的 emptyResponseRetries)保持一致——两层共用同一个
 // 旋钮，不配置时的行为也该对齐。解析见 Engine.emptyTurnNudgeLimit。
 //
-// 注意这个数是「一条意图的总量」，不是「连续几次」:harness 自身的 stopHookActive
-// 已经限死了连续空转只推一次——推完那一轮若还是空转，Stop 钩子不会再被调到，run 直接
-// 收场;只有真正发生过一次工具回合，配额才刷新(norma/harness/query.go:534)。所以这个
-// 闸挡的是「工具 → 空转 → 推 → 工具 → 空转」这种病态循环，别让它把意图预算耗光。
+// 注意这个数是「一条意图的总量」，不是「连续几次」：连续空转只推一次——推完那一轮
+// 若还是空转，stopHookActive 挡住 Stop 链与 nudge，run 收场；只有真正发生过一次工具
+// 回合，钩子才重新武装（norma/harness/query.go:534）。所以这个闸挡的是「工具 → 空转
+// → 推 → 工具 → 空转」这种病态循环，别让它把意图预算耗光。
+// （路线 A 刀④：该预算的判定与注入上移 agent.runKernel，计数落 DB——
+// db.ExplorationStore.IncrEmptyTurnNudges——跨 run/跨重试持久，norma 时代的内存
+// 计数重跑即清零。）
 const defaultEmptyTurnNudges = 2
-
-// emptyTurnNudge 是空转回合注入的续跑指令。
-//
-// 这种回合在 harness 眼里是一次自然结束(stop_reason=end_turn 且无 tool_use)，五层
-// LLM 重试一层都不适用——它不是错误，是模型「想完了但没动手」。SDK 的空响应重试也
-// 够不着:它以「有没有 yield 过事件」判空，而思考增量本身就是事件(norma/llm/openai.go
-// 的 SEThinkingDelta)，所以 thinking-only 不算空。何况那层是原样重发整个 prompt，
-// 对这种由上下文形状决定的空转，重发只会让模型再想一遍。这里换成追加一条指令，让它
-// 带着已经产出的思考继续，输入变了才有理由给出不同的行为。
-const emptyTurnNudge = "【空转提醒】你上一轮只输出了思考过程，既没有给出正文回复，也没有调用任何工具，" +
-	"这一轮等于没有产出。请直接执行你刚才想好的下一步：要么调用工具，要么给出结论文字。不要重复思考。"
-
-// isThinkingOnlyTurn reports whether the latest assistant turn produced neither
-// text nor a tool call — i.e. the model spent the whole round thinking.
-func isThinkingOnlyTurn(messages []llm.Message) bool {
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
-		if m.Role != llm.RoleAssistant {
-			continue
-		}
-		return strings.TrimSpace(m.Text()) == "" && len(m.ToolUses()) == 0
-	}
-	return false
-}
 
 func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
 	// 重复调用检测（v0.4.28）：拦截优先级低于 steer 纠偏——先让排队的人类/规划者
 	// 指令说话，再查重复。
 	if h.repeats != nil {
 		if streak, block := h.repeats.observe(name, input); block {
-			log.Printf("[work %s] 重复调用拦截：%s 连续第 %d 次完全相同入参", h.label, name, streak)
+			log.Printf("[work] 重复调用拦截：%s 连续第 %d 次完全相同入参", name, streak)
 			return true, repeatBlockText(streak), nil
 		}
 	}
@@ -625,33 +610,6 @@ func (h steerHooks) PostToolUse(ctx context.Context, name string, input, result 
 	if h.inner != nil {
 		h.inner.PostToolUse(ctx, name, input, result, isErr)
 	}
-}
-
-// Stop 在 guard 原有语义之上补一层「空转回合」续跑:模型只输出了思考、既没给正文
-// 也没调工具时，harness 会把它当成自然结束并以空 summary 收场(query.go 的
-// ReasonCompleted + asst.Text())，一条本来还没做完的意图就这样断在半路。此时注入
-// 一条续跑指令，让模型带着已有思考接着走。
-func (h steerHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []string, string) {
-	var (
-		prevent  bool
-		blocking []string
-		msg      string
-	)
-	if h.inner != nil {
-		prevent, blocking, msg = h.inner.Stop(ctx, messages)
-	}
-	// inner 已经决定硬停、或已经要注入自己的续跑消息 → 尊重它，不再叠加。
-	// limit<=0 = 用户把「空响应重试次数」配成了 -1，即显式关掉这层。
-	if prevent || len(blocking) > 0 || h.nudges == nil || h.limit <= 0 || !isThinkingOnlyTurn(messages) {
-		return prevent, blocking, msg
-	}
-	n := h.nudges.Add(1)
-	if n > int64(h.limit) {
-		log.Printf("[work %s] 空转回合(仅思考、无正文无工具)已达续跑上限 %d，放行收场", h.label, h.limit)
-		return prevent, blocking, msg
-	}
-	log.Printf("[work %s] 空转回合(仅思考、无正文无工具)，注入续跑指令 (%d/%d)", h.label, n, h.limit)
-	return false, []string{emptyTurnNudge}, ""
 }
 
 // KillWork cancels the in-flight work running intentID (planner's kill_work tool).
@@ -1219,15 +1177,31 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			inner(a)
 		}
 	}
-	// nudges 有意建在 model_error 重跑循环之外:空转续跑的上限是「这条意图」的总量，
-	// 重跑一轮不该把额度清零重来。
+	// steer 链只剩 PreToolUse（纠偏 + 重复调用拦截）；空转续跑的预算由 runKernel
+	// driver 持有，计数落 DB——有意建在 model_error 重跑循环之外:「这条意图」的
+	// 总量不因重跑清零（IntentNudger 落库，天然跨重试持久）。
 	hooks := steerHooks{
 		inner:   t.Guard.Hooks(),
 		drain:   func() (string, bool) { return e.drainSteer(iid) },
-		nudges:  &atomic.Int64{},
-		limit:   e.emptyTurnNudgeLimit(),
-		label:   label,
 		repeats: newRepeatTracker(),
+	}
+	// 路线 A（刀④）的 driver 旋钮：DB 空转预算 + 装配指纹落库（P2 恢复校验的
+	// 留痕半边）。
+	runParams := agent.KernelRunParams{
+		Nudge: &agent.IntentNudger{
+			Store:  t.Store,
+			Intent: iid,
+			LimitN: e.emptyTurnNudgeLimit(),
+			LabelS: label,
+		},
+		Checkpoint: func(sessionID, fingerprint string) {
+			if e.m.pg == nil {
+				return
+			}
+			if err := e.m.pg.RecordRunnerCheckpoint(context.Background(), sessionID, "worker", "", fingerprint); err != nil {
+				log.Printf("[work %s] task %s 意图 #%d 装配指纹落库失败: %v", name, t.ID, iid, err)
+			}
+		},
 	}
 	wTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
 	runStart := time.Now() // 意图墙钟起点（跨 model_error 重试累计），结算时落 payload
@@ -1236,9 +1210,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	var wrote agent.WriteCounts
 	var err error
 	if hasChatMessage {
-		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
+		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, runParams)
 	} else {
-		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
+		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, runParams)
 	}
 	e.EndLLMCall(t.ID)
 	// model_error 收场 → 额外重跑几次（退避后再试）。仅在意图仍属本 work、任务
@@ -1255,9 +1229,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		}
 		e.BeginLLMCall(t.ID)
 		if hasChatMessage {
-			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message)
+			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, runParams)
 		} else {
-			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding)
+			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, runParams)
 		}
 		e.EndLLMCall(t.ID)
 	}

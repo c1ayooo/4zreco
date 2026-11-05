@@ -7,7 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Autumn-27/norma/agentcore"
+	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -442,7 +443,8 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	if p.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,框定探索边界
 	}
-	system, boundary := deferredSystem(sysBody, def)
+	system, _ := deferredSystem(sysBody, def)
+	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（缓存交 provider 侧）。
 	// planner 无自身墙钟预算;有 deadline 时把 MaxDuration 夹逼到剩余,让在跑的规划轮在
 	// 任务到点时进收尾(因超时→任务超时词,因步数→per-run 词)。
 	maxDur, clamped := clampMaxDuration(tc.DeadlineUnix, 0)
@@ -450,10 +452,9 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	if tc.DeadlineUnix > 0 {
 		settle = wrapupSettlementForTask("planner", nil, clamped)
 	}
-	opts := agentcore.Options{
-		Provider:        p.prov,
+	opts := askernel.Options{
+		Model:           acllm.BridgeModel(p.prov),
 		SystemPrompt:    system,
-		DynamicBoundary: boundary,
 		Tools:           tools,
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
@@ -479,23 +480,24 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		Compaction:            compactionConfig(p.compactionWindow()),
 		// 跨唤醒共享的规划待办：让串行链在多轮之间保留（session 是新的，store 不是）。
 		Todos: p.todoFor(ts.ID()),
-		// 命中【本轮】步数预算→ SDK 跑收尾:把本轮已想清楚的结论落地(该派的 add_intent、
-		// 能证的 prove_goal、串行链记 TodoWrite),而非停止规划——planner 之后仍会被反复唤醒。
-		// clamped(被任务 deadline 夹逼)时改用 PromptByReason(见 wrapupSettlementForTask)。
-		Settlement:   settle,
 		NonStreaming: p.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    p.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
-		// 工具调用可观测：planner 的工具调用此前完全不可观测（journal 里只有心跳），
-		// 无法从日志判断「planner 在干活」还是「planner 卡住不动」。纯旁路，不干预。
-		Hooks: toolLogSink(KindPlanner),
 	}
+	// 同一条链喂两处：gate 的 Pre/Post 半边 + driver 的 Stop 半边。
+	// 工具调用可观测：planner 的工具调用此前完全不可观测（journal 里只有心跳），
+	// 无法从日志判断「planner 在干活」还是「planner 卡住不动」。纯旁路，不干预。
+	plannerHooks := toolLogSink(KindPlanner)
+	opts.Hooks = plannerHooks
+	// 命中【本轮】步数预算→ 收尾机制(runKernel 的 settlement 分支):把本轮已想清楚
+	// 的结论落地(该派的 add_intent、能证的 prove_goal、串行链记 TodoWrite),而非停止
+	// 规划——planner 之后仍会被反复唤醒。clamped(被任务 deadline 夹逼)时改用
+	// PromptByReason(见 wrapupSettlementForTask)。
 	if p.tx != nil { // persist raw LLM conversation; one accumulating file per task's planner
 		opts.Transcript = p.tx
 		opts.SessionID = fmt.Sprintf("exp%d-planner", ts.ID())
 	}
-	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
-	noaSession := fmt.Sprintf("exp%d-planner", ts.ID())
-	enableNoa(&opts, p.noaEnabledFn, p.workDir, noaSession, noaWarn(noaSession))
+	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警。
+	noaFallbackWarn(opts.OnWarn, p.noaEnabledFn, fmt.Sprintf("exp%d-planner", ts.ID()))
 	// 态势（刚完成的意图 + 完整图）现在拼进本轮 user 输入（见下方 input）。user 里还有
 	// 指令 + 跨唤醒待办（todo 是模型自己的规划便签，可再生，放 user 即可）。
 	// 开场白按「本轮有无具体变动」分两种：有变动 → 指向下方【实际变动】块；无变动
@@ -515,12 +517,12 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
-	_, _, err = captureRun(ctx, opts, input,
+	_, _, err = captureRunSession(ctx, askernel.NewSession(opts), input,
 		func(r db.Activity) {
 			if emit != nil {
 				r.Worker = "planner" // planner activity has no intent_id (it generates them)
 				emit(r)
 			}
-		})
+		}, kernelDriver{stop: plannerHooks, settle: settle})
 	return tsx.GoalMet, tsx.Reason, err
 }

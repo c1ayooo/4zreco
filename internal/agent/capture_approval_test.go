@@ -8,7 +8,8 @@ import (
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/intercept"
-	"github.com/Autumn-27/norma/agentcore"
+	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	"github.com/Autumn-27/norma/tool"
@@ -104,7 +105,7 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 					return tool.Text("probe succeeded"), nil
 				},
 			})
-			_, _, err := captureRun(ctx, agentcore.Options{Provider: provider, Tools: []tool.CoreTool{probe}, Hooks: g.Hooks(),
+			_, _, err := captureRun(ctx, askernel.Options{Model: acllm.BridgeModel(provider), Tools: []tool.CoreTool{probe}, Hooks: g.Hooks(),
 				PermissionMode: permission.ModeBypass, WorkingDir: t.TempDir(), MaxTurns: 2}, "record this review", nil)
 			if err != nil {
 				t.Fatal(err)

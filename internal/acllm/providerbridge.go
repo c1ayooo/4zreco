@@ -34,7 +34,9 @@ package acllm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
 
@@ -187,3 +189,218 @@ func (b *bridgeProvider) Stream(ctx context.Context, req llm.CompletionRequest) 
 		yield(llm.StreamEvent{Type: llm.SEMessageStop}, nil)
 	}
 }
+
+// --- BridgeModel: the reverse bridge (刀④ 主循环切换的模型面) ---
+
+// BridgeModel adapts a norma llm.Provider onto model.ToolCallingChatModel so
+// the P1 eino kernel can run the agent loop while the provider stack beneath
+// it stays byte-identical (llmpool failover, llmrec recording, quota capture,
+// the 2013-thinking-retry — all live at the llm.Provider level and are NOT
+// reimplemented on the eino side). This is the loop-switch counterpart of
+// BridgeProvider: that one lets norma-facing domain code call an eino model;
+// this one lets the eino kernel call a norma provider.
+//
+// Tool binding follows the eino contract: the agent binds the per-round tool
+// list via WithTools (the ADK pushes state.ToolInfos this way), and the derived
+// view serializes them into req.Tools for each call — exactly where norma
+// providers expect them. Call options (MaxTokens/Temperature/Stop) map onto
+// the request fields.
+//
+// Fidelity notes:
+//   - The kernel's projected input carries the system prompt as a leading
+//     schema system message (viewMiddleware.project prepends it); Generate
+//     routes it back into req.System as one segment. FromSchema skips system
+//     messages, so without this the system prompt would vanish on the wire.
+//   - Stream synthesizes eino DELTA chunks from the norma event stream —
+//     content/thinking deltas verbatim; tool calls are re-anchored by their
+//     provider-assigned ToolIndex (schema.ConcatMessages merges by Index,
+//     concatenating argument fragments); usage/finish ride the chunk that
+//     carried the message_delta, which ConcatMessages folds (last finish
+//     reason wins, usage max-merges — the anthropic echo shape is harmless).
+//   - req.Thinking has no eino equivalent on this bridge either: the provider
+//     keeps its configured default.
+func BridgeModel(p llm.Provider) model.ToolCallingChatModel {
+	return &bridgeModel{p: p}
+}
+
+type bridgeModel struct {
+	p     llm.Provider
+	tools []llm.ToolSchema // the WithTools-bound tool schemas for this view
+}
+
+// InfoToToolSchema is the inverse of ToolSchemaToInfo: an eino ToolInfo back
+// into the DTO tool schema (name/description verbatim, ParamsOneOf → JSON
+// schema via the same jsonschema vocabulary). Used by the BridgeModel binding.
+func InfoToToolSchema(info *schema.ToolInfo) (llm.ToolSchema, error) {
+	if info == nil {
+		return llm.ToolSchema{}, fmt.Errorf("acllm: nil tool info")
+	}
+	ts := llm.ToolSchema{Name: info.Name, Description: info.Desc}
+	if info.ParamsOneOf != nil {
+		js, err := info.ParamsOneOf.ToJSONSchema()
+		if err != nil {
+			return llm.ToolSchema{}, fmt.Errorf("acllm: tool %q params: %w", info.Name, err)
+		}
+		raw, err := json.Marshal(js)
+		if err != nil {
+			return llm.ToolSchema{}, fmt.Errorf("acllm: tool %q params marshal: %w", info.Name, err)
+		}
+		var schemaMap map[string]any
+		if err := json.Unmarshal(raw, &schemaMap); err != nil {
+			return llm.ToolSchema{}, fmt.Errorf("acllm: tool %q params decode: %w", info.Name, err)
+		}
+		ts.InputSchema = schemaMap
+	}
+	return ts, nil
+}
+
+// WithTools binds the per-call tool set: the returned view serializes infos
+// into req.Tools on every Generate/Stream. The receiver is never mutated.
+func (b *bridgeModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	schemas := make([]llm.ToolSchema, 0, len(tools))
+	for _, ti := range tools {
+		ts, err := InfoToToolSchema(ti)
+		if err != nil {
+			return nil, err
+		}
+		schemas = append(schemas, ts)
+	}
+	return &bridgeModel{p: b.p, tools: schemas}, nil
+}
+
+// requestFromEino renders the eino call into a norma CompletionRequest: the
+// leading system message routes back into req.System (one segment — norma
+// providers join segments with "\n\n", so the wire text is unchanged), the
+// rest converts via FromSchema, and call options map onto request fields.
+func (b *bridgeModel) requestFromEino(input []*schema.Message, opts []model.Option) llm.CompletionRequest {
+	req := llm.CompletionRequest{Tools: b.tools}
+	if n := len(input); n > 0 && input[0] != nil && input[0].Role == schema.System {
+		req.System = []string{input[0].Content}
+		req.Messages = FromSchema(input[1:])
+	} else {
+		req.Messages = FromSchema(input)
+	}
+	common := model.GetCommonOptions(&model.Options{}, opts...)
+	if common.MaxTokens != nil && *common.MaxTokens > 0 {
+		req.MaxTokens = *common.MaxTokens
+	}
+	if common.Temperature != nil {
+		t := float64(*common.Temperature)
+		req.Temperature = &t
+	}
+	if len(common.Stop) > 0 {
+		req.Stop = common.Stop
+	}
+	if len(common.Tools) > 0 {
+		// Per-call tools override the binding: the ADK pushes state.ToolInfos
+		// (the deferred-filtered list) as a per-call option
+		// (adk/wrappers.go:1240-1248), so this is the path the kernel actually
+		// exercises; the WithTools binding covers direct callers.
+		schemas := make([]llm.ToolSchema, 0, len(common.Tools))
+		for _, ti := range common.Tools {
+			if ts, err := InfoToToolSchema(ti); err == nil {
+				schemas = append(schemas, ts)
+			}
+		}
+		if len(schemas) > 0 {
+			req.Tools = schemas
+		}
+	}
+	return req
+}
+
+// Generate implements model.BaseChatModel over Provider.Complete.
+func (b *bridgeModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	msg, stop, usage, err := b.p.Complete(ctx, b.requestFromEino(input, opts))
+	if err != nil {
+		return nil, err
+	}
+	out := ToSchema([]llm.Message{msg})
+	if len(out) == 0 {
+		out = []*schema.Message{schema.AssistantMessage("", nil)}
+	}
+	if stop != "" || usage != (llm.Usage{}) {
+		m := out[0]
+		rm := &schema.ResponseMeta{FinishReason: stop}
+		if usage != (llm.Usage{}) {
+			rm.Usage = UsageToToken(usage)
+		}
+		m.ResponseMeta = rm
+	}
+	return out[0], nil
+}
+
+// Stream implements model.BaseChatModel over Provider.Stream: norma's
+// normalized event vocabulary back into eino delta chunks.
+func (b *bridgeModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	events := b.p.Stream(ctx, b.requestFromEino(input, opts))
+	sr, sw := schema.Pipe[*schema.Message](1)
+	go func() {
+		defer sw.Close()
+		// toolIdx anchors tool-call chunks for ConcatMessages' index merge.
+		open := false
+		toolIdx := -1
+		for ev, err := range events {
+			if err != nil {
+				sw.Send(nil, err)
+				return
+			}
+			switch ev.Type {
+			case llm.SEMessageStart:
+				// input-side usage rides message_start (anthropic echoes it here):
+				// emit a usage-only chunk so ConcatMessages / the pump's per-chunk
+				// MergeEcho fold sees it.
+				if ev.Usage != (llm.Usage{}) {
+					m := schema.AssistantMessage("", nil)
+					m.ResponseMeta = &schema.ResponseMeta{Usage: UsageToToken(ev.Usage)}
+					sw.Send(m, nil)
+				}
+			case llm.SEThinkingDelta:
+				if ev.Text != "" {
+					m := schema.AssistantMessage("", nil)
+					m.ReasoningContent = ev.Text
+					sw.Send(m, nil)
+				}
+			case llm.SETextDelta:
+				if ev.Text != "" {
+					sw.Send(schema.AssistantMessage(ev.Text, nil), nil)
+				}
+			case llm.SEToolUseStart:
+				idx := ev.ToolIndex
+				toolIdx = idx
+				open = true
+				sw.Send(schema.AssistantMessage("", []schema.ToolCall{{
+					ID:       ev.ToolID,
+					Function: schema.FunctionCall{Name: ev.ToolName},
+					Index:    &idx,
+				}}), nil)
+			case llm.SEToolInputJSON:
+				idx := ev.ToolIndex
+				if idx < 0 {
+					idx = toolIdx // no index from this provider: most recent call
+				}
+				if ev.Text != "" {
+					i := idx
+					sw.Send(schema.AssistantMessage("", []schema.ToolCall{{
+						Function: schema.FunctionCall{Arguments: ev.Text},
+						Index:    &i,
+					}}), nil)
+				}
+			case llm.SEMessageDelta:
+				m := schema.AssistantMessage("", nil)
+				rm := &schema.ResponseMeta{FinishReason: ev.StopReason}
+				if ev.Usage != (llm.Usage{}) {
+					rm.Usage = UsageToToken(ev.Usage)
+				}
+				m.ResponseMeta = rm
+				sw.Send(m, nil)
+			case llm.SEMessageStop:
+				// EOF marker; the pipe closes below
+				_ = open
+			}
+		}
+	}()
+	return sr, nil
+}
+
+var _ model.ToolCallingChatModel = (*bridgeModel)(nil)

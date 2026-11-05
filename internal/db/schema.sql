@@ -1749,3 +1749,25 @@ CREATE TABLE IF NOT EXISTS task_progress (
 -- honeypot_evidence: 命中签名证据，JSON 数组文本，合并去重。
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS honeypot_score REAL NOT NULL DEFAULT 0;
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS honeypot_evidence TEXT NOT NULL DEFAULT '';
+
+-- ── runner 装配指纹（刀④，docs/Eino深度接入方案-2026-11-05.md §4-P1 第 8 条）──
+-- 每次内核 run 装配写一行：fingerprint = sha256(agentKey, promptVersion,
+-- toolset_snapshot_hash, unlock_seed, mcp_connection_digest, model_profile)。
+-- P2 HITL 恢复时按它校验：不匹配则不 resume（P2-6 回退）。本表 P1 只写不读——
+-- 先把「中断时的工具面」留痕，恢复语义随 P2 接续。
+CREATE TABLE IF NOT EXISTS runner_checkpoints (
+    id            BIGSERIAL PRIMARY KEY,
+    session_id    TEXT NOT NULL,
+    agent_key     TEXT NOT NULL DEFAULT '',
+    checkpoint_id TEXT NOT NULL DEFAULT '',
+    fingerprint   TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_runner_checkpoints_session
+    ON runner_checkpoints(session_id, created_at DESC);
+
+-- ── 空轮次续跑计数（刀④，§3.1 路线 A）──────────────────────────────────
+-- 空转回合（只有思考、无正文无工具）的续跑指令注入预算按「每条意图总量」计，
+-- 等价 norma defaultEmptyTurnNudges=2。落在意图节点行上（列加在
+-- exploration_nodes），跨 run/跨重试持久——norma 时代是内存计数，重跑即清零。
+ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS empty_turn_nudges INT NOT NULL DEFAULT 0;

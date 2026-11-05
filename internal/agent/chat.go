@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/intercept"
-	"github.com/Autumn-27/norma/agentcore"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -123,11 +125,12 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
 
-	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
-	opts := agentcore.Options{
-		Provider:        c.prov,
+	system, _ := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
+	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃——system 分段在内核侧
+	// 拼成一条 system message，缓存交 provider 侧。
+	opts := askernel.Options{
+		Model:           acllm.BridgeModel(c.prov),
 		SystemPrompt:    system,
-		DynamicBoundary: boundary,
 		Tools:           tools,
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
@@ -154,26 +157,28 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		// large tool output spills to cmd-output/ under the session dir.
 		// 截断上限用 SDK 默认(tool.Capture 的 30000 字符)。
 		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
-		// 命中预算(步数)→ SDK 跑收尾:输出一句总结。Prompt 与收尾轮数按本 agent key 后台可编辑
-		// (自定义 agent 各自一份;留空/0 用通用默认:10 轮)。
-		Settlement:   wrapupSettlement(agentKey, nil),
 		NonStreaming: c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
 	}
+	// 命中预算(步数)→ 收尾机制(runKernel 的 settlement 分支):输出一句总结。
+	// Prompt 与收尾轮数按本 agent key 后台可编辑
+	// (自定义 agent 各自一份;留空/0 用通用默认:10 轮)。
+	settle := wrapupSettlement(agentKey, nil)
+	hooks := harness.HookRunner(toolLogSink(KindChat))
 	if c.guard != nil {
 		// 日志层套在拦截链外侧（先记后转发），纯旁路。
-		opts.Hooks = wrapToolLog(c.guard.Hooks(), KindChat, "")
-	} else {
-		opts.Hooks = toolLogSink(KindChat)
+		hooks = wrapToolLog(c.guard.Hooks(), KindChat, "")
 	}
+	opts.Hooks = hooks // gate 的 PreToolUse/PostToolUse 半边（结构兼容 acllm.ToolHooks）
 	if c.tx != nil { // persist raw human↔AI conversation; one accumulating file per thread
 		opts.Transcript = c.tx
 		opts.SessionID = sessionID
 	}
-	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
-	enableNoa(&opts, c.noaEnabledFn, c.workDir, "chat-"+sessionID, noaWarn("chat-"+sessionID))
-	ctx = attachSideCapture(ctx, &opts)
-	s := agentcore.NewSession(opts)
+	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警（noa 自己的
+	// 接入失败回退同款语义）。
+	noaFallbackWarn(opts.OnWarn, c.noaEnabledFn, "chat-"+sessionID)
+	ctx = attachSideCapture(ctx)
+	s := askernel.NewSession(opts)
 	defer s.Close()
 	// reload prior conversation so the agent has context across turns (each Chat is
 	// a fresh session). First turn: no file yet → Resume loads nothing and proceeds.
@@ -188,6 +193,6 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 			r.Worker = agentKey
 			emit(r)
 		}
-	})
+	}, kernelDriver{stop: hooks, settle: settle})
 	return text, err
 }

@@ -123,6 +123,9 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 		// Shared call-gate: global MCP tools are unlocked from the start; skill-gated
 		// ones are unlocked when their skill loads (or replayed from history — C2).
 		unlock := actool.NewUnlockSet(globalNames...)
+		// 装配指纹的 unlock_seed 分量用同一份种子（评审第 1 轮 #1：UnlockSet 无
+		// 枚举 API，种子经 DeferredInfo 显式携带给 agent 侧）。
+		seed := append([]string(nil), globalNames...)
 		unlockSkill := func(skillName string) {
 			if reg == nil {
 				return
@@ -185,6 +188,7 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			Deferred:    allNames,
 			GlobalNames: globalNames,
 			Unlock:      unlock,
+			UnlockSeed:  seed,
 			UnlockSkill: unlockSkill,
 		}
 		return extra, def, cleanup

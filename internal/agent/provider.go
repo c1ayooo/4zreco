@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/llmrec"
 	"github.com/Autumn-27/norma/agentcore"
-	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/llm"
 	acperm "github.com/Autumn-27/norma/permission"
 	"github.com/Autumn-27/norma/transcript"
@@ -150,11 +150,13 @@ func (c Config) CompactionWindow() int {
 // compactionConfig builds the agent-core compaction config for a context window
 // in tokens. agentcore.NewSession wires the summarizer (same provider) when this
 // is set on Options.Compaction.
-func compactionConfig(windowTokens int) *compaction.Config {
+// compactionConfig 构建内核压缩配置（刀④ 切换默认；norma compaction.Config 的
+// 等价物——ContextWindow 语义一致，其余字段 acllm.CompactionConfig.defaults 补齐）。
+func compactionConfig(windowTokens int) *acllm.CompactionConfig {
 	if windowTokens <= 0 {
 		windowTokens = defaultWindowK * 1000
 	}
-	return &compaction.Config{ContextWindow: windowTokens}
+	return &acllm.CompactionConfig{ContextWindow: windowTokens}
 }
 
 // FromEnv resolves the LLM provider config:

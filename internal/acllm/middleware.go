@@ -57,42 +57,53 @@ import (
 // promptState is the per-run bookkeeping shared between the view middleware and
 // its wrappers: the token size the previous model response reported (the
 // compactor's preferred gate count) and the turn counter.
-type promptState struct {
+type PromptState struct {
 	mu              sync.Mutex
 	lastInputTokens int
 	turns           int
 }
 
-func (ps *promptState) setInputTokens(n int) {
+// promptState is the in-package alias the 刀③ tests use.
+type promptState = PromptState
+
+func (ps *PromptState) setInputTokens(n int) {
 	ps.mu.Lock()
 	ps.lastInputTokens = n
 	ps.mu.Unlock()
 }
 
-func (ps *promptState) inputTokens() int {
+func (ps *PromptState) inputTokens() int {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.lastInputTokens
 }
 
-// messageStore is the DTO master — norma loop.messages 的 eino 侧等价物. Full
+// MessageStore is the DTO master — norma loop.messages 的 eino 侧等价物. Full
 // history with boundary markers lives here; state.Messages is only the per-call
 // projection. All writes copy-on-write under the lock, so a projection that
 // took the slice before a concurrent append still sees a consistent prefix.
-type messageStore struct {
+// Exported for the kernel assembly (刀④); messageStore stays as an in-package
+// alias so the 刀③ tests read unchanged.
+type MessageStore struct {
 	mu   sync.Mutex
 	msgs []llm.Message
 }
 
+// messageStore is the in-package alias the 刀③ tests use.
+type messageStore = MessageStore
+
+// NewMessageStore builds an empty master (kernel Session constructor).
+func NewMessageStore() *MessageStore { return &MessageStore{} }
+
 // Set replaces the master (resume seeding, reactive compaction result).
-func (s *messageStore) Set(msgs []llm.Message) {
+func (s *MessageStore) Set(msgs []llm.Message) {
 	s.mu.Lock()
 	s.msgs = msgs
 	s.mu.Unlock()
 }
 
 // Get returns the current master slice (write via the store methods).
-func (s *messageStore) Get() []llm.Message {
+func (s *MessageStore) Get() []llm.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.msgs
@@ -100,7 +111,7 @@ func (s *messageStore) Get() []llm.Message {
 
 // Append adds messages to the master's end (assistant capture, tool results via
 // the gate's OnResult host wiring, injections, run-input seeding).
-func (s *messageStore) Append(msgs ...llm.Message) {
+func (s *MessageStore) Append(msgs ...llm.Message) {
 	if len(msgs) == 0 {
 		return
 	}
@@ -152,7 +163,7 @@ type viewMiddleware struct {
 // Options.SystemPrompt); the segments are joined with "\n\n" into one schema
 // system message, mirroring how the norma providers concatenate the System
 // slice onto the wire.
-func newViewMiddleware(store *messageStore, ps *promptState, compactor *Compactor, system []string, maxTokens int, recorder TranscriptRecorder) *viewMiddleware {
+func NewViewMiddleware(store *MessageStore, ps *PromptState, compactor *Compactor, system []string, maxTokens int, recorder TranscriptRecorder) *viewMiddleware {
 	v := &viewMiddleware{store: store, ps: ps, compactor: compactor, maxTokens: maxTokens, recorder: recorder}
 	if txt := joinSystemSegments(system); txt != "" {
 		v.sysMsg = schema.SystemMessage(txt)
@@ -423,9 +434,18 @@ type injectionMiddleware struct {
 // Appending to the master keeps injections persistent like norma's
 // (steer/聊天注入 live in loop.messages), so subsequent projections and
 // compaction boundaries carry them.
-func newInjectionMiddleware(store *messageStore, sources ...InjectionSource) *injectionMiddleware {
+func NewInjectionMiddleware(store *MessageStore, sources ...InjectionSource) *injectionMiddleware {
 	return &injectionMiddleware{store: store, sources: sources}
 }
+
+// newViewMiddleware / newInjectionMiddleware / newDeferredMiddleware are the
+// in-package aliases the 刀③ tests call; the exported spellings are the kernel
+// assembly surface (刀④).
+var (
+	newViewMiddleware      = NewViewMiddleware
+	newInjectionMiddleware = NewInjectionMiddleware
+	newDeferredMiddleware  = NewDeferredMiddleware
+)
 
 func (m *injectionMiddleware) BeforeModelRewriteState(ctx context.Context, state *adk.ChatModelAgentState, mc *adk.ModelContext) (context.Context, *adk.ChatModelAgentState, error) {
 	var inject []llm.Message
@@ -462,7 +482,7 @@ type actoolUnlockSet = actool.UnlockSet
 // surfaces the tool schema on the next round). The access tools
 // (SearchExtraTools/ExecuteExtraTool) are never deferred and always stay.
 // The execution-time hard gate lives in the ToolGate (SetDeferred) — 双保险.
-func newDeferredMiddleware(infos []*schema.ToolInfo, deferred []string, unlock *actoolUnlockSet) *deferredMiddleware {
+func NewDeferredMiddleware(infos []*schema.ToolInfo, deferred []string, unlock *actoolUnlockSet) *deferredMiddleware {
 	set := make(map[string]bool, len(deferred))
 	for _, n := range deferred {
 		set[n] = true

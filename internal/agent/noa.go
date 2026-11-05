@@ -20,6 +20,21 @@ func noaWarn(session string) func(string) {
 // (内置 compaction 照常工作)。开关由每个 agent 注入的 noaEnabledFn 解析,每 run 读
 // 一次,故切换只影响之后启动的 run,无需重建 agent。
 
+// noaFallbackWarn 是 eino 内核路径的 noa 占位（刀④）：noa 尚未随内核迁移，用户
+// 开了开关时告警并回退内置 compaction（与 enableNoa 接入失败时的回退同语义）。
+// P1 后续刀或 P2 把 noaadapter 移植到内核挂点后，这里替换为真正的接入。
+func noaFallbackWarn(onWarn func(string), enabled func() bool, session string) {
+	if enabled == nil || !enabled() {
+		return
+	}
+	msg := "noa 压缩尚未随 eino 内核迁移，本次运行回退内置 compaction"
+	if onWarn != nil {
+		onWarn(msg)
+	} else {
+		log.Printf("[noa] %s: %s", session, msg)
+	}
+}
+
 // enableNoa 在解析器报告开启时把 noa 接入 opts。archiveRoot 是压缩原文的持久化基目录
 // (取全局 workDir,各 agent 统一落在 <workDir>/noa 下,不随任务/意图目录分散),sessionID
 // 命名其下的归档子目录(全局唯一,故同一基目录内不冲突)。

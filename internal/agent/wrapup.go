@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Autumn-27/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/c1ayooo/4zreco/internal/kernel/termmap"
 )
 
 // 收尾提示词(wrap-up / settlement prompt):当 agent 因【步数耗尽(MaxTurns)】或
@@ -88,12 +89,14 @@ func resolveWrapupTurns(agentKey string) int {
 	return WrapupTurnsDefault(agentKey)
 }
 
-// wrapupSettlement builds the settlement config for an agent's run. Prompt and the
-// turn budget are admin-editable per agent; disabled tools are code-owned policy so
-// a user can't edit away the "stop probing" guardrail. Resolved fresh each run
-// (reads DB live), so edits apply on the next run without a restart.
-func wrapupSettlement(agentKey string, disabledTools []string) *harness.Settlement {
-	return &harness.Settlement{
+// wrapupSettlement builds the settlement config for an agent's run (kernel
+// Settlement — 刀④ 切换默认；字段与 norma harness.Settlement 一一对应，路线 A 下
+// 由 driver 在预算终态时触发 RunSettlement). Prompt and the turn budget are
+// admin-editable per agent; disabled tools are code-owned policy so a user can't
+// edit away the "stop probing" guardrail. Resolved fresh each run (reads DB
+// live), so edits apply on the next run without a restart.
+func wrapupSettlement(agentKey string, disabledTools []string) *askernel.Settlement {
+	return &askernel.Settlement{
 		Prompt:        resolveWrapup(agentKey),
 		DisabledTools: disabledTools,
 		MaxTurns:      resolveWrapupTurns(agentKey),
@@ -177,18 +180,18 @@ func resolveTaskTimeoutTurns(agentKey string) int {
 //   - clamped=false → 任务还早：两种 reason 都用 per-run 词（即退化为 wrapupSettlement）。
 //
 // 交给 harness 的 PromptByReason 在收尾时按【实际】reason 现场挑，无 build 时错配。
-func wrapupSettlementForTask(agentKey string, disabledTools []string, clamped bool) *harness.Settlement {
+func wrapupSettlementForTask(agentKey string, disabledTools []string, clamped bool) *askernel.Settlement {
 	perRun := resolveWrapup(agentKey)
-	st := &harness.Settlement{
+	st := &askernel.Settlement{
 		Prompt:        perRun, // 兜底(也是非 clamped 时两种 reason 的取值)
 		DisabledTools: disabledTools,
 		MaxTurns:      resolveWrapupTurns(agentKey),
 	}
 	if clamped {
 		if tt := resolveTaskTimeoutWrapup(agentKey); tt != "" {
-			st.PromptByReason = map[harness.TerminalReason]string{
-				harness.ReasonTimeout:  tt,     // 任务到点
-				harness.ReasonMaxTurns: perRun, // 步数先耗尽、任务还剩时间
+			st.PromptByReason = map[termmap.Reason]string{
+				termmap.Timeout:  tt,     // 任务到点
+				termmap.MaxTurns: perRun, // 步数先耗尽、任务还剩时间
 			}
 			st.MaxTurns = resolveTaskTimeoutTurns(agentKey)
 		}

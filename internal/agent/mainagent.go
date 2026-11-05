@@ -7,7 +7,8 @@ import (
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hosttools"
 	"github.com/c1ayooo/4zreco/internal/intercept"
-	"github.com/Autumn-27/norma/agentcore"
+	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -144,11 +145,12 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	mainDir := ensureRunDir(m.workDir, taskID, 0)
 	ctx = intercept.WithReviewWorkingDirectory(ctx, mainDir)
-	system, boundary := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
-	opts := agentcore.Options{
-		Provider:        m.prov,
+	system, _ := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
+	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（system 分段拼一条
+	// system message，缓存交 provider 侧）。
+	opts := askernel.Options{
+		Model:           acllm.BridgeModel(m.prov),
 		SystemPrompt:    system,
-		DynamicBoundary: boundary,
 		Tools:           tools,
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
@@ -170,15 +172,18 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 		WorkingDir:            mainDir,                              // 本任务工作目录 <workDir>/tasks/<taskID>
 		ToolOutputDir:         cmdOutDir(mainDir),
 		MaxTurns:              m.maxTurns,                             // 0 = unlimited (configurable in agent management)
-		Compaction:            compactionConfig(m.compactionWindow()), // long chats stay within the window
-		Todos:                 actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
-		// 命中预算(步数)→ SDK 跑收尾:向用户输出一句进展总结。Prompt 与收尾轮数可后台编辑(默认 10 轮)。
-		Settlement:   wrapupSettlement("mainagent", nil),
+		Compaction: compactionConfig(m.compactionWindow()), // long chats stay within the window
+		Todos:      actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
 		NonStreaming: m.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    m.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
-		// 工具调用可观测：与 planner 同理，此前 journal 里看不到 mainagent 的动作。
-		Hooks: toolLogSink(KindMain),
 	}
+	// 工具调用可观测：与 planner 同理，此前 journal 里看不到 mainagent 的动作。
+	// 同一条链喂两处：gate 的 Pre/Post 半边 + driver 的 Stop 半边。
+	hooks := toolLogSink(KindMain)
+	opts.Hooks = hooks
+	// 命中预算(步数)→ 收尾机制(runKernel 的 settlement 分支):向用户输出一句进展总结。
+	// Prompt 与收尾轮数可后台编辑(默认 10 轮)。
+	settle := wrapupSettlement("mainagent", nil)
 	if m.tx != nil { // persist raw human↔AI conversation; one accumulating file per segment
 		opts.Transcript = m.tx
 		// Segment 0 keeps the legacy "exp%d-main" name so existing transcripts still
@@ -189,14 +194,10 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 		}
 	}
 	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
-	// session id 与 transcript 同规则(分段感知),使归档与恢复对齐。
-	noaSession := fmt.Sprintf("exp%d-main", ts.ID())
-	if mainSeg > 0 {
-		noaSession = fmt.Sprintf("exp%d-main-s%d", ts.ID(), mainSeg)
-	}
-	enableNoa(&opts, m.noaEnabledFn, m.workDir, noaSession, noaWarn(noaSession))
-	ctx = attachSideCapture(ctx, &opts)
-	s := agentcore.NewSession(opts)
+	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警。
+	noaFallbackWarn(opts.OnWarn, m.noaEnabledFn, fmt.Sprintf("exp%d-main", ts.ID()))
+	ctx = attachSideCapture(ctx)
+	s := askernel.NewSession(opts)
 	defer s.Close()
 	// reload the prior conversation from the transcript so the agent has context
 	// across turns (each Chat is a fresh session; without this it can't see earlier
@@ -212,6 +213,6 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 			r.Worker = "mainagent"
 			emit(r)
 		}
-	})
+	}, kernelDriver{stop: hooks, settle: settle})
 	return text, err
 }

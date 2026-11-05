@@ -71,6 +71,15 @@ func WithPublisher(ctx context.Context, publish Publisher) context.Context {
 	return context.WithValue(ctx, publisherKey{}, publish)
 }
 
+// PublisherFrom returns the snapshot publisher stamped on ctx (server 侧
+// WithPublisher 注入), or nil. The kernel-path attach (agent.attachSideCapture)
+// reads it to assemble the per-conversation Capture — the norma Attach did this
+// read inline (unexported key), the kernel path needs the exported accessor.
+func PublisherFrom(ctx context.Context) Publisher {
+	publish, _ := ctx.Value(publisherKey{}).(Publisher)
+	return publish
+}
+
 // WithAttempt returns a context carrying the Capture for the model calls of one
 // run — the same stamping Attach does inside its QueryDeps wrapper, exported so
 // the eino-side half of the snapshot seam (the acllm CaptureModel decorator,

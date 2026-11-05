@@ -114,6 +114,18 @@ func WithCall(ctx context.Context, tool string, input []byte) context.Context {
 	return context.WithValue(ctx, callKey{}, a)
 }
 
+// HasCall reports whether a call with this tool_use id is already bound —
+// the kernel path binds via the gate's OnCallStart (synchronous, before hooks),
+// so the event pump must not re-Start over the claimed binding.
+func (t *Trace) HasCall(id string) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.calls[id] != nil
+}
+
 func (t *Trace) bind(id string, f completion) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

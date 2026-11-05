@@ -21,7 +21,12 @@ type DeferredInfo struct {
 	Deferred        []string          // all MCP tool names (schema withheld)
 	GlobalNames     []string          // MCP names to list in the system-prompt block
 	Unlock          *actool.UnlockSet // shared call-gate; nil when no MCP tools
-	UnlockSkill     func(skillName string)
+	// UnlockSeed 是装配时刻「已解锁」的名字集合（直连可见、非 skill 门控的 MCP 工具
+	// ——server 装配的 globalNames 快照），装配指纹 unlock_seed 分量的真实来源
+	// （评审第 1 轮 #1：此前该分量恒空串）。actool.UnlockSet 无枚举 API，种子经
+	// 本字段显式携带；skill 加载后的 Add() 不改种子——指纹只管「装配时刻」。
+	UnlockSeed   []string
+	UnlockSkill  func(skillName string)
 }
 
 // ToolAugment, if set, returns the EXTRA tools an agent should see beyond its
