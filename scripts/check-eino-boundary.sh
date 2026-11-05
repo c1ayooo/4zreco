@@ -110,9 +110,12 @@ fi
 
 # go.sum 校验（方案 §8.2 第 4 条后半，此前缺实现）。
 # a) eino 引入后：go.sum 必须含该版本的哈希行（go.mod/go.sum 同步性，防 require 了却没
-#    tidy 落账）；未引入时随版本锁一起跳过。grep -F 固定串匹配（版本串含 `.` 不走正则）。
+#    tidy 落账）；未引入时随版本锁一起跳过。
+#    go.sum 行格式是「<module> <version> h1:<hash>」（空格分隔），不是 module@version——
+#    早期实现的 @ 形态 grep 永远匹配不到（go.sum 从不写 @）。版本串自带 v 前缀
+#    （go.mod 里就是 v0.9.21），不要再加上一个 v。
 if [ -n "$eino_ver" ]; then
-  if grep -qF "github.com/cloudwego/eino@${eino_ver}" go.sum; then
+  if grep -qF "github.com/cloudwego/eino ${eino_ver} h1:" go.sum; then
     printf '[ok]   go.sum：含 github.com/cloudwego/eino@%s 哈希行\n' "$eino_ver"
   else
     printf '[FAIL] go.sum：无 github.com/cloudwego/eino@%s 哈希行（go.mod/go.sum 不同步，跑 go mod tidy）\n' \

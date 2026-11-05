@@ -46,6 +46,10 @@ ZRECO_SKIP_FRONTEND=1 ZRECO_SKIP_NPM_CI=1 ZRECO_COMPRESS=0 ZRECO_PACKAGE=0 \
   `TestChatMentionWorkerReceivesServerDetails`、`TestNotifyDigestSegmentsAndDefersRemainder`（共享库脏数据）、
   `TestChatUnavailableReasonDistinguishesStates`（Windows TempDir 清理竞态）。
 - **判定法**：`go test ./internal/server/ -run <name> -count=1` 单跑，过 = 环境问题。
+- **DSN 门控测试的假绿**：`internal/llmrec` 的 Model* 五个定向测试（eino 侧录制装饰器）
+  无 `ZRECO_PG_DSN` 时静默 skip——不带 DSN 的 `go test ./internal/llmrec/` 全绿不等于该
+  装饰器已验证。定向跑法见 §1（norma 侧的 TestSideUsageRecordedOnceOnConsumerCancellation
+  同款门控）。
 - **Windows 特有**：`evidence` 目录 fsync 已做 GOOS 分支；不要引入依赖目录 fsync 的新代码。
 
 ## 3. 发版流程（tag → CI → Release）
@@ -122,7 +126,7 @@ norma→eino（cloudwego/eino ADK Runner）迁移进行中，方案唯一权威�
 
 ## 6. 目录速览
 
-顶层只保留 8 个项目目录（2026-11-03 收缩：26 个 Go 包全部收入 `internal/`，
+顶层只保留 8 个项目目录（2026-11-03 收缩：27 个 Go 包全部收入 `internal/` 与 `cmd/`，
 screenshots 并入 assets，过期文档进 `docs/archive/`）。**新增顶层目录/包必须同步本表。**
 
 ```
@@ -134,6 +138,8 @@ internal/            全部 Go 业务包（import 路径 github.com/c1ayooo/4zre
   db/                PostgreSQL 唯一存储（schema.sql 幂等迁移；拦截规则 seed 批次 v1-v5；
                      审批三表 append-only + HMAC 哈希链 + v_intercept 视图，P0 随本轮引入）
   server/            HTTP 面与引擎调度（全部路由注册在 server.go 的 Handler() 起，:724 一带）
+  acllm/             eino 转换层（schema.Message ↔ 落盘 transcript DTO 双向，落盘 JSON 形状冻结；
+                     P1 刀①引入，norma 删除前 DTO 类型暂用 norma/llm）
   intercept/         三层拦截（规则+LLM judge+ask 审批；judge prompt 在 prompt.go）
   guard/             审批门（Attributions 已回流 planner 态势）
   traffic/           MITM 流量采集与出口代理池
