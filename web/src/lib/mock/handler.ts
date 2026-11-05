@@ -2434,6 +2434,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     if (b.decision !== "allowed" && b.decision !== "denied") throw new Error("无效审批动作");
     row.status = b.decision;
     row.decided_at = new Date().toISOString();
+    // 决定行语义（P0-5/P0-6）：人工决定落 decided_by 与 decision_source=human。
+    row.decided_by = "4ZRECO";
+    row.decision_source = "human";
     const detail = mockInterceptDetails[id];
     if (detail) {
       detail.effective_action = b.decision === "allowed" ? "allow" : "deny";
@@ -2452,19 +2455,20 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     return mockInterceptPending.find((p) => p.id === Number(seg[2])) ?? null;
   if (path === "/intercept/history" || (seg[0] === "intercept" && seg[1] === "task")) {
     const status = q.get("status") || "";
+    const askSource = q.get("ask_source") || "";
     const decisionSource = q.get("decision_source") || "";
     if (status && !["pending", "allowed", "denied", "timeout"].includes(status)) throw new Error("无效审批状态");
-    if (decisionSource && !["model", "rule", "unknown"].includes(decisionSource)) throw new Error("无效判定来源");
-    const filtered = mockInterceptHistory.filter((row) => {
-      const source =
-        row.decision_source || (row.rule_id ? "rule" : row.reason?.startsWith("[模型]") ? "model" : "unknown");
-      return (
+    if (askSource && !["rule", "judge", "model", "unknown"].includes(askSource)) throw new Error("无效判定来源");
+    if (decisionSource && !["human", "auto", "timeout", "auto_cancel", "legacy", "archive"].includes(decisionSource))
+      throw new Error("无效决定来源");
+    const filtered = mockInterceptHistory.filter(
+      (row) =>
         (seg[1] !== "task" || row.task_id === decodeURIComponent(seg[2])) &&
         (!status || row.status === status) &&
-        (!decisionSource || source === decisionSource)
-      );
-    });
-    if (!q.has("page") && !q.has("size") && !status && !decisionSource)
+        (!askSource || (row.ask_source || "unknown") === askSource) &&
+        (!decisionSource || row.decision_source === decisionSource),
+    );
+    if (!q.has("page") && !q.has("size") && !status && !askSource && !decisionSource)
       return { items: filtered, total: filtered.length };
     const page = Math.max(1, Number(q.get("page")) || 1);
     const size = Math.min(100, Math.max(1, Number(q.get("size")) || 20));

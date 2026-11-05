@@ -33,7 +33,7 @@ func TestWorkerReviewContextAcrossToolCalls(t *testing.T) {
 	ts := d.Exploration(expID)
 	taskID := fmt.Sprint(expID)
 	t.Cleanup(func() {
-		_, _ = d.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, taskID)
+		purgeAgentInterceptRows(t, d, taskID)
 		_, _ = d.Exec(`DELETE FROM explorations WHERE id=$1`, expID)
 	})
 	ic := intercept.New(d)

@@ -167,6 +167,12 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 	if err != nil {
 		log.Fatalf("[auth] JWT key: %v", err)
 	}
+	// 审批哈希链 HMAC key：独立文件、独立生命周期（改密码轮换 jwt.key 不影响它）。
+	// 路径唯一解析点是 paths.AuditKeyPath()。
+	auditKey, err := loadOrCreateAuditKey(paths.AuditKeyPath())
+	if err != nil {
+		log.Fatalf("[auth] audit key: %v", err)
+	}
 	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, paths: paths, skillDir: paths.Skills, keyDir: paths.Base, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
@@ -174,6 +180,9 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
 	s.jwtKey.Store(key)
+	if m.pg != nil {
+		m.pg.SetAuditKey(auditKey)
+	}
 	// 出口审查：注册平台敏感指纹（jwt.key 已就绪、PG 可用；LLM profile 变更经
 	// reapplyActiveProfile 重注册）。best-effort，失败只影响拦截面。
 	s.registerEgressFingerprints()
@@ -1042,6 +1051,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/intercept/judge", s.interceptSetJudgeConfig)
 	mux.HandleFunc("GET /api/intercept/judge/usage", s.interceptJudgeUsage) // 兜底审批累计 token 用量
 
+	// 审计链校验（P0-3）：/api/audit/verify 区分「历史区未纳入逐行校验」与「断链@seq」。
+	mux.HandleFunc("GET /api/audit/verify", s.auditVerify)
+
 	// /api/* goes through CORS + JWT; everything else is served by the embedded
 	// frontend (public — auth is enforced client-side and on the API). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
@@ -1157,6 +1169,12 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		active = t.ID
 	}
 	list := s.m.List()
+	// project_id>0 时按归属项目服务端过滤（4zrec 同款）；0/省略=全部。
+	if raw := strings.TrimSpace(r.URL.Query().Get("project_id")); raw != "" {
+		if pid, err := strconv.ParseInt(raw, 10, 64); err == nil && pid > 0 {
+			list = tasksBelongingToProject(list, pid)
+		}
+	}
 	metrics, _ := s.m.PG().TaskListMetricsAll()
 	archiveBlockers, _ := s.m.PG().TaskArchiveBlockers()
 	dtos := make([]TaskDTO, 0, len(list))
@@ -1183,6 +1201,17 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		dtos = append(dtos, dto)
 	}
 	writeJSON(w, 200, map[string]any{"tasks": dtos, "active": active})
+}
+
+// tasksBelongingToProject 只留挂了指定项目的任务（未挂/挂别的项目的剔除）。
+func tasksBelongingToProject(list []*Task, projectID int64) []*Task {
+	out := make([]*Task, 0, len(list))
+	for _, t := range list {
+		if t.ProjectID != nil && *t.ProjectID == projectID {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func (s *Server) resolvedTaskStatus(t *Task) string {

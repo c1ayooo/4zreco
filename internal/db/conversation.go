@@ -215,14 +215,17 @@ func (d *DB) TouchConversation(id int64) error {
 	return err
 }
 
-// DeleteConversation removes a thread; its activities cascade via FK.
+// DeleteConversation removes a thread; its activities cascade via FK. Approval
+// rows survive with conversation_id nulled (P0-A4: FK ON DELETE SET NULL, 审批
+// 记录不随会话物理删除).
 func (d *DB) DeleteConversation(id int64) error {
 	_, err := d.Exec(`DELETE FROM conversations WHERE id=$1`, id)
 	return err
 }
 
 // DeleteConversations removes existing threads in one statement and returns the
-// ids that were actually present. Child activities and trigger runs cascade.
+// ids that were actually present. Child activities and trigger runs cascade;
+// approval rows survive with the FK nulled (P0-A4).
 func (d *DB) DeleteConversations(ids []int64) ([]int64, error) {
 	if len(ids) == 0 {
 		return []int64{}, nil

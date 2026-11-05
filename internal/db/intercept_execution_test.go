@@ -12,17 +12,19 @@ func TestInterceptExecutionNavigation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
+	const scope = "navigation-approvals"
+	purgeScopes := []string{scope}
+	t.Cleanup(func() { purgeInterceptRows(t, d, purgeScopes...) })
 	approval := func(conv int64, task, id string, exact bool) int64 {
 		t.Helper()
 		audit := &InterceptAudit{ToolUseID: id, Correlation: "exact"}
 		if !exact {
 			audit.Correlation = "ambiguous"
 		}
-		n, err := d.CreateInterceptPending(0, conv, task, "display-name-is-not-a-session-id", "Bash", []byte(`{"command":"pwd"}`), "review", audit)
+		n, err := d.CreateInterceptPending(0, conv, task, "display-name-is-not-a-session-id", "Bash", []byte(`{"command":"pwd"}`), "review", "rule", audit)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM intercept_pending WHERE id=$1`, n) })
 		return n
 	}
 	conv := func() int64 {
@@ -66,6 +68,7 @@ func TestInterceptExecutionNavigation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		purgeScopes = append(purgeScopes, fmt.Sprint(task.ID))
 		exp := task.ExplorationID
 		t.Cleanup(func() {
 			_, _ = d.Exec(`DELETE FROM tasks WHERE id=$1`, task.ID)

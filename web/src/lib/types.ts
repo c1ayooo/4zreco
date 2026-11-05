@@ -1470,7 +1470,6 @@ export interface AssetInterceptRule {
 }
 
 export interface InterceptPending {
-  decision_source?: "rule" | "model" | "unknown" | "";
   id: number;
   rule_id?: number;
   conversation_id?: number;
@@ -1479,10 +1478,19 @@ export interface InterceptPending {
   tool_name: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tool_input: Record<string, any>;
+  // 视图计算：pending 或最后一条决定行的 decision。
   status: "pending" | "allowed" | "denied" | "timeout";
   reason: string; // 规则 message 或模型判定理由(模型判定带 [模型] 前缀)
   decided_at?: string;
   created_at: string;
+  // ask 来源：rule=规则命中；judge=模型判定；model/unknown=旧数据迁移值。
+  ask_source?: "rule" | "judge" | "model" | "unknown" | "";
+  // 请求类型分类学：rule | judge（枚举位预留，不建 fence 类）。
+  kind?: "rule" | "judge" | "";
+  // 决定者凭据身份（人工路径非空，自动路径为空）。
+  decided_by?: string;
+  // 决定来源：human | auto | timeout | auto_cancel | legacy | archive。
+  decision_source?: string;
 }
 
 // JudgeConfig: 模型兜底审批(仅当没有任何拦截规则命中时由模型判断)的全局配置。
@@ -1514,7 +1522,10 @@ export interface JudgeUsage {
 
 export interface InterceptApprovalFilter {
   status?: InterceptPending["status"];
-  decision_source?: "rule" | "model" | "unknown";
+  // ask 来源（P0-6 由 decision_source 改名）：rule | judge | model(旧数据) | unknown。
+  ask_source?: "rule" | "judge" | "model" | "unknown";
+  // 决定来源（正交维度）：human | auto | timeout | auto_cancel | legacy | archive。
+  decision_source?: string;
 }
 
 // InterceptApprovalRow enriches InterceptPending with conversation/task and rule context.

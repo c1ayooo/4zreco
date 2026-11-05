@@ -1119,30 +1119,209 @@ ALTER TABLE intercept_rules DROP CONSTRAINT IF EXISTS intercept_rules_action_che
 ALTER TABLE intercept_rules ADD CONSTRAINT intercept_rules_action_check
     CHECK (action IN ('allow', 'deny', 'ask', 'judge'));
 
+-- ── P0 审批不可变（docs/Eino深度接入方案-2026-11-05.md §4-P0）──────────────
+-- 三表拆分：intercept_pending 冻结为只 INSERT（触发器拒绝 UPDATE/DELETE），
+-- 可变的 status/decided_at 与执行结果拆到 intercept_decisions /
+-- intercept_executions（均 append-only），status 由视图 v_intercept 计算。
+-- audit JSONB 只存「审查时快照」（INSERT 一次写死，永不 UPDATE）；决定与
+-- 执行字段由详情查询从三表拼装（前端响应形状不变）。
 CREATE TABLE IF NOT EXISTS intercept_pending (
     id              BIGSERIAL PRIMARY KEY,
     rule_id         BIGINT REFERENCES intercept_rules(id) ON DELETE SET NULL,
-    conversation_id BIGINT REFERENCES conversations(id) ON DELETE CASCADE,
+    -- 会话删除不再级联删审批（缺口 A4）：SET NULL 让审批行存活，历史可追溯。
+    conversation_id BIGINT REFERENCES conversations(id) ON DELETE SET NULL,
     task_id         TEXT,
     agent_name      TEXT NOT NULL DEFAULT '',
     tool_name       TEXT NOT NULL,
     tool_input      JSONB NOT NULL DEFAULT '{}',
-    status          TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'allowed', 'denied', 'timeout')),
     -- 判定理由:规则命中时为规则 message;LLM 兜底判定时为模型给的简短理由(前缀 [模型])。
     reason          TEXT NOT NULL DEFAULT '',
-    decided_at      TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- ask 来源(原列名 decision_source，一词让位给决定来源)：rule=规则命中;
+    -- judge=模型判定(新行);model/unknown=旧库迁移值。
+    ask_source      TEXT NOT NULL DEFAULT ''
+                    CHECK (ask_source IN ('rule', 'judge', 'model', 'unknown', '')),
+    -- 请求类型分类学(kind ∈ {rule, judge}，枚举位预留，不建 fence 类)。
+    kind            TEXT NOT NULL DEFAULT '' CHECK (kind IN ('rule', 'judge', '')),
+    -- 审查时快照(懒加载)：RunID/ToolUseID/Correlation/InputDigest/模型输入等。
+    -- effective_action/decision_reason/execution_status 等可变字段已拆到
+    -- decisions/executions；旧行 audit 内残留的这些字段由详情拼装层兜底显示。
+    audit           JSONB
 );
-CREATE INDEX IF NOT EXISTS idx_intercept_pending_status ON intercept_pending(status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_intercept_pending_task   ON intercept_pending(task_id, created_at DESC);
--- 补旧库:reason 列(已发版,加列要带 IF NOT EXISTS)。
+CREATE INDEX IF NOT EXISTS idx_intercept_pending_task ON intercept_pending(task_id, created_at DESC);
+-- 补旧库:reason/audit 列(已发版,加列要带 IF NOT EXISTS)。
 ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '';
--- Detail payloads are lazy-loaded; NULL preserves the meaning of legacy history.
 ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS audit JSONB;
-ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS decision_source TEXT NOT NULL DEFAULT '';
-UPDATE intercept_pending SET decision_source=CASE WHEN rule_id IS NOT NULL THEN 'rule'
- WHEN reason LIKE '[模型]%' THEN 'model' ELSE 'unknown' END WHERE decision_source='';
+-- 决定来源维度改名 + 正交化：decision_source → ask_source（沿用 [模型] 前缀与
+-- rule_id 判据回填历史行），新 decision_source 一词让位给 intercept_decisions。
+ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS ask_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT '';
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema=current_schema() AND table_name='intercept_pending'
+                 AND column_name='decision_source') THEN
+        UPDATE intercept_pending SET ask_source=COALESCE(NULLIF(decision_source,''), CASE
+         WHEN rule_id IS NOT NULL THEN 'rule'
+         WHEN reason LIKE '[模型]%' THEN 'model' ELSE 'unknown' END)
+        WHERE ask_source='';
+    END IF;
+END $$;
+ALTER TABLE intercept_pending DROP COLUMN IF EXISTS decision_source;
+-- A4：级联改 SET NULL（drop/rebuild constraint，照 intercept_rules_action_check 先例）。
+ALTER TABLE intercept_pending DROP CONSTRAINT IF EXISTS intercept_pending_conversation_id_fkey;
+ALTER TABLE intercept_pending ADD CONSTRAINT intercept_pending_conversation_id_fkey
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL;
+
+-- 决定表（append-only + HMAC-SHA256 哈希链）。UNIQUE(pending_id) 落存储层的
+-- decide-once 语义（取代旧 UPDATE ... WHERE status='pending' 的 CAS）。
+-- seq/prev_hash/row_hash 为 NULL = 历史区（旧库回填 / 归档恢复补插），不接链尾、
+-- 不参与逐行校验；seq=0 固定为锚行（decision='anchor'，由 Go 启动逻辑写入）。
+CREATE TABLE IF NOT EXISTS intercept_decisions (
+    id              BIGSERIAL PRIMARY KEY,
+    pending_id      BIGINT REFERENCES intercept_pending(id),
+    decision        TEXT NOT NULL CHECK (decision IN ('allowed', 'denied', 'timeout', 'anchor')),
+    action          TEXT NOT NULL DEFAULT '' CHECK (action IN ('allow', 'deny', '')),
+    decision_reason TEXT NOT NULL DEFAULT '',
+    -- 决定者凭据身份：human=鉴权中间件注入（JWT 管理员/API key 名，无 API key
+    -- 机制时为管理员 subject）；自动路径为空；legacy=迁移回填；archive=归档恢复合成。
+    decided_by      TEXT NOT NULL DEFAULT '',
+    -- 决定来源（decision_source 一词的新归属）：human=人工决定；auto=规则/模型
+    -- 即时裁决观测行；timeout=审批超时兜底；auto_cancel=任务取消连坐；
+    -- legacy=旧库迁移回填；archive=归档恢复补插；anchor=链起始锚行。
+    decision_source TEXT NOT NULL DEFAULT 'human'
+                    CHECK (decision_source IN ('human', 'auto', 'timeout', 'auto_cancel', 'legacy', 'archive', 'anchor')),
+    decided_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    seq             BIGINT,
+    prev_hash       TEXT NOT NULL DEFAULT '',
+    row_hash        TEXT NOT NULL DEFAULT '',
+    UNIQUE (pending_id)
+);
+CREATE INDEX IF NOT EXISTS idx_intercept_decisions_seq ON intercept_decisions(seq) WHERE seq IS NOT NULL;
+
+-- 执行结果表（append-only：每次结果一条新行，等价原 CompleteIntercept 语义；
+-- 视图取最后一行）。awaiting_result 由决定时预插，终态由工具结果回调追加。
+CREATE TABLE IF NOT EXISTS intercept_executions (
+    id               BIGSERIAL PRIMARY KEY,
+    pending_id       BIGINT NOT NULL REFERENCES intercept_pending(id),
+    run_id           TEXT NOT NULL DEFAULT '',
+    tool_use_id      TEXT NOT NULL DEFAULT '',
+    execution_status TEXT NOT NULL
+                     CHECK (execution_status IN ('not_started', 'not_executed', 'awaiting_result', 'succeeded', 'failed', 'unknown')),
+    output           TEXT NOT NULL DEFAULT '',
+    output_truncated BOOLEAN NOT NULL DEFAULT false,
+    ended_at         TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_intercept_executions_pending ON intercept_executions(pending_id, id DESC);
+
+-- 哈希链链头：写决定行前以 pg_advisory_xact_lock(hashtext('intercept_chain'))
+-- 串行化，读链头 → seq=last_seq+1 → INSERT → 回写链头，同事务完成。
+CREATE TABLE IF NOT EXISTS audit_chain_head (
+    chain_id   TEXT PRIMARY KEY,
+    last_seq   BIGINT NOT NULL DEFAULT 0,
+    last_hash  TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO audit_chain_head(chain_id) VALUES ('intercept') ON CONFLICT (chain_id) DO NOTHING;
+
+-- 旧库回填（兼容第 7 项）：把已决 pending 行按旧 status 合成 decision 行
+--（decided_by='legacy'，seq NULL 落历史区不接链）。必须在删 status/decided_at
+-- 列之前执行；DO $$ 判列存在（删列后语句不再可执行）。
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema=current_schema() AND table_name='intercept_pending'
+                 AND column_name='status') THEN
+        INSERT INTO intercept_decisions(pending_id, decision, action, decision_reason, decided_by, decision_source, decided_at)
+        SELECT ip.id, ip.status,
+               COALESCE(NULLIF(ip.audit->>'effective_action',''),
+                        CASE WHEN ip.status='allowed' THEN 'allow' ELSE 'deny' END),
+               COALESCE(ip.audit->>'decision_reason',''),
+               'legacy', 'legacy', COALESCE(ip.decided_at, NOW())
+        FROM intercept_pending ip
+        WHERE ip.status <> 'pending'
+          AND NOT EXISTS (SELECT 1 FROM intercept_decisions d WHERE d.pending_id=ip.id);
+    END IF;
+END $$;
+
+-- 旧列退役：status/decided_at 由 v_intercept 从 decisions 表计算
+--（回填在前；DROP COLUMN 自动连带删除其上的 idx_intercept_pending_status）。
+ALTER TABLE intercept_pending DROP COLUMN IF EXISTS status;
+ALTER TABLE intercept_pending DROP COLUMN IF EXISTS decided_at;
+
+-- 不可变守卫：三表 BEFORE UPDATE/DELETE 一律拒绝。迁移/归档的受控放行口是
+-- 专用 GUC（SET LOCAL app.role='audit_writer'，事务级自动复位）——只有迁移
+-- 与归档恢复脚本可以设置，业务代码一律不得设置。
+-- 唯一的隐式例外只作用于 intercept_pending：父行删除（intercept_rules /
+-- conversations）引发的 FK ON DELETE SET NULL 在 PG 内部是对本表的 UPDATE——
+-- 触发器会拦掉它，导致删规则/删会话整体失败。因此放行「除 rule_id/
+-- conversation_id 置空外所有字段原样」的更新：能改的只有 FK 本身就会改的两列，
+-- 等价于父行删除语义，无额外篡改面。列比较走 to_jsonb(NEW/OLD) 的 JSON 取值而
+-- 不是 record 字段访问——同一函数挂在 decisions/executions 上时，plpgsql 对
+-- record 字段（NEW.task_id）不做短路求值，会以「record has no field」崩溃式
+-- 拒绝（丢失 audit_writer 指引的错误形态）；to_jsonb 对任意行形状都成立。
+CREATE OR REPLACE FUNCTION deny_intercept_mutation() RETURNS trigger AS $$
+DECLARE
+    n JSONB;
+    o JSONB;
+BEGIN
+    IF current_setting('app.role', true) = 'audit_writer' THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+    IF TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'intercept_pending' THEN
+        n := to_jsonb(NEW);
+        o := to_jsonb(OLD);
+        IF (n->>'id') = (o->>'id')
+           AND (n->>'task_id') IS NOT DISTINCT FROM (o->>'task_id')
+           AND (n->>'agent_name') = (o->>'agent_name')
+           AND (n->>'tool_name') = (o->>'tool_name')
+           AND (n->>'tool_input') IS NOT DISTINCT FROM (o->>'tool_input')
+           AND (n->>'reason') = (o->>'reason')
+           AND (n->>'created_at') IS NOT DISTINCT FROM (o->>'created_at')
+           AND (n->>'audit') IS NOT DISTINCT FROM (o->>'audit')
+           AND (n->>'kind') = (o->>'kind')
+           AND (n->>'ask_source') = (o->>'ask_source')
+           AND ((n->>'rule_id') IS NOT DISTINCT FROM (o->>'rule_id')
+                OR ((n->>'rule_id') IS NULL AND (o->>'rule_id') IS NOT NULL))
+           AND ((n->>'conversation_id') IS NOT DISTINCT FROM (o->>'conversation_id')
+                OR ((n->>'conversation_id') IS NULL AND (o->>'conversation_id') IS NOT NULL)) THEN
+            RETURN NEW; -- 仅父行删除引发的 FK SET NULL
+        END IF;
+    END IF;
+    RAISE EXCEPTION '审批记录 append-only：拒绝 % 于 %（迁移/归档请用 SET LOCAL app.role=''audit_writer''）', TG_OP, TG_TABLE_NAME;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_intercept_pending_immutable ON intercept_pending;
+CREATE TRIGGER trg_intercept_pending_immutable BEFORE UPDATE OR DELETE ON intercept_pending
+    FOR EACH ROW EXECUTE FUNCTION deny_intercept_mutation();
+DROP TRIGGER IF EXISTS trg_intercept_decisions_immutable ON intercept_decisions;
+CREATE TRIGGER trg_intercept_decisions_immutable BEFORE UPDATE OR DELETE ON intercept_decisions
+    FOR EACH ROW EXECUTE FUNCTION deny_intercept_mutation();
+DROP TRIGGER IF EXISTS trg_intercept_executions_immutable ON intercept_executions;
+CREATE TRIGGER trg_intercept_executions_immutable BEFORE UPDATE OR DELETE ON intercept_executions
+    FOR EACH ROW EXECUTE FUNCTION deny_intercept_mutation();
+
+-- 展示视图：pending ⨝ 最后一条 decision ⨝ 最后一条 execution。server 读面全部
+-- 改走此视图，status 由「有无 decision 行」计算，前端响应形状不变。
+CREATE OR REPLACE VIEW v_intercept AS
+SELECT ip.id, ip.rule_id, ip.conversation_id, ip.task_id, ip.agent_name, ip.tool_name,
+       ip.tool_input, ip.reason, ip.created_at, ip.audit, ip.kind, ip.ask_source,
+       COALESCE(d.decision, 'pending') AS status,
+       d.decided_at, COALESCE(d.decided_by,'') AS decided_by,
+       COALESCE(d.decision_source,'') AS decision_source,
+       d.action AS effective_action, COALESCE(d.decision_reason,'') AS decision_reason,
+       e.execution_status, e.output, e.output_truncated, e.ended_at AS execution_ended_at
+FROM intercept_pending ip
+LEFT JOIN LATERAL (
+    SELECT dd.decision, dd.action, dd.decision_reason, dd.decided_by, dd.decision_source, dd.decided_at
+    FROM intercept_decisions dd WHERE dd.pending_id = ip.id ORDER BY dd.id DESC LIMIT 1
+) d ON true
+LEFT JOIN LATERAL (
+    SELECT ee.execution_status, ee.output, ee.output_truncated, ee.ended_at
+    FROM intercept_executions ee WHERE ee.pending_id = ip.id ORDER BY ee.id DESC LIMIT 1
+) e ON true;
 
 -- =====================================================================
 -- L. 漏洞发现持久化

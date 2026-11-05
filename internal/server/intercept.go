@@ -419,16 +419,25 @@ func (s *Server) interceptHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func interceptFilterParams(q url.Values) (db.InterceptApprovalFilter, error) {
-	filter := db.InterceptApprovalFilter{Status: q.Get("status"), DecisionSource: q.Get("decision_source")}
+	filter := db.InterceptApprovalFilter{Status: q.Get("status"), AskSource: q.Get("ask_source"), DecisionSource: q.Get("decision_source")}
 	switch filter.Status {
 	case "", "pending", "allowed", "denied", "timeout":
 	default:
 		return filter, fmt.Errorf("status 必须是 pending、allowed、denied 或 timeout")
 	}
-	switch filter.DecisionSource {
-	case "", "model", "rule", "unknown":
+	// ask 来源维度（原 decision_source 参数改名）：judge=模型判定（新数据），
+	// model=模型判定（旧数据迁移值），rule=规则命中，unknown=旧库兜底值。
+	switch filter.AskSource {
+	case "", "rule", "judge", "model", "unknown":
 	default:
-		return filter, fmt.Errorf("decision_source 必须是 model、rule 或 unknown")
+		return filter, fmt.Errorf("ask_source 必须是 rule、judge、model 或 unknown")
+	}
+	// 决定来源维度（P0-6 正交化）：human=人工；auto=规则/模型即时裁决观测行；
+	// timeout=审批超时兜底；auto_cancel=任务取消连坐；legacy/archive=迁移与恢复。
+	switch filter.DecisionSource {
+	case "", "human", "auto", "timeout", "auto_cancel", "legacy", "archive":
+	default:
+		return filter, fmt.Errorf("decision_source 必须是 human、auto、timeout、auto_cancel、legacy 或 archive")
 	}
 	return filter, nil
 }
@@ -465,7 +474,9 @@ func (s *Server) interceptDecide(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "decision 必须是 allowed 或 denied")
 		return
 	}
-	if err := s.m.interceptor.Decide(id, req.Decision == "allowed"); err != nil {
+	// decided_by（P0-5）：requireAuth 注入的凭据身份随决定行落库；自动路径
+	// （超时/取消）在 intercept 包内落空 decided_by，由 decision_source 区分。
+	if err := s.m.interceptor.Decide(id, req.Decision == "allowed", requestIdentity(r)); err != nil {
 		if errors.Is(err, intercept.ErrAlreadyDecided) {
 			writeErr(w, 409, err.Error())
 			return
@@ -474,6 +485,21 @@ func (s *Server) interceptDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// auditVerify 是审计链校验端点（P0-3）：逐行重算审批决定哈希链，区分
+// 「历史区未纳入逐行校验」（seq 为空的 legacy/恢复行）与「断链@seq」。
+func (s *Server) auditVerify(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	status, err := pg.VerifyAuditChain()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, status)
 }
 
 // --- tool-config (全局工具拦截范围) ---
@@ -668,9 +694,9 @@ func (s *Server) interceptExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target == nil {
-		// Conversation deletion cascades approval rows. A stale source link still
-		// carries its conversation ID, allowing a precise message without retaining
-		// deleted conversations or changing their deletion semantics.
+		// 会话删除后审批行本身存活（P0-A4：FK 已改 SET NULL），但其 activities
+		// 随会话级联删除，导航目标消失。A stale source link still carries its
+		// conversation ID, allowing a precise message.
 		if convID, parseErr := strconv.ParseInt(r.URL.Query().Get("conversation"), 10, 64); parseErr == nil && convID > 0 {
 			conv, getErr := pg.GetConversation(convID)
 			if getErr != nil {

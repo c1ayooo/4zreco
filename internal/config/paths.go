@@ -49,6 +49,10 @@ func abs(p string) string {
 // JWTKeyPath 是 JWT 签名密钥位置（Base 下，绝不进可浏览的 Data 工作区）。
 func (p Paths) JWTKeyPath() string { return filepath.Join(p.Base, "jwt.key") }
 
+// AuditKeyPath 是审批决定哈希链的 HMAC 密钥位置（Base 下）。与 jwt.key 分离
+// 持久化：jwt.key 改密码即轮换，audit key 必须长期稳定，否则历史链验签失效。
+func (p Paths) AuditKeyPath() string { return filepath.Join(p.Base, "audit.key") }
+
 // LegacyJWTKeyPath 是 v0.4.x 之前 jwt.key 的旧位置（一次性迁出用）。
 func (p Paths) LegacyJWTKeyPath() string { return filepath.Join(p.Data, "jwt.key") }
 

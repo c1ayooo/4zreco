@@ -26,7 +26,9 @@ type InterceptRule struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-// InterceptPending is one row of intercept_pending.
+// InterceptPending is one row of v_intercept (审批请求 + 视图计算的 status)。
+// P0 三表拆分后 pending 表本身只 INSERT；Status/DecidedAt/DecisionSource 等
+// 决定侧字段来自 intercept_decisions 的最后一条行。
 type InterceptPending struct {
 	ID             int64           `json:"id"`
 	RuleID         *int64          `json:"rule_id"`
@@ -35,10 +37,13 @@ type InterceptPending struct {
 	AgentName      string          `json:"agent_name"`
 	ToolName       string          `json:"tool_name"`
 	ToolInput      json.RawMessage `json:"tool_input"`
-	Status         string          `json:"status"`
-	DecisionSource string          `json:"decision_source"`
-	Reason         string          `json:"reason"` // 规则 message 或模型判定理由(前缀 [模型])
+	Kind           string          `json:"kind"`       // 请求类型：rule | judge（旧行为空）
+	AskSource      string          `json:"ask_source"` // ask 来源：rule | judge（旧行 model/unknown）
+	Status         string          `json:"status"`     // 视图计算：pending 或最后一条决定
+	Reason         string          `json:"reason"`     // 规则 message 或模型判定理由(前缀 [模型])
 	DecidedAt      *time.Time      `json:"decided_at"`
+	DecidedBy      string          `json:"decided_by"`      // 决定者凭据身份（人工路径非空）
+	DecisionSource string          `json:"decision_source"` // 决定来源：human/auto/timeout/auto_cancel/legacy/archive
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
@@ -106,10 +111,33 @@ func (d *DB) ToggleInterceptRule(id int64, enabled bool) error {
 	return err
 }
 
+// askSourceFor maps a request to its ask 来源 dimension. ruleID != 0 → the ask
+// (or the observation row) belongs to an intercept rule; otherwise it came from
+// the LLM fallback judge. Legacy rows keep rule/model/unknown values.
+func askSourceFor(ruleID int64) string {
+	if ruleID != 0 {
+		return "rule"
+	}
+	return "judge"
+}
+
+// normalizeKind falls back to the rule/judge derivation when the caller did not
+// classify the request (defensive: the column's CHECK allows '' but新行应当有值).
+func normalizeKind(ruleID int64, kind string) string {
+	if kind == "rule" || kind == "judge" {
+		return kind
+	}
+	if ruleID != 0 {
+		return "rule"
+	}
+	return "judge"
+}
+
 // CreateInterceptPending inserts a pending approval record and returns its ID.
 // convID == 0 → conversation_id stored as NULL (background task).
-// taskID == "" → task_id stored as NULL.
-func (d *DB) CreateInterceptPending(ruleID, convID int64, taskID, agentName, toolName string, input []byte, reason string, audits ...*InterceptAudit) (int64, error) {
+// taskID == "" → task_id stored as NULL. kind ∈ {rule, judge} is the request
+// taxonomy (P0-6); empty falls back to the ruleID derivation.
+func (d *DB) CreateInterceptPending(ruleID, convID int64, taskID, agentName, toolName string, input []byte, reason, kind string, audits ...*InterceptAudit) (int64, error) {
 	raw := json.RawMessage(input)
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
@@ -129,23 +157,20 @@ func (d *DB) CreateInterceptPending(ruleID, convID int64, taskID, agentName, too
 	}
 	var id int64
 	err := d.QueryRow(`
-INSERT INTO intercept_pending(rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, reason, decision_source, audit)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-		ruleIDPtr, convIDPtr, taskIDPtr, agentName, toolName, raw, reason, interceptSource(ruleID, reason), firstAudit(audits)).Scan(&id)
+INSERT INTO intercept_pending(rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, reason, ask_source, kind, audit)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+		ruleIDPtr, convIDPtr, taskIDPtr, agentName, toolName, raw, reason, askSourceFor(ruleID), normalizeKind(ruleID, kind), firstAudit(audits)).Scan(&id)
 	return id, err
 }
 
-// DecideInterceptPending updates a pending record's status (allowed/denied/timeout).
-func (d *DB) DecideInterceptPending(id int64, status string) error {
-	_, err := d.Exec(`UPDATE intercept_pending SET status=$2, decided_at=NOW() WHERE id=$1`, id, status)
-	return err
-}
-
-// CreateDecidedIntercept inserts an intercept_pending row ALREADY in a final state
-// (status = 'allowed' | 'denied'), decided_at stamped now. Used to log allow/deny
-// rule matches for observability — they don't block and need no user action, so unlike
-// CreateInterceptPending (which starts 'pending') this records the outcome directly.
-func (d *DB) CreateDecidedIntercept(ruleID, convID int64, taskID, agentName, toolName string, input []byte, status, reason string, audits ...*InterceptAudit) (int64, error) {
+// CreateDecidedIntercept inserts an intercept_pending row ALREADY in a final
+// state (status = 'allowed' | 'denied') together with its decision row (chained
+// into the HMAC hash chain, decision_source='auto') and the pre-inserted
+// execution row. Used to log allow/deny rule/model verdicts for observability —
+// they don't block and need no user action, so unlike CreateInterceptPending
+// (which starts 'pending') this records the outcome directly. P0 三表拆分后
+// 观测行也必须带决定行，否则视图会把它显示成永久 pending。
+func (d *DB) CreateDecidedIntercept(ruleID, convID int64, taskID, agentName, toolName string, input []byte, status, reason, kind string, audits ...*InterceptAudit) (int64, error) {
 	raw := json.RawMessage(input)
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
@@ -163,24 +188,56 @@ func (d *DB) CreateDecidedIntercept(ruleID, convID int64, taskID, agentName, too
 	if ruleID != 0 {
 		ruleIDPtr = &ruleID
 	}
+	tx, err := d.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	// 观测行接链：锚行缺失时先补（与 ResolveIntercept 同一串行化前提由
+	// appendChainDecisionTx 的链头 FOR UPDATE + 本事务的 INSERT 顺序保证）。
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('intercept_chain'))`); err != nil {
+		return 0, err
+	}
+	if err := d.ensureAuditAnchorTx(tx); err != nil {
+		return 0, err
+	}
 	var id int64
-	err := d.QueryRow(`
-INSERT INTO intercept_pending(rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, status, reason, decided_at, decision_source, audit)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10) RETURNING id`,
-		ruleIDPtr, convIDPtr, taskIDPtr, agentName, toolName, raw, status, reason, interceptSource(ruleID, reason), firstAudit(audits)).Scan(&id)
-	return id, err
+	err = tx.QueryRow(`
+INSERT INTO intercept_pending(rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, reason, ask_source, kind, audit)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+		ruleIDPtr, convIDPtr, taskIDPtr, agentName, toolName, raw, reason, askSourceFor(ruleID), normalizeKind(ruleID, kind), firstAudit(audits)).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	action := "deny"
+	if status == "allowed" {
+		action = "allow"
+	}
+	// Observation rows are auto verdicts: no human identity, source=auto.
+	if _, err := d.appendChainDecisionTx(tx, id, status, action, reason, "", "auto"); err != nil {
+		return 0, err
+	}
+	if err := d.appendExecutionTx(tx, id, action); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
-const interceptPendingCols = `id, rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, status, reason, decided_at, created_at, decision_source`
+const interceptPendingCols = `id, rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, kind, ask_source, reason, status, decided_at, decided_by, decision_source, created_at`
 
 func scanInterceptPending(s interface{ Scan(...any) error }, p *InterceptPending) error {
 	return s.Scan(&p.ID, &p.RuleID, &p.ConversationID, &p.TaskID, &p.AgentName,
-		&p.ToolName, &p.ToolInput, &p.Status, &p.Reason, &p.DecidedAt, &p.CreatedAt, &p.DecisionSource)
+		&p.ToolName, &p.ToolInput, &p.Kind, &p.AskSource, &p.Reason, &p.Status,
+		&p.DecidedAt, &p.DecidedBy, &p.DecisionSource, &p.CreatedAt)
 }
 
 // ListPendingIntercepts returns all unresolved approval requests, newest first.
+// Reads v_intercept: status is computed from the absence of a decision row.
 func (d *DB) ListPendingIntercepts() ([]InterceptPending, error) {
-	rows, err := d.Query(`SELECT ` + interceptPendingCols + ` FROM intercept_pending WHERE status='pending' ORDER BY created_at DESC`)
+	rows, err := d.Query(`SELECT ` + interceptPendingCols + ` FROM v_intercept WHERE status='pending' ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +257,7 @@ func (d *DB) ListPendingIntercepts() ([]InterceptPending, error) {
 func (d *DB) GetInterceptPending(id int64) (*InterceptPending, error) {
 	var p InterceptPending
 	err := scanInterceptPending(
-		d.QueryRow(`SELECT `+interceptPendingCols+` FROM intercept_pending WHERE id=$1`, id),
+		d.QueryRow(`SELECT `+interceptPendingCols+` FROM v_intercept WHERE id=$1`, id),
 		&p,
 	)
 	if err == sql.ErrNoRows {
@@ -209,7 +266,7 @@ func (d *DB) GetInterceptPending(id int64) (*InterceptPending, error) {
 	return &p, err
 }
 
-// InterceptApprovalRow is intercept_pending enriched with conversation and rule info.
+// InterceptApprovalRow is v_intercept enriched with conversation and rule info.
 type InterceptApprovalRow struct {
 	InterceptPending
 	ConvTitle    string `json:"conv_title"`
@@ -220,39 +277,25 @@ type InterceptApprovalRow struct {
 func scanInterceptApprovalRow(rows interface{ Scan(...any) error }, r *InterceptApprovalRow) error {
 	return rows.Scan(
 		&r.ID, &r.RuleID, &r.ConversationID, &r.TaskID, &r.AgentName,
-		&r.ToolName, &r.ToolInput, &r.Status, &r.Reason, &r.DecidedAt, &r.CreatedAt,
-		&r.DecisionSource, &r.ConvTitle, &r.ConvAgentKey, &r.RuleName,
+		&r.ToolName, &r.ToolInput, &r.Kind, &r.AskSource, &r.Reason, &r.Status,
+		&r.DecidedAt, &r.DecidedBy, &r.DecisionSource, &r.CreatedAt,
+		&r.ConvTitle, &r.ConvAgentKey, &r.RuleName,
 	)
 }
 
-// Keep legacy rows without decision_source consistent with their displayed source.
-const approvalDecisionSource = `COALESCE(NULLIF(ip.decision_source,''), CASE
- WHEN ip.rule_id IS NOT NULL THEN 'rule'
- WHEN ip.reason LIKE '[模型]%' THEN 'model' ELSE 'unknown' END)`
-
-const approvalRowColumns = `ip.id, ip.rule_id, ip.conversation_id, ip.task_id, ip.agent_name,
-       ip.tool_name, ip.tool_input, ip.status, ip.reason, ip.decided_at, ip.created_at, ` + approvalDecisionSource + `,
+const approvalRowColumns = `v.id, v.rule_id, v.conversation_id, v.task_id, v.agent_name,
+       v.tool_name, v.tool_input, v.kind, v.ask_source, v.reason, v.status, v.decided_at,
+       v.decided_by, v.decision_source, v.created_at,
        COALESCE(c.title,'') AS conv_title,
        COALESCE(c.agent_key,'') AS conv_agent_key,
        COALESCE(ir.name,'') AS rule_name`
 
 const approvalRowJoins = `
-FROM intercept_pending ip
-LEFT JOIN conversations c ON c.id = ip.conversation_id
-LEFT JOIN intercept_rules ir ON ir.id = ip.rule_id`
+FROM v_intercept v
+LEFT JOIN conversations c ON c.id = v.conversation_id
+LEFT JOIN intercept_rules ir ON ir.id = v.rule_id`
 
 const approvalRowSelect = `SELECT ` + approvalRowColumns + approvalRowJoins
-const approvalRowSelectWithAudit = `SELECT ` + approvalRowColumns + `, ip.audit` + approvalRowJoins
-
-func interceptSource(ruleID int64, reason string) string {
-	if ruleID != 0 {
-		return "rule"
-	}
-	if strings.HasPrefix(reason, "[模型]") {
-		return "model"
-	}
-	return "unknown"
-}
 
 func firstAudit(audits []*InterceptAudit) any {
 	if len(audits) == 0 || audits[0] == nil {
@@ -265,10 +308,10 @@ func firstAudit(audits []*InterceptAudit) any {
 	return raw
 }
 
-// ListAllIntercepts returns up to limit intercept_pending rows (newest first)
+// ListAllIntercepts returns up to limit approval rows (newest first)
 // joined with conversation and rule info.
 func (d *DB) ListAllIntercepts(limit int) ([]InterceptApprovalRow, error) {
-	rows, err := d.Query(approvalRowSelect+` ORDER BY ip.created_at DESC LIMIT $1`, limit)
+	rows, err := d.Query(approvalRowSelect+` ORDER BY v.created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -284,10 +327,12 @@ func (d *DB) ListAllIntercepts(limit int) ([]InterceptApprovalRow, error) {
 	return out, rows.Err()
 }
 
-// InterceptApprovalFilter combines exact status and decision-source filters.
-// Empty fields include all values.
+// InterceptApprovalFilter combines exact status, ask-source (rule/judge, 旧值
+// model/unknown) and decide-source (human/auto/timeout/…) filters. The two
+// source dimensions are orthogonal since P0-6. Empty fields include all values.
 type InterceptApprovalFilter struct {
 	Status         string
+	AskSource      string
 	DecisionSource string
 }
 
@@ -296,9 +341,9 @@ func (d *DB) ListAllInterceptsPage(page, size int, filter InterceptApprovalFilte
 	return d.listInterceptsPage("", page, size, filter)
 }
 
-// ListTaskIntercepts returns all intercept_pending rows for a specific task (newest first).
+// ListTaskIntercepts returns all approval rows for a specific task (newest first).
 func (d *DB) ListTaskIntercepts(taskID string) ([]InterceptApprovalRow, error) {
-	rows, err := d.Query(approvalRowSelect+` WHERE ip.task_id=$1 ORDER BY ip.created_at DESC`, taskID)
+	rows, err := d.Query(approvalRowSelect+` WHERE v.task_id=$1 ORDER BY v.created_at DESC`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -339,22 +384,23 @@ func (d *DB) listInterceptsPage(taskID string, page, size int, filter InterceptA
 			conditions = append(conditions, column+"=$"+fmt.Sprint(len(args)))
 		}
 	}
-	add("ip.task_id", taskID)
-	add("ip.status", filter.Status)
-	add(approvalDecisionSource, filter.DecisionSource)
+	add("v.task_id", taskID)
+	add("v.status", filter.Status)
+	add("v.ask_source", filter.AskSource)
+	add("v.decision_source", filter.DecisionSource)
 	where := ""
 	if len(conditions) > 0 {
 		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 	var total int
-	if err := d.QueryRow("SELECT COUNT(*) FROM intercept_pending ip"+where, args...).Scan(&total); err != nil {
+	if err := d.QueryRow("SELECT COUNT(*) FROM v_intercept v"+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	limitArg := len(args) + 1
 	offsetArg := limitArg + 1
 	dataQ := approvalRowSelect + where +
-		" ORDER BY ip.created_at DESC, ip.id DESC LIMIT $" + fmt.Sprint(limitArg) +
+		" ORDER BY v.created_at DESC, v.id DESC LIMIT $" + fmt.Sprint(limitArg) +
 		" OFFSET $" + fmt.Sprint(offsetArg)
 	args = append(args, size, offset)
 	rows, err := d.Query(dataQ, args...)

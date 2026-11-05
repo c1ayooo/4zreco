@@ -349,9 +349,12 @@ type Decision struct {
 	Action           string // "allow" | "deny" | "ask"
 	Message          string
 	RuleID           int64
-	TimeoutEnabled   bool
-	TimeoutSeconds   int
-	TimeoutAction    string // "deny" | "allow"
+	// Kind is the request taxonomy (P0-6): "rule" = 规则命中产生；"judge" = 模型
+	// 裁决产生（兜底或规则转研判）。落库到 intercept_pending.kind。
+	Kind           string
+	TimeoutEnabled bool
+	TimeoutSeconds int
+	TimeoutAction  string // "deny" | "allow"
 }
 
 // --- LLM fallback judge ---
@@ -647,6 +650,8 @@ func (i *Interceptor) judge(ctx context.Context, tool string, arguments json.Raw
 	out.ProfileID = cfg.ProfileID
 	configJSON, _ := json.Marshal(cfg)
 	out.ConfigDigest = digestInput(configJSON)
+	// 模型裁决（兜底或规则转研判）的请求类型都是 judge。
+	out.Kind = "judge"
 	if out.Message == "" {
 		out.Message = "[模型] " + judgeActionLabel(out.Action)
 	} else if !strings.HasPrefix(out.Message, "[模型]") {
@@ -693,6 +698,7 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 				Action:         r.Action,
 				Message:        msg,
 				RuleID:         r.ID,
+				Kind:           "rule",
 				TimeoutEnabled: r.TimeoutEnabled,
 				TimeoutSeconds: r.TimeoutSeconds,
 				TimeoutAction:  r.TimeoutAction,
@@ -743,7 +749,7 @@ func (i *Interceptor) Log(ctx context.Context, convID int64, dec Decision, toolN
 	}
 	taskID, agentName := taskInfoFromCtx(ctx)
 	audit := auditFor(ctx, dec, input, status)
-	id, err := i.db.CreateDecidedIntercept(dec.RuleID, convID, taskID, agentName, toolName, input, status, dec.Message, audit)
+	id, err := i.db.CreateDecidedIntercept(dec.RuleID, convID, taskID, agentName, toolName, input, status, dec.Message, dec.Kind, audit)
 	if err == nil {
 		i.bindResult(ctx, id, audit)
 	}
@@ -768,7 +774,7 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 	taskEmit := taskEmitFromCtx(ctx)
 
 	audit := auditFor(ctx, dec, input, "pending")
-	pendingID, err := i.db.CreateInterceptPending(ruleID, convID, taskID, agentName, toolName, input, dec.Message, audit)
+	pendingID, err := i.db.CreateInterceptPending(ruleID, convID, taskID, agentName, toolName, input, dec.Message, dec.Kind, audit)
 	if err != nil {
 		return false
 	}
@@ -822,7 +828,7 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 			log.Printf("[intercept] ask 审批 #%d 超过全局兜底上限(%ds)无人处理，按 deny 收口", pendingID, ceiling)
 			allowed := false
 			action := "deny"
-			resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超过兜底上限无人处理，按拒绝处理")
+			resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超过兜底上限无人处理，按拒绝处理", "", "timeout")
 			if err != nil {
 				return false
 			}
@@ -832,7 +838,7 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 			}
 			return allowed
 		case <-ctx.Done():
-			_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消")
+			_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消", "", "auto_cancel")
 			_ = i.db.CompleteIntercept(pendingID, audit.RunID, audit.ToolUseID, "not_executed", "执行前工作已取消", false)
 			return false
 		}
@@ -853,7 +859,7 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		if allowed {
 			action = "allow"
 		}
-		resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超时，按超时策略处理")
+		resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超时，按超时策略处理", "", "timeout")
 		if err != nil {
 			return false
 		}
@@ -863,7 +869,7 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		}
 		return allowed
 	case <-ctx.Done():
-		_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消")
+		_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消", "", "auto_cancel")
 		_ = i.db.CompleteIntercept(pendingID, audit.RunID, audit.ToolUseID, "not_executed", "执行前工作已取消", false)
 		return false
 	}
@@ -872,7 +878,9 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 var ErrAlreadyDecided = errors.New("审批已处理或不存在，请刷新记录")
 
 // Decide resolves a pending request. Called by the HTTP decide endpoint.
-func (i *Interceptor) Decide(pendingID int64, allowed bool) error {
+// decidedBy 是鉴权中间件注入的凭据身份（JWT 管理员 subject / 将来的 API key 名），
+// 随决定行落库（P0-5 decided_by）。
+func (i *Interceptor) Decide(pendingID int64, allowed bool, decidedBy string) error {
 	status := "denied"
 	if allowed {
 		status = "allowed"
@@ -881,7 +889,7 @@ func (i *Interceptor) Decide(pendingID int64, allowed bool) error {
 	if allowed {
 		action, reason = "allow", "人工允许执行"
 	}
-	resolved, err := i.db.ResolveIntercept(pendingID, status, action, reason)
+	resolved, err := i.db.ResolveIntercept(pendingID, status, action, reason, decidedBy, "human")
 	if err != nil {
 		return err
 	}

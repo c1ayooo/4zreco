@@ -63,7 +63,7 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 			})
 			g := guard.NewWithInterceptor(ic)
 			taskID := "approval-lifecycle-" + tc.name
-			t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, taskID) })
+			t.Cleanup(func() { purgeAgentInterceptRows(t, d, taskID) })
 			ctx := intercept.WithTaskContext(t.Context(), taskID, "test-agent", func(a db.Activity) {
 				if a.Kind != "intercept_request" || !tc.manual {
 					return
@@ -75,7 +75,7 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if err := ic.Decide(detail.ID, tc.approve); err != nil {
+				if err := ic.Decide(detail.ID, tc.approve, "4ZRECO"); err != nil {
 					t.Error(err)
 				}
 			})
@@ -134,7 +134,15 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 			if tc.status == "allowed" && initialAction == "allow" {
 				wantUserMessage = ""
 			}
-			if detail.Status != tc.status || detail.DecisionSource != "model" || a == nil || a.ExecutionStatus != tc.execution || a.ToolUseID != "probe-call" || a.UserMessage != wantUserMessage || a.InitialAction != initialAction || a.ModelFallback != (tc.action == "invalid") || a.ProfileID != 7 {
+			// P0-6 双维：ask_source=judge（模型判定）；decision_source 按决定路径
+			// 归类（人工=human，规则/模型即时观测=auto，超时兜底=timeout）。
+			decideSource := "auto"
+			if tc.status == "timeout" {
+				decideSource = "timeout"
+			} else if tc.manual {
+				decideSource = "human"
+			}
+			if detail.Status != tc.status || detail.AskSource != "judge" || detail.DecisionSource != decideSource || a == nil || a.ExecutionStatus != tc.execution || a.ToolUseID != "probe-call" || a.UserMessage != wantUserMessage || a.InitialAction != initialAction || a.ModelFallback != (tc.action == "invalid") || a.ProfileID != 7 {
 				t.Fatalf("unexpected review: row=%+v audit=%+v", detail.InterceptApprovalRow, a)
 			}
 			if tc.status == "allowed" && initialAction == "allow" && (len(a.Context) != 0 || a.UserTruncated || a.ContextTruncated) {

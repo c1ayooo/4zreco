@@ -256,6 +256,7 @@ function findingFilterParams(q: Omit<FindingQuery, "page" | "pageSize">): URLSea
 function interceptPageQuery(page: number, size: number, filter: InterceptApprovalFilter) {
   const query = new URLSearchParams({ page: String(page), size: String(size) });
   if (filter.status) query.set("status", filter.status);
+  if (filter.ask_source) query.set("ask_source", filter.ask_source);
   if (filter.decision_source) query.set("decision_source", filter.decision_source);
   return query.toString();
 }

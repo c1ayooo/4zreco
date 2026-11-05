@@ -64,9 +64,9 @@ WHERE relation.source_task_id=$1 LIMIT 1`, taskID).Scan(&dependent)
 	if _, err := tx.Exec(`LOCK TABLE assets, exploration_anchors IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM intercept_pending WHERE COALESCE(task_id,'')=$1`, strconv.FormatInt(taskID, 10)); err != nil {
-		return err
-	}
+	// 审批行不再物理删除（P0-A2，append-only + 触发器拒绝）：快照照旧导出，
+	// 库内行保留，任务侧列表在归档期间由「status=timeout 决定行」收口（见
+	// restoreInterceptRows 的对称逻辑）。
 	if _, err := tx.Exec(`DELETE FROM llm_records WHERE COALESCE(task_id,'')=$1`, strconv.FormatInt(taskID, 10)); err != nil {
 		return err
 	}
@@ -291,7 +291,8 @@ WHERE archive.id=$1 FOR UPDATE OF archive,task`, archiveID).Scan(&taskID, &expID
 			return nil, fmt.Errorf("restore %s: %w", table, err)
 		}
 	}
-	if err := restoreInterceptRows(tx, remappedTables["intercept_pending"]); err != nil {
+	if err := restoreInterceptRows(tx, remappedTables["intercept_pending"],
+		remappedTables["intercept_decisions"], remappedTables["intercept_executions"]); err != nil {
 		return nil, err
 	}
 	warningsRaw, _ := json.Marshal(warnings)
@@ -666,41 +667,217 @@ func restoreTaskLLMProfiles(tx *sql.Tx, raw json.RawMessage) ([]string, error) {
 	return warnings, nil
 }
 
-func restoreInterceptRows(tx *sql.Tx, raw json.RawMessage) error {
-	rows, err := decodeArchiveRows(raw)
+// restoreInterceptRows re-inserts archived approval rows. P0 三表拆分后这里只
+// 重插缺失的 pending 行并补插决定/执行行，不改写任何库内存量行：
+//   - 兼容两代快照。旧快照行 JSON 带 status/decided_at/decision_source 键（列已
+//     删除）——按旧 status 合成决定行（不接链尾，seq=NULL 落历史区）；decision_source
+//     改名回填为 ask_source（沿用 rule_id 与 [模型] 前缀判据）。新快照行无这些键，
+//     决定/执行行由快照的 intercept_decisions/intercept_executions 表提供——快照
+//     自带决定行时**不得**再合成 timeout 收口行（否则会把真实历史错记成超时）。
+//   - 已存在的 pending 行跳过（归档不再删除库内行，恢复必须幂等补缺）。
+func restoreInterceptRows(tx *sql.Tx, pendingsRaw, decisionsRaw, executionsRaw json.RawMessage) error {
+	rows, err := decodeArchiveRows(pendingsRaw)
 	if err != nil {
 		return err
 	}
+	// 先解码快照自带的决定行：凡是快照已给某 pending 提供了决定行，就不再为它
+	// 合成 timeout 收口行（合成行会被 UNIQUE(pending_id) 挤掉真实行，或反过来
+	// 占位挤掉快照行——顺序无关，都不能发生）。
+	snapshotDecisions, err := decodeArchiveRows(decisionsRaw)
+	if err != nil {
+		return err
+	}
+	seeded := map[int64]bool{}
+	for _, dr := range snapshotDecisions {
+		if pid, ok := jsonInt64(dr["pending_id"]); ok && pid > 0 {
+			seeded[pid] = true
+		}
+	}
+	type decisionSeed struct {
+		pendingID      int64
+		decision       string
+		action         string
+		reason         string
+		decidedBy      string
+		decisionSource string
+		decidedAt      any
+	}
+	seeds := []decisionSeed{}
+	inserted := 0
 	for _, row := range rows {
-		// Archives predating approval snapshots lack this NOT NULL column.
-		if source, _ := row["decision_source"].(string); source == "" {
-			source = "unknown"
+		// ── 两代快照键名兼容 ────────────────────────────────────────────
+		hasStatusKey := false
+		legacyStatus := ""
+		if v, ok := row["status"]; ok {
+			hasStatusKey = true
+			legacyStatus, _ = v.(string)
+		}
+		legacyDecidedAt := row["decided_at"]
+		delete(row, "status")
+		delete(row, "decided_at")
+		if source, ok := row["decision_source"].(string); ok {
+			delete(row, "decision_source")
+			if ask, _ := row["ask_source"].(string); ask == "" {
+				row["ask_source"] = source
+			}
+		}
+		if ask, _ := row["ask_source"].(string); ask == "" {
+			// 归档早于来源列：按旧判据反推（快照数据的兜底，非业务代码前缀反推）。
+			source := "unknown"
 			if row["rule_id"] != nil {
 				source = "rule"
 			} else if reason, _ := row["reason"].(string); strings.HasPrefix(reason, "[模型]") {
 				source = "model"
 			}
-			row["decision_source"] = source
+			row["ask_source"] = source
 		}
-		if status, _ := row["status"].(string); status == "pending" {
-			row["status"] = "timeout"
-			row["reason"] = "任务归档期间审批已超时"
-			row["decided_at"] = time.Now().UTC()
-			if audit, ok := row["audit"].(map[string]any); ok {
-				audit["effective_action"] = "deny"
-				audit["decision_reason"] = "任务归档期间审批已超时"
-				audit["execution_status"] = "not_executed"
-			}
-		} else if audit, ok := row["audit"].(map[string]any); ok && audit["execution_status"] == "awaiting_result" {
-			// An archived run cannot resume its former result callback.
+		audit, _ := row["audit"].(map[string]any)
+		// An archived run cannot resume its former result callback.
+		if audit != nil && audit["execution_status"] == "awaiting_result" {
 			audit["execution_status"] = "unknown"
 		}
+		rowID, ok := jsonInt64(row["id"])
+		if !ok || rowID <= 0 {
+			return fmt.Errorf("archived intercept row has invalid id")
+		}
+		// 归档时仍在等审批的请求按 timeout 收口（旧行为的不可变化改写：
+		// 改的是快照重插的新行，不是库内存量行）。快照已提供决定行的新格式
+		// 行跳过合成——真实历史以快照决定行为准。
+		decision := legacyStatus
+		decidedAction := ""
+		decisionReason := ""
+		decidedAt := legacyDecidedAt
+		switch {
+		case !hasStatusKey && seeded[rowID]:
+			// 新格式且快照自带决定行：不合成收口行，不改写冻结快照。
+			decision = ""
+		case !hasStatusKey, legacyStatus == "", legacyStatus == "pending":
+			decision = "timeout"
+			decidedAction = "deny"
+			decisionReason = "任务归档期间审批已超时"
+			row["reason"] = decisionReason
+			decidedAt = time.Now().UTC()
+			if audit != nil {
+				audit["effective_action"] = "deny"
+				audit["decision_reason"] = decisionReason
+				audit["execution_status"] = "not_executed"
+			}
+		case legacyStatus == "allowed", legacyStatus == "denied", legacyStatus == "timeout":
+			decidedAction = "deny"
+			if legacyStatus == "allowed" {
+				decidedAction = "allow"
+			}
+			if audit != nil {
+				if ea, _ := audit["effective_action"].(string); ea == "allow" || ea == "deny" {
+					decidedAction = ea
+				}
+				decisionReason, _ = audit["decision_reason"].(string)
+			}
+		default:
+			return fmt.Errorf("archived intercept row %d has unknown status %q", rowID, legacyStatus)
+		}
+		auditRaw, err := json.Marshal(row["audit"])
+		if err != nil {
+			return err
+		}
+		if string(auditRaw) == "null" {
+			auditRaw = nil
+		}
+		inputRaw, err := json.Marshal(row["tool_input"])
+		if err != nil {
+			return err
+		}
+		id := rowID
+		var ruleID, convID any
+		if v, ok := jsonInt64(row["rule_id"]); ok && v > 0 {
+			ruleID = v
+		}
+		if v, ok := jsonInt64(row["conversation_id"]); ok && v > 0 {
+			convID = v
+		}
+		taskID, _ := row["task_id"].(string)
+		agentName, _ := row["agent_name"].(string)
+		createdAt, _ := row["created_at"].(string)
+		kind, _ := row["kind"].(string) // 旧快照无 kind 键 → ''（显式 NULL 会违反 NOT NULL）
+		res, err := tx.Exec(`INSERT INTO intercept_pending
+(id, rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, reason, created_at, ask_source, kind, audit)
+VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,$7,$8,COALESCE($9::timestamptz,now()),$10,$11,$12)
+ON CONFLICT (id) DO NOTHING`,
+			id, ruleID, convID, taskID, agentName,
+			row["tool_name"], inputRaw, row["reason"], createdAt, row["ask_source"], kind, auditRaw)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue // row already exists — decisions stay untouched
+		}
+		inserted++
+		if decision != "" {
+			seeds = append(seeds, decisionSeed{pendingID: id, decision: decision, action: decidedAction,
+				reason: decisionReason, decidedBy: "archive", decisionSource: "archive", decidedAt: decidedAt})
+		}
 	}
-	if len(rows) == 0 {
+	for _, seed := range seeds {
+		if _, err := tx.Exec(`INSERT INTO intercept_decisions
+(pending_id, decision, action, decision_reason, decided_by, decision_source, decided_at, seq, prev_hash, row_hash)
+VALUES ($1,$2,$3,$4,$5,'archive',COALESCE($6::timestamptz,now()),NULL,'','')
+ON CONFLICT (pending_id) DO NOTHING`,
+			seed.pendingID, seed.decision, seed.action, seed.reason, seed.decidedBy, seed.decidedAt); err != nil {
+			return err
+		}
+	}
+	// 新快照（P0 后导出）自带决定/执行行：决定行剥掉哈希链列（seq=NULL 落历史区，
+	// 恢复目标实例的 audit_key 不同，原哈希在本库无意义），已存在则跳过。
+	decisionRows, err := decodeArchiveRows(decisionsRaw)
+	if err != nil {
+		return err
+	}
+	for _, row := range decisionRows {
+		pendingID, ok := jsonInt64(row["pending_id"])
+		if !ok || pendingID <= 0 {
+			return fmt.Errorf("archived intercept decision has invalid pending_id")
+		}
+		decidedBy, _ := row["decided_by"].(string)
+		decidedAt, _ := row["decided_at"].(string)
+		if _, err := tx.Exec(`INSERT INTO intercept_decisions
+(pending_id, decision, action, decision_reason, decided_by, decision_source, decided_at, seq, prev_hash, row_hash)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,COALESCE($7::timestamptz,now()),NULL,'','')
+ON CONFLICT (pending_id) DO NOTHING`,
+			pendingID, row["decision"], row["action"], row["decision_reason"], decidedBy, row["decision_source"], decidedAt); err != nil {
+			return err
+		}
+	}
+	executionRows, err := decodeArchiveRows(executionsRaw)
+	if err != nil {
+		return err
+	}
+	for _, row := range executionRows {
+		pendingID, ok := jsonInt64(row["pending_id"])
+		if !ok || pendingID <= 0 {
+			return fmt.Errorf("archived intercept execution has invalid pending_id")
+		}
+		runID, _ := row["run_id"].(string)
+		toolUseID, _ := row["tool_use_id"].(string)
+		output, _ := row["output"].(string)
+		endedAt, _ := row["ended_at"].(string)
+		createdRaw, _ := row["created_at"].(string)
+		var createdAt any
+		if createdRaw != "" {
+			createdAt = createdRaw
+		}
+		if _, err := tx.Exec(`INSERT INTO intercept_executions
+(pending_id, run_id, tool_use_id, execution_status, output, output_truncated, ended_at, created_at)
+VALUES ($1,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,COALESCE($7::timestamptz,NULL),COALESCE($8::timestamptz,now()))`,
+			pendingID, runID, toolUseID, row["execution_status"], output, row["output_truncated"], endedAt, createdAt); err != nil {
+			return err
+		}
+	}
+	if inserted == 0 {
 		return nil
 	}
-	encoded, _ := json.Marshal(rows)
-	_, err = tx.Exec(`INSERT INTO intercept_pending SELECT * FROM json_populate_recordset(NULL::intercept_pending,$1::json)`, string(encoded))
+	// 显式 id 插入不会推进序列：抬到当前最大值，避免后续 INSERT 撞已恢复 id。
+	_, err = tx.Exec(`SELECT setval(pg_get_serial_sequence('intercept_pending','id'),
+GREATEST((SELECT max(id) FROM intercept_pending), 1))`)
 	return err
 }
 

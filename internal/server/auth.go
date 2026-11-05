@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"log"
@@ -91,6 +92,37 @@ func (s *Server) currentJWTKey() []byte {
 		return v
 	}
 	return nil
+}
+
+// auditKeyFilename 是审批哈希链 HMAC key 的落盘文件名（Base 下，与 jwt.key 并列）。
+// 文件位置唯一解析点是 config.Paths.AuditKeyPath；此处只保留常量供测试断言用。
+// 硬要求与 jwt.key 分离：jwt.key 改密码即轮换（rotateJWTKey），若从它派生，
+// 改一次密码全部历史哈希链验签失效。
+const auditKeyFilename = "audit.key"
+
+// loadOrCreateAuditKey reads the 32-byte HMAC key from keyPath (config.Paths
+// 是路径唯一解析点，调用方传 paths.AuditKeyPath()), generating and persisting
+// one on first run. It is never derived from jwt.key (密码轮换不得影响历史链
+// 验签) and never exposed via the workspace file manager (Base 目录不在 Data
+// 工作区视野内).
+func loadOrCreateAuditKey(keyPath string) ([]byte, error) {
+	path := keyPath
+	if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) >= 32 {
+		return []byte(strings.TrimSpace(string(data))), nil
+	}
+	buf := make([]byte, 32)
+	for i := range buf {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(keyChars))))
+		if err != nil {
+			return nil, fmt.Errorf("generate audit key: %w", err)
+		}
+		buf[i] = keyChars[n.Int64()]
+	}
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		return nil, fmt.Errorf("write audit key: %w", err)
+	}
+	log.Printf("[auth] 审批哈希链 audit key 已写入 %s", path)
+	return buf, nil
 }
 
 // rotateJWTKey 生成新 key 原子替换并落盘：**所有已签发 token 立即失效**。
@@ -242,15 +274,23 @@ func signJWT(key []byte) (string, error) {
 	}).SignedString(key)
 }
 
-// verifyJWT returns true when tokenStr is a valid, non-expired HS256 token.
-func verifyJWT(tokenStr string, key []byte) bool {
+// verifyJWT returns the token subject and true when tokenStr is a valid,
+// non-expired HS256 token.
+func verifyJWT(tokenStr string, key []byte) (string, bool) {
 	t, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
 		return key, nil
 	})
-	return err == nil && t.Valid
+	if err != nil || !t.Valid {
+		return "", false
+	}
+	sub, err := t.Claims.GetSubject()
+	if err != nil {
+		return "", false
+	}
+	return sub, true
 }
 
 // sseQueryTokenPaths 是唯一接受 ?token= 查询参数的端点白名单：浏览器 EventSource
@@ -292,7 +332,22 @@ func extractToken(r *http.Request) string {
 	return ""
 }
 
-// requireAuth wraps h with JWT validation.
+// requestIdentityKey carries the authenticated caller's credential identity in
+// the request context (P0-5 decided_by).今天只有 JWT 管理员一种凭据（subject 固定
+// 4ZRECO）；将来引入 API key 鉴权时这里落 key 名，审批决定行自动受益。
+type requestIdentityKey struct{}
+
+// requestIdentity returns the credential identity injected by requireAuth
+// (empty when absent — internal callers).
+func requestIdentity(r *http.Request) string {
+	if v, ok := r.Context().Value(requestIdentityKey{}).(string); ok && v != "" {
+		return v
+	}
+	return ""
+}
+
+// requireAuth wraps h with JWT validation and injects the credential identity
+// into the request context.
 // /api/auth/* and /api/health are exempt.
 func (s *Server) requireAuth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -306,11 +361,17 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 			writeErr(w, 401, "未授权")
 			return
 		}
-		if !verifyJWT(tok, s.currentJWTKey()) {
+		sub, ok := verifyJWT(tok, s.currentJWTKey())
+		if !ok {
 			writeErr(w, 401, "token 无效或已过期")
 			return
 		}
-		h.ServeHTTP(w, r)
+		// 凭据身份：管理员 subject（"4ZRECO"）；缺 subject 的畸形 token 回落常量。
+		identity := sub
+		if identity == "" {
+			identity = "admin"
+		}
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIdentityKey{}, identity)))
 	})
 }
 
@@ -393,7 +454,7 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
-	if !verifyJWT(extractToken(r), s.currentJWTKey()) {
+	if _, ok := verifyJWT(extractToken(r), s.currentJWTKey()); !ok {
 		writeErr(w, 401, "未授权")
 		return
 	}

@@ -48,10 +48,10 @@ function fmtTime(value?: string) {
   });
 }
 
+// ask 来源只读字段值（P0-6 起后端落库即有值，旧数据已迁移回填），
+// 不再按 reason 前缀反推。
 function source(row: InterceptApprovalRow) {
-  if (row.decision_source) return row.decision_source;
-  if (row.rule_id) return "rule";
-  return row.reason?.startsWith("[模型]") ? "model" : "unknown";
+  return row.ask_source || "unknown";
 }
 
 function originLabel(row: InterceptApprovalRow) {
@@ -666,7 +666,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   const request = React.useRef(0);
   const decisionLock = React.useRef(false);
   const filterID = React.useId();
-  const filtered = Boolean(filter.status || filter.decision_source);
+  const filtered = Boolean(filter.status || filter.ask_source || filter.decision_source);
 
   // A task can stay mounted while the user switches between task details.
   // Reset the cursor so the new scope always starts at its newest records.
@@ -824,11 +824,11 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
         <Field className="w-full sm:w-40">
           <FieldLabel htmlFor={`${filterID}-source`}>判定来源</FieldLabel>
           <Select
-            value={filter.decision_source ?? "all"}
+            value={filter.ask_source ?? "all"}
             onValueChange={(value) =>
               changeFilter({
                 ...filter,
-                decision_source: value === "all" ? undefined : (value as InterceptApprovalFilter["decision_source"]),
+                ask_source: value === "all" ? undefined : (value as InterceptApprovalFilter["ask_source"]),
               })
             }
           >
@@ -838,8 +838,9 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="all">全部来源</SelectItem>
-                <SelectItem value="model">模型判定</SelectItem>
                 <SelectItem value="rule">规则判定</SelectItem>
+                <SelectItem value="judge">模型判定</SelectItem>
+                <SelectItem value="model">模型判定（旧数据）</SelectItem>
                 <SelectItem value="unknown">来源未知</SelectItem>
               </SelectGroup>
             </SelectContent>

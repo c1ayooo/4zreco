@@ -32,11 +32,11 @@ func TestInterceptDetailHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := m.pg.CreateInterceptPending(0, 0, "approval-http", "test", "Write", []byte(`{}`), "[模型] 确认", &db.InterceptAudit{InitialAction: "ask", UserMessage: "snapshot", ExecutionStatus: "not_started"})
+	id, err := m.pg.CreateInterceptPending(0, 0, "approval-http", "test", "Write", []byte(`{}`), "[模型] 确认", "judge", &db.InterceptAudit{InitialAction: "ask", UserMessage: "snapshot", ExecutionStatus: "not_started"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = m.pg.Exec(`DELETE FROM intercept_pending WHERE id=$1`, id) })
+	t.Cleanup(func() { purgeServerInterceptRows(t, m.pg, "approval-http") })
 	do := func(method, path, body string, authenticated bool) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		if authenticated {
@@ -75,11 +75,10 @@ func TestInterceptDetailHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sourceID, err := d.CreateInterceptPending(0, conv.ID, "", "test", "Bash", []byte(`{"command":"pwd"}`), "review", &db.InterceptAudit{ToolUseID: "http-source", Correlation: "exact"})
+	sourceID, err := d.CreateInterceptPending(0, conv.ID, "approval-http", "test", "Bash", []byte(`{"command":"pwd"}`), "review", "rule", &db.InterceptAudit{ToolUseID: "http-source", Correlation: "exact"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM intercept_pending WHERE id=$1`, sourceID) })
 	sourceReply := do(http.MethodGet, fmt.Sprintf("/api/intercept/history/%d/execution", sourceID), "", true)
 	var execution struct {
 		Seq            int64         `json:"seq"`
@@ -93,8 +92,11 @@ func TestInterceptDetailHTTP(t *testing.T) {
 	if err := d.DeleteConversation(conv.ID); err != nil {
 		t.Fatal(err)
 	}
+	// P0-A4：会话删除后审批行存活（FK SET NULL），但 activities 随会话级联消失、
+	// conversation_id 已置空 → 导航按「无法唯一关联」409，不再走已删除会话的
+	// 410 提示路径（那要求审批行还挂着失效的 conversation_id）。
 	deletedReply := do(http.MethodGet, fmt.Sprintf("/api/intercept/history/%d/execution?conversation=%d", sourceID, conv.ID), "", true)
-	if deletedReply.Code != 410 || !strings.Contains(deletedReply.Body.String(), "对话已被删除") {
+	if deletedReply.Code != http.StatusConflict {
 		t.Fatalf("deleted conversation: %d %s", deletedReply.Code, deletedReply.Body.String())
 	}
 

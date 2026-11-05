@@ -594,6 +594,12 @@ func (d *DB) snapshotTaskArchive(taskID int64, llmRecords io.Writer) (*TaskArchi
 		{"skill_usage", `SELECT * FROM skill_usage WHERE task_id=$1 OR exploration_id=$2 ORDER BY id`, []any{taskID, expID}},
 		{"tool_usage", `SELECT * FROM tool_usage WHERE task_id=$1 OR exploration_id=$2 ORDER BY id`, []any{taskID, expID}},
 		{"intercept_pending", `SELECT * FROM intercept_pending WHERE COALESCE(task_id,'')=$1 ORDER BY id`, []any{strconv.FormatInt(taskID, 10)}},
+		// P0 三表拆分：决定/执行行随 pending 一起进快照（restore 端按历史区补插，
+		// 不接链尾；旧格式快照没有这两张表，恢复按旧行内 status 合成）。
+		{"intercept_decisions", `SELECT d.* FROM intercept_decisions d
+JOIN intercept_pending ip ON ip.id=d.pending_id WHERE COALESCE(ip.task_id,'')=$1 ORDER BY d.id`, []any{strconv.FormatInt(taskID, 10)}},
+		{"intercept_executions", `SELECT e.* FROM intercept_executions e
+JOIN intercept_pending ip ON ip.id=e.pending_id WHERE COALESCE(ip.task_id,'')=$1 ORDER BY e.id`, []any{strconv.FormatInt(taskID, 10)}},
 		{"side_question_sessions", `SELECT * FROM side_question_sessions WHERE task_id=$1 ORDER BY session_key`, []any{taskID}},
 		{"side_question_requests", `SELECT r.* FROM side_question_requests r JOIN side_question_sessions s ON s.session_key=r.session_key WHERE s.task_id=$1 ORDER BY r.ordinal`, []any{taskID}},
 		{"assets", `SELECT asset.* FROM assets asset WHERE asset.id IN (` + archiveAssetIDsQuery() + `) ORDER BY asset.id`, []any{taskID, expID}},
