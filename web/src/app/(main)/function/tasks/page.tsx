@@ -46,8 +46,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { useProjectStore } from "@/stores/project/project-provider";
-
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
@@ -101,9 +99,9 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -127,7 +125,6 @@ import { api } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
-  TaskAuthConfigInput,
   AssetInterceptRuleInput,
   ChatAttachment,
   Company,
@@ -138,10 +135,12 @@ import type {
   Task,
   TaskArchive,
   TaskArchiveState,
+  TaskAuthConfigInput,
   TaskCategory,
   TaskStatus,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useProjectStore } from "@/stores/project/project-provider";
 
 // fmtBytes renders a human file size for the upload manifest.
 function fmtBytes(n: number): string {
@@ -415,7 +414,7 @@ export default function TasksPage() {
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     return tasks.filter((t) => {
-      if (globalProjectId > 0 && t.project_id !== globalProjectId) return false;
+      // 项目过滤已由服务端 ?project_id= 承担（load 传参）。
       if (statusFilter !== "all" && t.status !== statusFilter) return false;
       if (categoryFilter === UNCATEGORIZED_VALUE && t.category_id != null) return false;
       if (
@@ -433,7 +432,7 @@ export default function TasksPage() {
         t.id.toLowerCase().includes(q)
       );
     });
-  }, [tasks, query, statusFilter, categoryFilter, globalProjectId]);
+  }, [tasks, query, statusFilter, categoryFilter]);
 
   const sortNowSec = sortField === "duration" ? nowSec : 0;
   const ordered = React.useMemo(() => {
@@ -521,7 +520,7 @@ export default function TasksPage() {
 
   const load = React.useCallback(() => {
     api
-      .tasks()
+      .tasks({ projectId: globalProjectId > 0 ? globalProjectId : undefined })
       .then((r) => {
         const next = r.tasks.map((t) => (t.id === r.active ? { ...t, active: true } : t));
         const sig = JSON.stringify(next);
@@ -532,7 +531,7 @@ export default function TasksPage() {
       .catch(() => {
         // Polling is best-effort; the next interval retries automatically.
       });
-  }, []);
+  }, [globalProjectId]);
 
   const loadCategories = React.useCallback(() => {
     api
@@ -984,8 +983,8 @@ export default function TasksPage() {
                 <div className="mx-4 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-16 text-center lg:mx-6">
                   <p className="font-medium text-sm text-foreground">先配置 LLM 通道，再创建第一个任务</p>
                   <p className="text-muted-foreground max-w-md text-sm">
-                    探索由 LLM 多 Agent 驱动：没有可用通道，任务创建后也无法推进。
-                    支持 Anthropic / OpenAI / 任意 OpenAI 兼容网关，建议配 ≥2 个通道开启轮询。
+                    探索由 LLM 多 Agent 驱动：没有可用通道，任务创建后也无法推进。 支持 Anthropic / OpenAI / 任意 OpenAI
+                    兼容网关，建议配 ≥2 个通道开启轮询。
                   </p>
                   <Button asChild size="sm">
                     <Link href="/system/llm">去配置 LLM</Link>
@@ -1275,7 +1274,7 @@ const TaskRow = React.memo(function TaskRow({
       <TableCell className="font-medium">
         <div className="flex max-w-xs items-center gap-2">
           <TaskNameEditor task={task} onRename={onRename} />
-          {task.active && <StarIcon className="size-4 shrink-0 fill-amber-400 text-amber-400" />}
+          {task.active && <StarIcon className="size-4 shrink-0 fill-primary text-primary" />}
           {taskIsPinned(task) && <PinIcon className="size-4 shrink-0 text-primary" aria-label="已置顶" />}
           {projectName && (
             <Badge
@@ -1316,16 +1315,14 @@ const TaskRow = React.memo(function TaskRow({
           const f = task.findings;
           const total = f ? f.critical + f.high + f.medium + f.low : 0;
           if (!f || total === 0) return <span className="text-muted-foreground">0</span>;
-          const seg = (n: number, cls: string) => (
-            <span className={n > 0 ? cls : "text-muted-foreground"}>{n}</span>
-          );
+          const seg = (n: number, cls: string) => <span className={n > 0 ? cls : "text-muted-foreground"}>{n}</span>;
           return (
             <span className="whitespace-nowrap font-medium" title="严重 / 高 / 中 / 低">
-              {seg(f.critical, "text-rose-600 dark:text-rose-400")}
+              {seg(f.critical, "text-destructive")}
               <span className="text-muted-foreground">/</span>
-              {seg(f.high, "text-red-600 dark:text-red-400")}
+              {seg(f.high, "text-destructive")}
               <span className="text-muted-foreground">/</span>
-              {seg(f.medium, "text-amber-600 dark:text-amber-400")}
+              {seg(f.medium, "text-warning")}
               <span className="text-muted-foreground">/</span>
               {seg(f.low, "text-slate-600 dark:text-slate-400")}
             </span>
@@ -1346,7 +1343,7 @@ const TaskRow = React.memo(function TaskRow({
           // 实测（线上 2026-10-20）：planner 卡住后 6 小时零规划轮、零新意图，
           // 界面只显示「运行中 Worker 0」，完全看不出任务已经僵死。
           <span
-            className="font-medium text-amber-600 dark:text-amber-400"
+            className="font-medium text-warning"
             title={`已 ${fmtDuration(nowSec - (task.last_activity_unix ?? nowSec))} 无任何活动——planner 可能已卡住（可暂停/恢复任务触发重新规划）`}
           >
             疑似卡住
@@ -2050,10 +2047,7 @@ function TaskArchivesPanel({ onChanged }: { onChanged: () => void }) {
                           <p className="text-destructive text-xs [overflow-wrap:anywhere]">{archive.error}</p>
                         )}
                         {[...new Set(archive.warnings ?? [])].map((warning) => (
-                          <p
-                            key={warning}
-                            className="text-amber-700 text-xs [overflow-wrap:anywhere] dark:text-amber-400"
-                          >
+                          <p key={warning} className="text-warning text-xs [overflow-wrap:anywhere]">
                             {warning}
                           </p>
                         ))}
@@ -3247,6 +3241,15 @@ function CreateTaskSheet({
     }
   }, [open, projects, globalProjectId, globalProjectStatus]);
 
+  // ?create=1 深链直接打开创建面板（project_id=N 的预选由上面的归属项目 effect 承接）；用掉即清。
+  const deepLinkRouter = useRouter();
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") !== "1") return;
+    setOpen(true);
+    void deepLinkRouter.replace("/function/tasks");
+  }, [deepLinkRouter]);
+
   // pickFiles uploads the chosen files into this draft's staging dir and appends their
   // absolute paths to the description; the task's agents open them by path via Read/Bash.
   async function pickFiles(files: FileList | null) {
@@ -3342,7 +3345,7 @@ function CreateTaskSheet({
         </Button>
       </SheetTrigger>
       {/* 45vw 宽的右侧抽屉:整屏高度可滚动,长表单不再受弹窗高度限制。窄屏退化为全宽。
-            内容为 flex 列:头/脚固定,中间字段区 flex-1 独立滚动。 */}
+ 内容为 flex 列:头/脚固定,中间字段区 flex-1 独立滚动。 */}
       <SheetContent
         ref={sheetContentRef}
         side="right"
@@ -3515,9 +3518,7 @@ function CreateTaskSheet({
                       </NativeSelect>
                       <NativeSelect
                         value={authCfg.content_type}
-                        onChange={(e) =>
-                          setAuthCfg((c) => ({ ...c, content_type: e.target.value as "json" | "form" }))
-                        }
+                        onChange={(e) => setAuthCfg((c) => ({ ...c, content_type: e.target.value as "json" | "form" }))}
                       >
                         <NativeSelectOption value="json">JSON</NativeSelectOption>
                         <NativeSelectOption value="form">表单</NativeSelectOption>

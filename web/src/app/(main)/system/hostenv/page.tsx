@@ -110,9 +110,7 @@ export default function HostEnvPage() {
       return;
     }
     const timer = setInterval(async () => {
-      const results = await Promise.allSettled(
-        activeJobs.map((j) => api.hostenvJob(j.id)),
-      );
+      const results = await Promise.allSettled(activeJobs.map((j) => api.hostenvJob(j.id)));
       let sawTerminal = false;
       setJobsByTool((prev) => {
         const next = { ...prev };
@@ -264,8 +262,7 @@ export default function HostEnvPage() {
     () => (inv?.tools ?? []).filter((t) => !t.available && t.installable),
     [inv?.tools],
   );
-  const toolJobState = (id: string): InstallJob["state"] | null =>
-    jobsByTool[id]?.state ?? null;
+  const toolJobState = (id: string): InstallJob["state"] | null => jobsByTool[id]?.state ?? null;
   const selectedJob = selectedJobTool ? (jobsByTool[selectedJobTool] ?? null) : null;
 
   // 折叠状态：默认全展开。用户来这里通常是查「缺什么」，藏起来反而添乱。
@@ -298,12 +295,7 @@ export default function HostEnvPage() {
               </Badge>
             )}
             {installerReady && missingInstallable.length > 0 && (
-              <Button
-                size="sm"
-                variant="default"
-                disabled={installing}
-                onClick={() => installMany(missingInstallable)}
-              >
+              <Button size="sm" variant="default" disabled={installing} onClick={() => installMany(missingInstallable)}>
                 {installing ? <Loader2Icon className="animate-spin" /> : <DownloadIcon />}
                 一键安装缺失（{missingInstallable.length}）
               </Button>
@@ -395,7 +387,7 @@ export default function HostEnvPage() {
               </div>
 
               {!installerReady && inv?.installer.reason && (
-                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
                   {inv.installer.reason}
                   {inv.deploy_mode === "docker" && (
                     <span className="text-muted-foreground">
@@ -407,7 +399,7 @@ export default function HostEnvPage() {
               )}
 
               {installerReady && inv?.installer.upgrade_required && (
-                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
                   助手版本较旧，不具备自我换装能力，因此无法随主程序自动升级。 在服务器上重跑一次{" "}
                   <code className="font-mono">install.sh</code> 完成引导后， 之后每次发版助手都会自动跟随。
                 </div>
@@ -444,26 +436,21 @@ export default function HostEnvPage() {
                           <span className="text-muted-foreground text-xs">
                             {okCount}/{g.tools.length} 可用
                             {g.tools.length - okCount > 0 && (
-                              <span className="ml-1 text-amber-600 dark:text-amber-400">
-                                缺 {g.tools.length - okCount}
-                              </span>
+                              <span className="ml-1 text-warning">缺 {g.tools.length - okCount}</span>
                             )}
                           </span>
                         </button>
-                        {installerReady &&
-                          g.tools.some((t) => !t.available && t.installable) && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 px-2 text-xs"
-                              disabled={installing}
-                              onClick={() =>
-                                installMany(g.tools.filter((t) => !t.available && t.installable))
-                              }
-                            >
-                              装齐本组
-                            </Button>
-                          )}
+                        {installerReady && g.tools.some((t) => !t.available && t.installable) && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs"
+                            disabled={installing}
+                            onClick={() => installMany(g.tools.filter((t) => !t.available && t.installable))}
+                          >
+                            装齐本组
+                          </Button>
+                        )}
                       </div>
                       {!isCollapsed && (
                         <Table>
@@ -504,8 +491,7 @@ export default function HostEnvPage() {
                                       disabled={installing}
                                       onClick={() => install(t)}
                                     >
-                                      {toolJobState(t.id) &&
-                                      !TERMINAL_STATES.has(toolJobState(t.id)!) ? (
+                                      {toolJobState(t.id) && !TERMINAL_STATES.has(toolJobState(t.id)!) ? (
                                         <Loader2Icon className="animate-spin" />
                                       ) : (
                                         <DownloadIcon />
@@ -553,11 +539,7 @@ export default function HostEnvPage() {
                     >
                       <Badge
                         variant={
-                          j.tool_id === selectedJobTool
-                            ? "default"
-                            : j.state === "failed"
-                              ? "destructive"
-                              : "outline"
+                          j.tool_id === selectedJobTool ? "default" : j.state === "failed" ? "destructive" : "outline"
                         }
                       >
                         {j.state === "running" && <Loader2Icon className="mr-1 size-3 animate-spin" />}

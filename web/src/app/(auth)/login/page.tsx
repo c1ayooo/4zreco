@@ -15,10 +15,10 @@ import { api } from "@/lib/api";
 import { auth } from "@/lib/auth";
 
 // 认证页防指纹约定（公网部署场景）：
-//   1. 本页文案与结构不出现产品名、不引用 /logo.png（图片哈希是最容易被
-//      测绘的指纹）；顶部的几何标记是内联 SVG，随主题变化、无独立资源。
-//   2. 布局采用居中单卡片形态，与常见开源后台的「左色块 + 右表单」模板区分。
-//   3. 合规声明保留（使用条款不因防指纹而省略），但压缩为中性表述。
+// 1. 本页文案与结构不出现产品名、不引用 /logo.png（图片哈希是最容易被
+// 测绘的指纹）；顶部的几何标记是内联 SVG，随主题变化、无独立资源。
+// 2. 布局采用居中单卡片形态，与常见开源后台的「左色块 + 右表单」模板区分。
+// 3. 合规声明保留（使用条款不因防指纹而省略），但压缩为中性表述。
 export default function LoginPage() {
   const router = useRouter();
   const [password, setPassword] = useState("");
@@ -186,9 +186,7 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p className="mt-6 text-center text-muted-foreground text-xs">
-          连续登录失败会触发临时锁定，请稍后再试
-        </p>
+        <p className="mt-6 text-center text-muted-foreground text-xs">连续登录失败会触发临时锁定，请稍后再试</p>
       </div>
 
       <Dialog open={termsOpen} onOpenChange={setTermsOpen}>
@@ -205,16 +203,12 @@ export default function LoginPage() {
             onScroll={handleTermsScroll}
             className="max-h-[55vh] space-y-4 overflow-y-auto px-6 py-5 text-muted-foreground text-sm leading-relaxed"
           >
-            <p>
-              本系统仅供授权人员在合法授权范围内开展安全评估工作。登录即表示您确认已理解并接受以下约束：
-            </p>
+            <p>本系统仅供授权人员在合法授权范围内开展安全评估工作。登录即表示您确认已理解并接受以下约束：</p>
             <ul className="ml-5 list-disc space-y-2">
               <li>
                 仅可对**已获得明确书面授权**的目标开展测试；对任何未授权系统发起扫描、探测或利用均属违规乃至违法行为；
               </li>
-              <li>
-                本系统具备在服务器上执行命令的能力——请妥善保管访问凭据，凭据泄露等同于服务器控制权泄露；
-              </li>
+              <li>本系统具备在服务器上执行命令的能力——请妥善保管访问凭据，凭据泄露等同于服务器控制权泄露；</li>
               <li>
                 系统内置拦截与审批机制用于降低误操作风险，但不构成对使用合法性的担保；使用产生的全部法律责任由使用者自行承担；
               </li>

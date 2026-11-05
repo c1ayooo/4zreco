@@ -7,8 +7,6 @@ import type { ChatMention } from "@/lib/chat-mentions";
 import { MOCK } from "@/lib/mock/enabled";
 import type {
   ActiveFindingRetest,
-  RetestCandidate,
-  RetestState,
   Activity,
   Agent,
   AgentDetail,
@@ -16,16 +14,19 @@ import type {
   ArchiveBatchItem,
   Asset,
   AssetInterceptRule,
-  Project,
   AssetInterceptRuleInput,
   Audit,
+  AuthCheckResult,
   BatchCategoryItem,
   BatchControlItem,
+  C2Config,
+  C2ConfigPatch,
   ChatAttachment,
   CommandRecord,
   Company,
   CompanyScopeMutation,
   CompanyScopeRule,
+  ConnectBack,
   Conversation,
   ConvTokenSummary,
   CoverageAssetRefs,
@@ -51,7 +52,6 @@ import type {
   HostenvStatus,
   InstallBatchResult,
   InstallJob,
-  ProxyCheckResult,
   IntentAsset,
   InterceptApprovalFilter,
   InterceptApprovalRow,
@@ -60,6 +60,9 @@ import type {
   InterceptRule,
   JudgeConfig,
   JudgeUsage,
+  ListenerSession,
+  ListenerStartResp,
+  ListenerView,
   LLMPoolStatus,
   LLMProfile,
   LLMRecordDetail,
@@ -75,14 +78,15 @@ import type {
   NotificationDelivery,
   NotificationFilter,
   NotificationMeta,
+  Project,
   PromptVar,
   PromptVersion,
+  ProxyCheckResult,
+  ProxyPoolState,
+  RetestCandidate,
+  RetestState,
   SessionTokenUsage,
   Settings,
-  AuthCheckResult,
-  TaskAuthConfigInput,
-  TaskArtifact,
-  TaskCostEstimate,
   Severity,
   SkillCall,
   SkillItem,
@@ -92,10 +96,13 @@ import type {
   Task,
   TaskArchive,
   TaskArchivePage,
+  TaskArtifact,
   TaskAssetMutation,
   TaskAssetScopeMutation,
+  TaskAuthConfigInput,
   TaskCategory,
   TaskConstraint,
+  TaskCostEstimate,
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
@@ -110,13 +117,6 @@ import type {
   TrafficEvidenceRole,
   TrafficHost,
   TrafficResp,
-  ProxyPoolState,
-  C2Config,
-  C2ConfigPatch,
-  ConnectBack,
-  ListenerSession,
-  ListenerStartResp,
-  ListenerView,
   UpdateCheck,
   UsageStats,
   VulnIntelConfigPatch,
@@ -273,12 +273,16 @@ export const api = {
     post<{ ok: boolean }>("/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 
   // ---- tasks ----
-  // projectId 传了就按任务归属项目过滤（client 端过滤；TaskDTO 带 project_id）。0/省略=全部。
-  tasks: (input?: { projectId?: number }) =>
-    get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({
-      tasks: input?.projectId ? arr(r.tasks).filter((t) => t.project_id === input.projectId) : arr(r.tasks),
+  // projectId>0 时服务端按归属项目过滤（?project_id=）；0/省略=全部。
+  tasks: (input?: { projectId?: number }) => {
+    const q = new URLSearchParams();
+    if (input?.projectId && input.projectId > 0) q.set("project_id", String(input.projectId));
+    const suffix = q.size > 0 ? `?${q}` : "";
+    return get<{ tasks: Task[]; active: string }>(`/tasks${suffix}`).then((r) => ({
+      tasks: arr(r.tasks),
       active: r.active ?? "",
-    })),
+    }));
+  },
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
   createTask: (input: {
     name?: string;
@@ -908,7 +912,15 @@ export const api = {
   proxyPoolCheck: (payload: { urls?: string[]; target?: string; timeout_seconds?: number; break_on_fail?: boolean }) =>
     post<{
       target: string;
-      results: { index: number; url: string; ok: boolean; latency_ms: number; exit_ip?: string; error?: string; checked_at: string }[];
+      results: {
+        index: number;
+        url: string;
+        ok: boolean;
+        latency_ms: number;
+        exit_ip?: string;
+        error?: string;
+        checked_at: string;
+      }[];
     }>(`/proxypool/check`, payload),
   vulnintelStatus: () => get<VulnIntelStatus>(`/vulnintel/status`),
   vulnintelSaveConfig: (payload: VulnIntelConfigPatch) => put<{ ok: boolean }>(`/vulnintel/config`, payload),
@@ -919,7 +931,15 @@ export const api = {
     post<{
       proxy: string;
       effective: boolean;
-      results: { source: string; target: string; ok: boolean; status: number; latency_ms: number; error?: string; hint?: string }[];
+      results: {
+        source: string;
+        target: string;
+        ok: boolean;
+        status: number;
+        latency_ms: number;
+        error?: string;
+        hint?: string;
+      }[];
     }>(`/vulnintel/probe`, payload ?? {}),
   // 宿主工具体检:本机 PATH 里的渗透工具可用性(二进制部署形态的家底)
   toolsInventory: () =>
@@ -940,8 +960,7 @@ export const api = {
       proxy: proxy ?? "",
       use_current: useCurrent ?? false,
     }),
-  notifyChannels: () =>
-    get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
+  notifyChannels: () => get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {
     name: string;
     kind: string;
@@ -1149,9 +1168,7 @@ export const api = {
   // ---- projects (任务/对话的归属主轴) ----
   // 后端 nil 切片序列化为 null(新项目无范围时 scope=null)，归一成 [] 免空调护。
   projects: () =>
-    get<{ projects: Project[] }>("/projects").then((r) =>
-      arr(r.projects).map((p) => ({ ...p, scope: p.scope ?? [] })),
-    ),
+    get<{ projects: Project[] }>("/projects").then((r) => arr(r.projects).map((p) => ({ ...p, scope: p.scope ?? [] }))),
   createProject: (name: string, description = "") => post<Project>("/projects", { name, description }),
   updateProject: (id: number, input: { name: string; description: string; status?: string }) =>
     patch<Project>(`/projects/${id}`, input),
@@ -1162,15 +1179,16 @@ export const api = {
       { scope, reason },
     ).then((r) => ({ ...r, errors: r.errors ?? [] })), // Go 空切片→null，归一成 []
 
-  deleteProjectScope: (id: number, scopeId: number) =>
-    del<{ ok: boolean }>(`/projects/${id}/scope/${scopeId}`),
+  deleteProjectScope: (id: number, scopeId: number) => del<{ ok: boolean }>(`/projects/${id}/scope/${scopeId}`),
 
   // ---- conversations (chat page) ----
   conversations: () => get<{ conversations: Conversation[] }>("/conversations").then((r) => arr(r.conversations)),
   createConversation: (agent_key: string, title = "", llm_profile_id?: number | null) =>
     post<Conversation>("/conversations", { agent_key, title, llm_profile_id: llm_profile_id ?? null }),
-  updateConversation: (id: number, input: { title?: string; pinned?: boolean; project_id?: number; task_id?: number }) =>
-    patch<Conversation>(`/conversations/${id}`, input),
+  updateConversation: (
+    id: number,
+    input: { title?: string; pinned?: boolean; project_id?: number; task_id?: number },
+  ) => patch<Conversation>(`/conversations/${id}`, input),
   renameConversation: (id: number, title: string) => patch<Conversation>(`/conversations/${id}`, { title }),
   pinConversation: (id: number, pinned: boolean) => patch<Conversation>(`/conversations/${id}`, { pinned }),
   updateConversationProfile: (id: number, llm_profile_id: number | null) =>
@@ -1484,8 +1502,7 @@ export const api = {
   // 监听器：list 自带各监听器的会话快照；start 返回解析后的回连地址 connect_back
   // ——payload 里的 LHOST/LPORT 以它为准（direct/ssh 中继/manual 由平台判定）。
   listeners: () => get<{ listeners: ListenerView[] }>(`/listeners`),
-  startListener: (name: string, port: number) =>
-    post<ListenerStartResp>(`/listeners`, { name, port }),
+  startListener: (name: string, port: number) => post<ListenerStartResp>(`/listeners`, { name, port }),
   stopListener: (name: string) =>
     post<{ stopped: string; sessions: ListenerSession[] }>(`/listeners/${encodeURIComponent(name)}/stop`),
   listenerSessions: (name: string) =>

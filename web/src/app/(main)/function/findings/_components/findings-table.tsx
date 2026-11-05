@@ -263,9 +263,9 @@ export function FindingsTable({
                       title={f.task_description}
                     >
                       {/* 任务 id 必须显示且不能被截断掉——两个任务的名字可能
-                          前缀完全相同（实测两条都以「安康职业技术学院」开头），
-                          列宽又只有 w-32，只显示描述的话两行看起来一模一样，
-                          根本分不清这条发现属于哪个任务。 */}
+ 前缀完全相同（实测两条都以「安康职业技术学院」开头），
+ 列宽又只有 w-32，只显示描述的话两行看起来一模一样，
+ 根本分不清这条发现属于哪个任务。 */}
                       <span className="shrink-0 font-mono text-xs">#{f.task_id}</span>
                       <span className="truncate">{f.task_description}</span>
                       <ArrowUpRightIcon className="size-3 shrink-0" />
@@ -333,7 +333,7 @@ export function FindingsTable({
               {open && (
                 <TableRow className="hover:bg-transparent">
                   {/* whitespace-normal 覆盖 TableCell 默认的 nowrap,否则展开区文字
-                      被强制单行、直接溢出单元格。 */}
+ 被强制单行、直接溢出单元格。 */}
                   <TableCell colSpan={COLUMN_COUNT} className="whitespace-normal bg-muted/30">
                     <div className="flex flex-col gap-2 px-2 py-1">
                       {/* 行内编辑:名称/类别/严重等级,可改并保存(仅独立 finding 行)。 */}

@@ -5,13 +5,6 @@ import * as React from "react";
 import { BellIcon, PlusIcon, SendIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,6 +15,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -123,8 +123,8 @@ export default function NotifyPage() {
   // buildConfig 把表单状态转成渠道 config。
   //
   // 唯一的规则，两类值：
-  //   - 掩码值（"__masked__..."）原样送回 → 后端解读为「这个字段没改，保留库中原值」
-  //   - 其余一律按用户输入提交，空串即「清空该字段」
+  // - 掩码值（"__masked__..."）原样送回 → 后端解读为「这个字段没改，保留库中原值」
+  // - 其余一律按用户输入提交，空串即「清空该字段」
   //
   // 之所以不特殊照顾凭据字段（比如「凭据留空就跳过」），是因为那会让用户**无法清除**
   // 一个设错的密钥——界面上没有任何操作能表达「我要把它删掉」。现在的规则下，
@@ -284,10 +284,7 @@ export default function NotifyPage() {
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-semibold text-xl tracking-tight">通知推送</h1>
-          <p className="text-muted-foreground text-sm">
-            发现漏洞时推送到钉钉 / 飞书 / 企业微信等渠道 · 每个渠道可独立设推送时机与过滤规则
-          </p>
+          <h1 className="font-semibold text-2xl tracking-tight">通知推送</h1>
         </div>
         {meta && (
           // 用 div 而不是 label：Switch 自带 aria-label，外面再套一层 label
@@ -384,9 +381,9 @@ export default function NotifyPage() {
                     <BellIcon className="size-4 shrink-0 text-muted-foreground" />
                     <CardTitle className="truncate text-base">{ch.name}</CardTitle>
                     {/* 卡片整体可点（进入编辑），所以这两个控件必须各自吞掉冒泡，
-                        否则开关/删除会顺带触发编辑。把 stopPropagation 挂在控件自己
-                        身上，而不是套一层 div：套 div 会造出一个「看起来可交互但没有
-                        角色」的静态元素，既触发 a11y 告警，语义上也说不通。 */}
+ 否则开关/删除会顺带触发编辑。把 stopPropagation 挂在控件自己
+ 身上，而不是套一层 div：套 div 会造出一个「看起来可交互但没有
+ 角色」的静态元素，既触发 a11y 告警，语义上也说不通。 */}
                     <div className="ml-auto flex items-center gap-2">
                       <Switch
                         checked={ch.enabled}
@@ -617,19 +614,25 @@ export default function NotifyPage() {
       </Sheet>
 
       {/* ── 删除二次确认 ── */}
-      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => {
+          if (!o) setPendingDelete(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>删除通知渠道「{pendingDelete?.name}」？</AlertDialogTitle>
-            <AlertDialogDescription>
-              删除后命中该渠道过滤规则的告警将不再投递。此操作不可撤销。
-            </AlertDialogDescription>
+            <AlertDialogDescription>删除后命中该渠道过滤规则的告警将不再投递。此操作不可撤销。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
             <AlertDialogAction
               disabled={deleting}
-              onClick={(e) => { e.preventDefault(); if (pendingDelete) void removeChannel(pendingDelete); }}
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingDelete) void removeChannel(pendingDelete);
+              }}
             >
               {deleting ? "删除中…" : "删除"}
             </AlertDialogAction>

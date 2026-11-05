@@ -258,7 +258,7 @@ export default function CommandsPage() {
                             失败
                           </Badge>
                         ) : (
-                          <Badge variant="secondary" className="text-emerald-600 text-xs">
+                          <Badge variant="secondary" className="text-success text-xs">
                             成功
                           </Badge>
                         )}
@@ -287,7 +287,7 @@ export default function CommandsPage() {
                   {statsErrors > 0 && (
                     <>
                       {" · 失败 "}
-                      <span className="text-red-600 tabular-nums dark:text-red-400">{statsErrors}</span>
+                      <span className="text-destructive tabular-nums">{statsErrors}</span>
                     </>
                   )}
                 </>
@@ -309,7 +309,7 @@ export default function CommandsPage() {
                     <div className="flex items-center gap-2">
                       <span className="truncate font-medium font-mono text-xs">{s.tool}</span>
                       {s.errors > 0 && (
-                        <span className="text-[11px] text-red-600 tabular-nums dark:text-red-400">失败 {s.errors}</span>
+                        <span className="text-[11px] text-destructive tabular-nums">失败 {s.errors}</span>
                       )}
                     </div>
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
@@ -354,7 +354,7 @@ export default function CommandsPage() {
                       失败
                     </Badge>
                   ) : (
-                    <Badge variant="secondary" className="text-emerald-600 text-xs">
+                    <Badge variant="secondary" className="text-success text-xs">
                       成功
                     </Badge>
                   )}
@@ -375,7 +375,7 @@ export default function CommandsPage() {
                     <pre
                       className={cn(
                         "whitespace-pre-wrap break-all p-5 font-mono text-xs",
-                        selected.is_error && "text-red-600 dark:text-red-400",
+                        selected.is_error && "text-destructive",
                       )}
                     >
                       {selected.output || "（空）"}

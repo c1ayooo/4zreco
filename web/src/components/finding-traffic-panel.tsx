@@ -119,104 +119,104 @@ export function FindingTrafficPanel({
           <CardDescription>按复现顺序组织请求与响应。清理原始流量后，已绑定证据仍然保留。</CardDescription>
         </CardHeader>
         {open && (
-        <CardContent className="flex flex-col gap-3">
-          {error ? (
-            <Alert variant="destructive">
-              <AlertDescription>
-                {error}
-                <Button variant="link" onClick={() => setReload((n) => n + 1)}>
-                  重试
-                </Button>
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {!data ? (
-            <Skeleton className="h-28 w-full" />
-          ) : data.bindings.length === 0 ? (
-            <Empty>
-              <EmptyHeader>
-                <EmptyTitle>暂无关联流量</EmptyTitle>
-                <EmptyDescription>可绑定正常对照、漏洞证明和补充验证请求。</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            data.bindings.map((b, index) => (
-              <div key={b.id} className="flex min-w-0 flex-col gap-2 rounded-md border p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline">
-                    {index + 1}. {ROLES[b.role]}
-                  </Badge>
-                  <Badge variant="secondary">
-                    {b.snapshot.method} · {b.snapshot.status}
-                  </Badge>
-                  <span className="text-muted-foreground text-xs">证据 #{b.id}</span>
-                </div>
-                <Button
-                  variant="link"
-                  className="h-auto justify-start whitespace-normal p-0 text-left"
-                  onClick={() => setPreview(b.id)}
-                >
-                  <span className="break-all font-mono text-xs">{b.snapshot.url}</span>
-                </Button>
-                {b.note ? <p className="whitespace-pre-wrap text-sm">{b.note}</p> : null}
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-muted-foreground text-xs">
-                    {new Date(b.snapshot.captured_at * 1000).toLocaleString("zh-CN")}
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    <Button variant="outline" size="sm" onClick={() => setPreview(b.id)}>
-                      查看报文
-                    </Button>
-                    {!readOnly ? (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={busy}
-                          onClick={() => {
-                            setEditing(b);
-                            setRole(b.role);
-                            setNote(b.note);
-                          }}
-                        >
-                          编辑说明
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`上移证据 ${b.id}`}
-                          disabled={busy || index === 0}
-                          onClick={() => move(index, -1)}
-                        >
-                          <ArrowUpIcon />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`下移证据 ${b.id}`}
-                          disabled={busy || index === data.bindings.length - 1}
-                          onClick={() => move(index, 1)}
-                        >
-                          <ArrowDownIcon />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={busy}
-                          onClick={() =>
-                            void mutate(() => api.removeFindingTraffic(findingId, b.id, data.version, contextTask))
-                          }
-                        >
-                          解除绑定
-                        </Button>
-                      </>
-                    ) : null}
+          <CardContent className="flex flex-col gap-3">
+            {error ? (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  {error}
+                  <Button variant="link" onClick={() => setReload((n) => n + 1)}>
+                    重试
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {!data ? (
+              <Skeleton className="h-28 w-full" />
+            ) : data.bindings.length === 0 ? (
+              <Empty>
+                <EmptyHeader>
+                  <EmptyTitle>暂无关联流量</EmptyTitle>
+                  <EmptyDescription>可绑定正常对照、漏洞证明和补充验证请求。</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              data.bindings.map((b, index) => (
+                <div key={b.id} className="flex min-w-0 flex-col gap-2 rounded-md border p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">
+                      {index + 1}. {ROLES[b.role]}
+                    </Badge>
+                    <Badge variant="secondary">
+                      {b.snapshot.method} · {b.snapshot.status}
+                    </Badge>
+                    <span className="text-muted-foreground text-xs">证据 #{b.id}</span>
+                  </div>
+                  <Button
+                    variant="link"
+                    className="h-auto justify-start whitespace-normal p-0 text-left"
+                    onClick={() => setPreview(b.id)}
+                  >
+                    <span className="break-all font-mono text-xs">{b.snapshot.url}</span>
+                  </Button>
+                  {b.note ? <p className="whitespace-pre-wrap text-sm">{b.note}</p> : null}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-muted-foreground text-xs">
+                      {new Date(b.snapshot.captured_at * 1000).toLocaleString("zh-CN")}
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      <Button variant="outline" size="sm" onClick={() => setPreview(b.id)}>
+                        查看报文
+                      </Button>
+                      {!readOnly ? (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => {
+                              setEditing(b);
+                              setRole(b.role);
+                              setNote(b.note);
+                            }}
+                          >
+                            编辑说明
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`上移证据 ${b.id}`}
+                            disabled={busy || index === 0}
+                            onClick={() => move(index, -1)}
+                          >
+                            <ArrowUpIcon />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`下移证据 ${b.id}`}
+                            disabled={busy || index === data.bindings.length - 1}
+                            onClick={() => move(index, 1)}
+                          >
+                            <ArrowDownIcon />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() =>
+                              void mutate(() => api.removeFindingTraffic(findingId, b.id, data.version, contextTask))
+                            }
+                          >
+                            解除绑定
+                          </Button>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
-          )}
-        </CardContent>
+              ))
+            )}
+          </CardContent>
         )}
       </Card>
       {adding && data ? (

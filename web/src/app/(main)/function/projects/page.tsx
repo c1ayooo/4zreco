@@ -2,6 +2,8 @@
 
 import * as React from "react";
 
+import { useRouter } from "next/navigation";
+
 import {
   ArchiveIcon,
   CalendarIcon,
@@ -15,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ScopeTextEditor } from "@/components/scope-text-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,7 +32,6 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ScopeTextEditor } from "@/components/scope-text-editor";
 import { api } from "@/lib/api";
 import { parseCompanyScopeText } from "@/lib/company-scope";
 import type { Project, ProjectScope } from "@/lib/types";
@@ -40,6 +42,15 @@ export default function ProjectsPage() {
   const setProject = useProjectStore((s) => s.setProject);
   const reloadProjects = useProjectStore((s) => s.reloadProjects);
   const currentProjectId = useProjectStore((s) => s.projectId);
+  const router = useRouter();
+  // 点卡片 = 切到该项目并去任务页（与侧栏切换器同一条路：写全局 store + 深链对齐）。
+  const switchTo = React.useCallback(
+    (id: number) => {
+      setProject(id);
+      void router.push(`/function/tasks?project_id=${id}`);
+    },
+    [setProject, router],
+  );
 
   const [list, setList] = React.useState<Project[]>([]);
   const [loaded, setLoaded] = React.useState(false);
@@ -175,8 +186,7 @@ export default function ProjectsPage() {
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-semibold text-lg">项目</h1>
-          <p className="text-muted-foreground text-xs">任务与对话的归属主轴；范围描述项目覆盖的目标。</p>
+          <h1 className="font-semibold text-2xl tracking-tight">项目</h1>
         </div>
         <Button onClick={openCreate}>
           <PlusIcon className="size-4" /> 新建项目
@@ -195,8 +205,10 @@ export default function ProjectsPage() {
           {list.map((p) => (
             <div
               key={p.id}
+              onClick={() => switchTo(p.id)}
+              title="切换到此项目"
               className={
-                "flex flex-col gap-2 rounded-xl border p-4 transition-shadow hover:shadow-sm" +
+                "flex cursor-pointer flex-col gap-2 rounded-xl border p-4 transition-shadow hover:shadow-sm" +
                 (p.id === currentProjectId ? " ring-primary/40 ring-2" : "")
               }
             >
@@ -239,14 +251,23 @@ export default function ProjectsPage() {
                 <CalendarIcon className="size-3" />
                 {new Date(p.created_at).toLocaleDateString()}
                 <span className="ml-auto flex items-center gap-1">
-                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEdit(p)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openEdit(p);
+                    }}
+                  >
                     <PencilIcon className="size-3.5" /> 编辑
                   </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-7 px-2 text-xs"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setScopeTarget(p);
                       setScopeText("");
                       setScopeReason("");
@@ -258,7 +279,10 @@ export default function ProjectsPage() {
                     variant="ghost"
                     size="sm"
                     className="text-destructive hover:text-destructive h-7 px-2 text-xs"
-                    onClick={() => setDeleteTarget(p)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(p);
+                    }}
                   >
                     <Trash2Icon className="size-3.5" />
                   </Button>
@@ -325,7 +349,11 @@ export default function ProjectsPage() {
           />
           <label className="flex flex-col gap-1.5">
             <span className="text-muted-foreground text-xs">归属依据（可选，记录为什么这条范围属于本项目）</span>
-            <Input value={scopeReason} onChange={(e) => setScopeReason(e.target.value)} placeholder="例如：委托书第 2 条" />
+            <Input
+              value={scopeReason}
+              onChange={(e) => setScopeReason(e.target.value)}
+              placeholder="例如：委托书第 2 条"
+            />
           </label>
           <div className="flex justify-end">
             <Button onClick={addScope} disabled={!scopeText.trim() || scopeBusy}>
@@ -341,7 +369,9 @@ export default function ProjectsPage() {
                       {scopeKindLabel(rule.kind)}
                     </Badge>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs">{rule.raw}</span>
-                    {rule.reason && <span className="text-muted-foreground hidden truncate text-[11px] sm:inline">{rule.reason}</span>}
+                    {rule.reason && (
+                      <span className="text-muted-foreground hidden truncate text-[11px] sm:inline">{rule.reason}</span>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -364,8 +394,8 @@ export default function ProjectsPage() {
           <DialogHeader>
             <DialogTitle>删除项目「{deleteTarget?.name}」？</DialogTitle>
             <DialogDescription>
-              项目范围随之删除；挂在本项目下的 {deleteTarget?.task_count ?? 0} 个任务与 {deleteTarget?.conversation_count ?? 0}{" "}
-              个对话会解除挂载（本身不被删除）。此操作不可撤销。
+              项目范围随之删除；挂在本项目下的 {deleteTarget?.task_count ?? 0} 个任务与{" "}
+              {deleteTarget?.conversation_count ?? 0} 个对话会解除挂载（本身不被删除）。此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

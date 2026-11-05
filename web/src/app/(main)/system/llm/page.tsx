@@ -15,15 +15,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,6 +25,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
@@ -102,11 +102,11 @@ function healthOf(p: LLMProfile, m?: LLMPoolMember): Health {
   if (m?.state === "degraded") {
     return {
       label: `异常 · 失败 ${m.fails} 次`,
-      cls: "border-amber-500/50 text-amber-600 dark:text-amber-400",
+      cls: "border-warning/50 text-warning",
       hint: m.last_error,
     };
   }
-  return { label: "正常", cls: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400" };
+  return { label: "正常", cls: "border-success/50 text-success" };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ function PoolSheet({
                         </span>
                         <span className="font-medium">{m.name}</span>
                         {m.active && (
-                          <Badge variant="outline" className="border-amber-400/50 text-amber-500">
+                          <Badge variant="outline" className="border-primary/40 text-primary">
                             激活
                           </Badge>
                         )}
@@ -496,15 +496,12 @@ function ProfileSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="flex w-full! max-w-none! flex-col gap-0 p-0 sm:min-w-[420px]! sm:max-w-xl!"
-      >
+      <SheetContent side="right" className="flex w-full! max-w-none! flex-col gap-0 p-0 sm:min-w-[420px]! sm:max-w-xl!">
         <SheetHeader className="px-4">
           <SheetTitle className="flex items-center gap-2">
             {isNew ? "新建模型配置" : `编辑：${profile?.name}`}
             {profile?.is_default && (
-              <Badge variant="outline" className="border-amber-400/50 text-amber-500">
+              <Badge variant="outline" className="border-primary/40 text-primary">
                 激活中
               </Badge>
             )}
@@ -553,7 +550,7 @@ function ProfileSheet({
                 onChange={(e) => setModel(e.target.value)}
               />
               {/* modal: 这个 Popover 的内容被 portal 到 <body>，在 Sheet 的滚动锁之外，
-                  不加 modal 时列表能渲染却滚不动。modal 让它自己持有最上层滚动锁。 */}
+ 不加 modal 时列表能渲染却滚不动。modal 让它自己持有最上层滚动锁。 */}
               <Popover open={modelsOpen} onOpenChange={setModelsOpen} modal>
                 <PopoverTrigger asChild>
                   <Button
@@ -899,17 +896,12 @@ export default function LLMPage() {
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-semibold text-xl tracking-tight">LLM</h1>
-          <p className="text-muted-foreground text-sm">
-            全 Agent 共享的格式 / 模型 / 限速配置。点击卡片编辑，星标为当前激活配置。
-          </p>
-        </div>
+        <h1 className="font-semibold text-2xl tracking-tight">LLM</h1>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setPoolOpen(true)}>
             <ZapIcon /> 轮询配置
             {poolOn && (
-              <Badge variant="outline" className="ml-1 border-emerald-500/50 text-emerald-600 dark:text-emerald-400">
+              <Badge variant="outline" className="ml-1 border-success/50 text-success">
                 已开启
               </Badge>
             )}
@@ -945,7 +937,7 @@ export default function LLMPage() {
                   }}
                   className={cn(
                     "cursor-pointer gap-0 py-4 outline-none transition-colors hover:border-foreground/30",
-                    p.is_default && "border-amber-400/50 bg-amber-400/5",
+                    p.is_default && "border-primary/50 bg-primary/5",
                   )}
                 >
                   <CardContent className="grid gap-2 px-4">
@@ -953,7 +945,7 @@ export default function LLMPage() {
                       <StarIcon
                         className={cn(
                           "mt-0.5 size-4 shrink-0",
-                          p.is_default ? "fill-amber-400 text-amber-400" : "text-muted-foreground",
+                          p.is_default ? "fill-primary text-primary" : "text-muted-foreground",
                         )}
                       />
                       <div className="min-w-0 flex-1">
@@ -986,18 +978,19 @@ export default function LLMPage() {
                     </div>
 
                     <div className="mt-1 flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="flex-1"
-                        disabled={p.is_default}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void activate(p.id, p.name);
-                        }}
-                      >
-                        {p.is_default ? "已激活" : "设为激活"}
-                      </Button>
+                      {!p.is_default && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void activate(p.id, p.name);
+                          }}
+                        >
+                          设为激活
+                        </Button>
+                      )}
                       <Button
                         size="icon"
                         variant="outline"
@@ -1031,7 +1024,12 @@ export default function LLMPage() {
       <PoolSheet open={poolOpen} onOpenChange={setPoolOpen} pool={pool} onReload={loadPool} />
 
       {/* ── 删除二次确认 ── */}
-      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => {
+          if (!o) setPendingDelete(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>删除 LLM 配置「{pendingDelete?.name}」？</AlertDialogTitle>
@@ -1043,7 +1041,10 @@ export default function LLMPage() {
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
             <AlertDialogAction
               disabled={deleting}
-              onClick={(e) => { e.preventDefault(); if (pendingDelete) void remove(pendingDelete); }}
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingDelete) void remove(pendingDelete);
+              }}
             >
               {deleting ? "删除中…" : "删除"}
             </AlertDialogAction>

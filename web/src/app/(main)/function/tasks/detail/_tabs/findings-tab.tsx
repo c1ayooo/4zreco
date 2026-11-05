@@ -8,8 +8,8 @@ import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon } from "
 import { toast } from "sonner";
 
 import { EvidenceView } from "@/components/evidence-view";
-import { StatusBadge } from "@/components/status-badge";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
+import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -132,7 +132,7 @@ function Row({
           {f.finding_id ? (
             <>
               {/* 报文查看器直接放进内联展开（用户反馈：以前要跳到发现详情页才能看，
-                  这里只有一坨 evidence JSON；现在展开即看请求/响应报文）。 */}
+ 这里只有一坨 evidence JSON；现在展开即看请求/响应报文）。 */}
               <div className="mb-3">
                 <FindingTrafficPanel
                   findingId={String(f.finding_id)}
@@ -283,17 +283,12 @@ export function FindingsTab({ taskId }: { taskId: string }) {
                 className="flex w-full items-center gap-2 border-b bg-muted/30 px-4 py-2 text-left text-xs text-muted-foreground hover:bg-accent/40"
                 aria-expanded={expanded}
               >
-                <ChevronRightIcon
-                  className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")}
-                />
+                <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")} />
                 <span className="min-w-0 flex-1 truncate">
                   来自任务 #{group.sourceTaskId} 的历史发现（{group.items.length} 条 · 只读）
                 </span>
               </button>
-              {expanded &&
-                group.items.map((f) => (
-                  <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
-                ))}
+              {expanded && group.items.map((f) => <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />)}
             </div>
           );
         })}

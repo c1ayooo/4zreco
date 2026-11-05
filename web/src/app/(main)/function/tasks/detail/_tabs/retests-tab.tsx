@@ -27,15 +27,15 @@ function findingLabel(finding: Finding) {
 function retestBadge(state: RetestState | undefined): { text: string; className: string } | null {
   if (!state) return null;
   if (state.status === "pending" || state.status === "running") {
-    return { text: "复测中", className: "bg-sky-500/15 text-sky-600 dark:text-sky-400" };
+    return { text: "复测中", className: "bg-info/15 text-info" };
   }
   switch (state.verdict) {
     case "fixed":
-      return { text: "已修复", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" };
+      return { text: "已修复", className: "bg-success/15 text-success" };
     case "reproduced":
-      return { text: "已复现", className: "bg-red-500/15 text-red-600 dark:text-red-400" };
+      return { text: "已复现", className: "bg-destructive/15 text-destructive" };
     case "inconclusive":
-      return { text: "无法确认", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400" };
+      return { text: "无法确认", className: "bg-warning/15 text-warning" };
     default:
       return null;
   }
@@ -161,7 +161,8 @@ export function RetestsTab({ taskId }: { taskId: string }) {
               </span>
             ) : (
               <span className="text-muted-foreground">
-                待复测（critical/high 且无进行中复测）：<span className="text-foreground font-medium">{candidates}</span> 条
+                待复测（critical/high 且无进行中复测）：
+                <span className="text-foreground font-medium">{candidates}</span> 条
               </span>
             )}
           </div>

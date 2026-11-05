@@ -37,8 +37,7 @@ export default function AssetSyncPage() {
   return (
     <div className="p-4 md:p-6">
       <div className="mb-4">
-        <h1 className="font-semibold text-xl">资产同步</h1>
-        <p className="text-muted-foreground text-sm">从外部数据源同步资产入库</p>
+        <h1 className="font-semibold text-2xl tracking-tight">资产同步</h1>
       </div>
       <Tabs defaultValue="scopesentry">
         <TabsList>
@@ -158,12 +157,10 @@ function DataSourceCard({
         ) : (
           <>
             {!status.configured && (
-              <p className="text-amber-600 text-sm dark:text-amber-500">
-                数据源已创建但未配置，请填写 MCP 地址与 API Key 后启用。
-              </p>
+              <p className="text-warning text-sm">数据源已创建但未配置，请填写 MCP 地址与 API Key 后启用。</p>
             )}
             {status.configured && !status.enabled && (
-              <p className="text-amber-600 text-sm dark:text-amber-500">数据源已配置但未启用，保存后将自动启用。</p>
+              <p className="text-warning text-sm">数据源已配置但未启用，保存后将自动启用。</p>
             )}
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
@@ -202,7 +199,7 @@ function StatusBadge({ status, loading }: { status: SSStatus | null; loading: bo
   if (!status.enabled) return <Badge variant="outline">未启用</Badge>;
   if (status.reachable)
     return (
-      <Badge className="bg-emerald-600 hover:bg-emerald-600">
+      <Badge className="bg-success hover:bg-success">
         <CheckCircle2Icon className="mr-1 size-3" /> 已连接
       </Badge>
     );
@@ -467,7 +464,7 @@ function SyncResult({ result }: { result: Awaited<ReturnType<typeof api.ssSync>>
         <p className="text-muted-foreground">新建/更新企业：{result.companies.join("、")}</p>
       )}
       {result.warnings && result.warnings.length > 0 && (
-        <ul className="list-inside list-disc text-amber-600 dark:text-amber-500">
+        <ul className="list-inside list-disc text-warning">
           {result.warnings.map((wm) => (
             <li key={wm}>{wm}</li>
           ))}

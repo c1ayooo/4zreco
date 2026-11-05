@@ -71,18 +71,18 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
     >
       <ProjectStoreProvider>
         <AppSidebar variant={variant} collapsible={collapsible} />
-      <SidebarInset
-        className={cn(
-          "[html[data-content-layout=centered]_&>*]:mx-auto",
-          "[html[data-content-layout=centered]_&>*]:w-full",
-          "[html[data-content-layout=centered]_&>*]:max-w-screen-2xl",
-          "peer-data-[variant=inset]:border",
-          "[--dashboard-header-height:--spacing(12)]",
-          "min-w-0 overflow-x-hidden",
-        )}
-      >
-        <MainContent>{children}</MainContent>
-      </SidebarInset>
+        <SidebarInset
+          className={cn(
+            "[html[data-content-layout=centered]_&>*]:mx-auto",
+            "[html[data-content-layout=centered]_&>*]:w-full",
+            "[html[data-content-layout=centered]_&>*]:max-w-screen-2xl",
+            "peer-data-[variant=inset]:border",
+            "[--dashboard-header-height:--spacing(12)]",
+            "min-w-0 overflow-x-hidden",
+          )}
+        >
+          <MainContent>{children}</MainContent>
+        </SidebarInset>
       </ProjectStoreProvider>
     </SidebarProvider>
   );

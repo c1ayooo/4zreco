@@ -2,16 +2,25 @@
 
 import * as React from "react";
 
-import { CpuIcon, FlaskConicalIcon, GaugeIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon, TimerResetIcon } from "lucide-react";
+import {
+  CpuIcon,
+  FlaskConicalIcon,
+  GaugeIcon,
+  KeyboardIcon,
+  RadioTowerIcon,
+  SearchIcon,
+  ShieldAlertIcon,
+  TimerResetIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSendMode } from "@/lib/chat-send-mode";
 import type { Settings } from "@/lib/types";
@@ -196,7 +205,8 @@ export default function SystemSettingsPage() {
       .finally(() => setSavingCompaction(false));
   };
 
-  const savePython = () => {    setSaving(true);
+  const savePython = () => {
+    setSaving(true);
     api
       .setSettings({ python_interpreter: pyInterp.trim() })
       .then((s) => {
@@ -370,7 +380,6 @@ export default function SystemSettingsPage() {
       .finally(() => setSavingGlobalProxy(false));
   };
 
-
   // Run a real "test" search ("test") against the CURRENT form values (backend +
   // proxy + entered key), falling back to saved values server-side. Toasts result.
   const runTest = () => {
@@ -396,14 +405,13 @@ export default function SystemSettingsPage() {
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
       <div>
-        <h1 className="font-semibold text-xl tracking-tight">系统配置</h1>
-        <p className="text-muted-foreground text-sm">全局运行时开关</p>
+        <h1 className="font-semibold text-2xl tracking-tight">系统配置</h1>
       </div>
 
       {/* 多列而非 grid：网络搜索卡片比其余高数倍，且高度随所选后端变化（brave/tavily
-          的 key 输入是条件渲染）。grid 会按最高的一张撑满整行、在旁边留下大片空白，
-          多列则自动按内容高度平衡填充。卡片间距靠 mb 而非 gap——多列布局下
-          column-gap 只管列间距，行间距要由子元素自己给。 */}
+ 的 key 输入是条件渲染）。grid 会按最高的一张撑满整行、在旁边留下大片空白，
+ 多列则自动按内容高度平衡填充。卡片间距靠 mb 而非 gap——多列布局下
+ column-gap 只管列间距，行间距要由子元素自己给。 */}
       <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
         <UpdateCard />
 
@@ -583,8 +591,8 @@ export default function SystemSettingsPage() {
               记录代理，独立于流量捕获。
               <br />
               来源可选 <b>DuckDuckGo（ddgs）</b>（无需 Key）、<b>Brave（免费版）</b>（需填写 Brave API Key）、{" "}
-              <b>Tavily</b>（需填写 Tavily API Key）或 <b>DeepSeek</b>（复用当前 LLM 配置）。总开关关闭时，各
-              Agent 的网络搜索开关不可用。
+              <b>Tavily</b>（需填写 Tavily API Key）或 <b>DeepSeek</b>（复用当前 LLM 配置）。总开关关闭时，各 Agent
+              的网络搜索开关不可用。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -650,7 +658,7 @@ export default function SystemSettingsPage() {
               <div className="flex flex-col gap-2">
                 <Label htmlFor="brave-key" className="font-normal text-muted-foreground text-sm">
                   Brave Search API Key
-                  {braveKeySet && <span className="ml-2 text-emerald-500 text-xs">已配置</span>}
+                  {braveKeySet && <span className="ml-2 text-success text-xs">已配置</span>}
                 </Label>
                 <div className="flex items-center gap-2">
                   <Input
@@ -671,7 +679,7 @@ export default function SystemSettingsPage() {
                   </Button>
                 </div>
                 {braveNeedsKey && (
-                  <p className="text-amber-500 text-xs">
+                  <p className="text-warning text-xs">
                     已选择 Brave 但尚未配置 Key —— 在保存 Key 之前，搜索工具不会启用。
                   </p>
                 )}
@@ -685,7 +693,7 @@ export default function SystemSettingsPage() {
               <div className="flex flex-col gap-2">
                 <Label htmlFor="tavily-key" className="font-normal text-muted-foreground text-sm">
                   Tavily Search API Key
-                  {tavilyKeySet && <span className="ml-2 text-emerald-500 text-xs">已配置</span>}
+                  {tavilyKeySet && <span className="ml-2 text-success text-xs">已配置</span>}
                 </Label>
                 <div className="flex items-center gap-2">
                   <Input
@@ -706,7 +714,7 @@ export default function SystemSettingsPage() {
                   </Button>
                 </div>
                 {webSearch && backend === "tavily" && !tavilyKeySet && (
-                  <p className="text-amber-500 text-xs">
+                  <p className="text-warning text-xs">
                     已选择 Tavily 但尚未配置 Key —— 在保存 Key 之前，搜索工具不会启用。
                   </p>
                 )}
@@ -907,11 +915,11 @@ export default function SystemSettingsPage() {
             </CardTitle>
             <CardDescription>
               单条意图累计 token 到预算后，系统向运行中的 worker 注入一条<b>收尾提醒</b>：
-              停止扩大探索、把已有结论写回后结束（软提醒，不杀进程；任务超时与自动收尾仍是最终兜底）。
-              默认 300 万——任务 5 实测单意图均值 ≈300 万，超出的意图通常是空转。
+              停止扩大探索、把已有结论写回后结束（软提醒，不杀进程；任务超时与自动收尾仍是最终兜底）。 默认 300 万——任务
+              5 实测单意图均值 ≈300 万，超出的意图通常是空转。
               <br />
-              重复调用拦截随此开关联动：同一工具+完全相同入参连续 3 次会被拦下并回喂纠正提示
-              （同一串最多拦 2 次，之后放行兜底，不会卡死）。修改后<b>对之后启动的意图生效</b>。
+              重复调用拦截随此开关联动：同一工具+完全相同入参连续 3 次会被拦下并回喂纠正提示 （同一串最多拦 2
+              次，之后放行兜底，不会卡死）。修改后<b>对之后启动的意图生效</b>。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -958,11 +966,11 @@ export default function SystemSettingsPage() {
               等久一点只影响摘要晚点落地。
               <br />
               <b>输出预算</b>是「思考 + 正文」共用的额度：思考型模型（强制 adaptive thinking
-              的那些）的思考长度随这个额度线性膨胀，额度给小了它会一直想、正文一个字都吐不出来
-              —— 实测 1500 / 2048 / 4096 / 8192 全部得到空正文。默认 65536。
+              的那些）的思考长度随这个额度线性膨胀，额度给小了它会一直想、正文一个字都吐不出来 —— 实测 1500 / 2048 /
+              4096 / 8192 全部得到空正文。默认 65536。
               <br />
-              <b>单块节点数上限</b>决定一次请求里塞多少个节点：实测 9 个节点 3 块里仍有 1 块失败，
-              6 个节点能稳定收尾。所以超大连通块必须切分。默认 6。
+              <b>单块节点数上限</b>决定一次请求里塞多少个节点：实测 9 个节点 3 块里仍有 1 块失败， 6
+              个节点能稳定收尾。所以超大连通块必须切分。默认 6。
               <br />
               两项填 0 即使用默认值。修改后<b>对之后启动的任务生效</b>。
             </CardDescription>
@@ -1015,7 +1023,7 @@ export default function SystemSettingsPage() {
               </Button>
             </div>
             {/* B10:压缩器模型。规划器跑贵模型时，把机械的冷节点压缩钉在便宜模型上省钱;
-                一次一发的设计让压缩对速度远比对话敏感，低价高速模型反而是更搭的选型。 */}
+ 一次一发的设计让压缩对速度远比对话敏感，低价高速模型反而是更搭的选型。 */}
             <div className="flex flex-wrap items-center gap-2">
               <Label htmlFor="compactor-profile" className="w-40 text-sm">
                 压缩器模型

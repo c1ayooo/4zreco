@@ -1,29 +1,15 @@
 "use client";
 
 import * as React from "react";
+
 import type { Graph as G6Graph } from "@antv/g6";
-import {
-  AppWindow,
-  Building2,
-  Globe,
-  Link2,
-  type LucideIcon,
-  Radio,
-  RefreshCw,
-  Server,
-  Waypoints,
-} from "lucide-react";
+import { AppWindow, Building2, Globe, Link2, type LucideIcon, Radio, RefreshCw, Server, Waypoints } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { api } from "@/lib/api";
 import type { CoverageAssetRef, CoverageAssetRefs, CoverageGraphEdge, CoverageGraphNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -37,13 +23,13 @@ type Kind = CoverageGraphNode["kind"];
 type KindMeta = { label: string; icon: LucideIcon; iconBg: string; hex: string; size: number };
 
 const kindMeta: Record<Kind, KindMeta> = {
-  company: { label: "公司", icon: Building2, iconBg: "bg-slate-500", hex: "#64748b", size: 46 },
-  root_domain: { label: "根域名", icon: Globe, iconBg: "bg-indigo-500", hex: "#6366f1", size: 38 },
-  subdomain: { label: "子域名", icon: Waypoints, iconBg: "bg-blue-500", hex: "#3b82f6", size: 30 },
-  ip: { label: "IP", icon: Server, iconBg: "bg-cyan-600", hex: "#0891b2", size: 28 },
-  service: { label: "服务", icon: Radio, iconBg: "bg-amber-500", hex: "#f59e0b", size: 26 },
+  company: { label: "公司", icon: Building2, iconBg: "bg-muted-foreground", hex: "#64748b", size: 46 },
+  root_domain: { label: "根域名", icon: Globe, iconBg: "bg-chart-3500", hex: "#6366f1", size: 38 },
+  subdomain: { label: "子域名", icon: Waypoints, iconBg: "bg-info", hex: "#3b82f6", size: 30 },
+  ip: { label: "IP", icon: Server, iconBg: "bg-info", hex: "#0891b2", size: 28 },
+  service: { label: "服务", icon: Radio, iconBg: "bg-warning", hex: "#f59e0b", size: 26 },
   app: { label: "App", icon: AppWindow, iconBg: "bg-fuchsia-500", hex: "#d946ef", size: 26 },
-  endpoint: { label: "端点", icon: Link2, iconBg: "bg-rose-500", hex: "#f43f5e", size: 20 },
+  endpoint: { label: "端点", icon: Link2, iconBg: "bg-destructive", hex: "#f43f5e", size: 20 },
 };
 
 // G6 节点图标用平台一致的 lucide 图标：把 lucide 的 SVG 路径（v1.22）渲染成白色描边的
@@ -331,7 +317,9 @@ function AssetSheet({
           <>
             <SheetHeader className="border-b p-4">
               <div className="flex items-center gap-2.5 pr-8">
-                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-sm", meta.iconBg)}>
+                <span
+                  className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-sm", meta.iconBg)}
+                >
                   <Icon className="size-4 text-white" />
                 </span>
                 <div className="min-w-0">
@@ -350,7 +338,7 @@ function AssetSheet({
                   <DetailRow label="测试状态">
                     {node.in_scope ? (
                       node.tested ? (
-                        <span className="text-emerald-600 dark:text-emerald-400">已测试</span>
+                        <span className="text-success">已测试</span>
                       ) : (
                         <span className="text-neutral-500">未测试</span>
                       )
@@ -438,7 +426,7 @@ function FoldSheet({
                     <span className="min-w-0 flex-1 truncate font-mono text-xs" title={n.label}>
                       {n.label}
                     </span>
-                    {n.tested && <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />}
+                    {n.tested && <span className="size-1.5 shrink-0 rounded-full bg-success" />}
                   </button>
                 ))}
               </div>
@@ -506,7 +494,10 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
   // 结构签名：只在可见节点/边集合变化时重建图 + 重跑布局，避免无谓抖动。
   const sig = React.useMemo(
     () =>
-      `${renderNodes.map((n) => `${n.key}:${n.fold ? "f" : n.node.tested ? "t" : "u"}`).sort().join(",")}|${renderEdges.length}`,
+      `${renderNodes
+        .map((n) => `${n.key}:${n.fold ? "f" : n.node.tested ? "t" : "u"}`)
+        .sort()
+        .join(",")}|${renderEdges.length}`,
     [renderNodes, renderEdges],
   );
 
@@ -648,8 +639,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
               {coverageEnabled && (
                 <>
                   {" "}
-                  · 已测{" "}
-                  <span className="font-semibold text-emerald-600 tabular-nums dark:text-emerald-400">{tested}</span>
+                  · 已测 <span className="font-semibold text-success tabular-nums">{tested}</span>
                 </>
               )}
             </span>
@@ -678,7 +668,7 @@ function GraphInner({ taskId, coverageEnabled = true }: { taskId: string; covera
           {coverageEnabled && (
             <>
               <span className="inline-flex items-center gap-1.5">
-                <span className="size-3 rounded-full bg-emerald-500" /> 已测（高亮）
+                <span className="size-3 rounded-full bg-success" /> 已测（高亮）
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="size-3 rounded-full bg-neutral-400" /> 未测

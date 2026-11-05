@@ -1529,7 +1529,13 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const candidates = pool
       .filter((f) => f.status === "pending" && (f.severity === "critical" || f.severity === "high"))
       .slice(0, 12)
-      .map((f) => ({ id: Number(f.id), vulnclass: f.vulnclass, name: f.name ?? "", severity: f.severity, summary: f.summary ?? "" }));
+      .map((f) => ({
+        id: Number(f.id),
+        vulnclass: f.vulnclass,
+        name: f.name ?? "",
+        severity: f.severity,
+        summary: f.summary ?? "",
+      }));
     const retest_states = pool
       .filter((f) => mockRetestStates.has(Number(f.id)))
       .map((f) => mockRetestStates.get(Number(f.id))!);

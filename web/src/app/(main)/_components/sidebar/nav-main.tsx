@@ -1,11 +1,11 @@
 "use client";
 
 import * as React from "react";
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { ChevronRight, } from "lucide-react";
-import { api } from "@/lib/api";
+import { ChevronRight } from "lucide-react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -28,6 +28,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
   NavBadge,
@@ -170,15 +171,20 @@ function InterceptPendingBadge() {
       try {
         const list = await api.interceptPending();
         if (live) setCount(list.length);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     poll();
     const t = setInterval(poll, 5000);
-    return () => { live = false; clearInterval(t); };
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
   }, []);
   if (count === 0) return null;
   return (
-    <SidebarMenuBadge className="flex h-4.5 min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1 font-semibold text-[10px] text-white leading-none shadow-sm ring-1 ring-amber-400/40">
+    <SidebarMenuBadge className="flex h-4.5 min-w-[18px] items-center justify-center rounded-full bg-warning px-1 font-semibold text-[10px] text-white leading-none shadow-sm ring-1 ring-warning/40">
       {count > 99 ? "99+" : count}
     </SidebarMenuBadge>
   );
@@ -315,7 +321,7 @@ function NavItemBadge({ badge }: { badge?: NavBadge }) {
       className={cn(
         "rounded-sm border capitalize",
         badge === "new" &&
-          "border-green-600 text-green-600 peer-hover/menu-button:text-green-600 peer-data-active/menu-button:text-green-600",
+          "border-success text-success peer-hover/menu-button:text-success peer-data-active/menu-button:text-success",
         badge === "soon" && "border-muted-foreground text-muted-foreground",
       )}
     >

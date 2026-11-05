@@ -172,16 +172,12 @@ export default function VulnintelPage() {
           <ShieldAlertIcon className="size-5" />
           <h1 className="text-lg font-semibold">漏洞情报</h1>
           {status && (
-            <Badge variant={status.enabled ? "default" : "secondary"}>
-              {status.enabled ? "同步开启" : "同步关闭"}
-            </Badge>
+            <Badge variant={status.enabled ? "default" : "secondary"}>{status.enabled ? "同步开启" : "同步关闭"}</Badge>
           )}
           {status?.sync_running && (
             <Badge variant="outline" className="max-w-md">
               <Loader2Icon className="mr-1 size-3 shrink-0 animate-spin" />
-              <span className="truncate">
-                同步进行中{status.sync_phase ? ` · ${status.sync_phase}` : ""}
-              </span>
+              <span className="truncate">同步进行中{status.sync_phase ? ` · ${status.sync_phase}` : ""}</span>
             </Badge>
           )}
         </div>
@@ -191,13 +187,7 @@ export default function VulnintelPage() {
             测试连通性
           </Button>
           {status?.sync_running && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-destructive"
-              onClick={cancelSync}
-              disabled={cancelling}
-            >
+            <Button variant="outline" size="sm" className="text-destructive" onClick={cancelSync} disabled={cancelling}>
               <SquareIcon className="mr-1 size-4" />
               {cancelling ? "中断中…" : "中断同步"}
             </Button>
@@ -233,7 +223,9 @@ export default function VulnintelPage() {
                 <CardTitle className="text-sm font-medium text-muted-foreground">KEV 在野利用</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-2xl font-semibold tabular-nums text-red-500">{status.counts.kev.toLocaleString()}</p>
+                <p className="text-2xl font-semibold tabular-nums text-destructive">
+                  {status.counts.kev.toLocaleString()}
+                </p>
               </CardContent>
             </Card>
             <Card>
@@ -298,9 +290,7 @@ export default function VulnintelPage() {
                     placeholder={cfg?.maintenance_proxy || "http://127.0.0.1:7897"}
                   />
                   {cfg?.maintenance_proxy && (
-                    <span className="text-muted-foreground text-xs">
-                      当前维护代理：{cfg.maintenance_proxy}
-                    </span>
+                    <span className="text-muted-foreground text-xs">当前维护代理：{cfg.maintenance_proxy}</span>
                   )}
                 </div>
                 <div className="grid gap-1.5">
@@ -382,11 +372,7 @@ export default function VulnintelPage() {
                                 有错误
                               </Badge>
                               <p className="max-w-xl text-muted-foreground text-xs">{s.last_error}</p>
-                              {s.error_hint && (
-                                <p className="max-w-xl text-xs text-amber-600 dark:text-amber-400">
-                                  建议：{s.error_hint}
-                                </p>
-                              )}
+                              {s.error_hint && <p className="max-w-xl text-xs text-warning">建议：{s.error_hint}</p>}
                             </div>
                           ) : (
                             <Badge variant="default">正常</Badge>
@@ -459,7 +445,7 @@ export default function VulnintelPage() {
                           <td className="py-2 pr-4 tabular-nums">{r.latency_ms} ms</td>
                           <td className="py-2 pr-4 text-xs">
                             {r.error && <p className="text-destructive">{r.error}</p>}
-                            {r.hint && <p className="text-amber-600 dark:text-amber-400">{r.hint}</p>}
+                            {r.hint && <p className="text-warning">{r.hint}</p>}
                           </td>
                         </tr>
                       ))}

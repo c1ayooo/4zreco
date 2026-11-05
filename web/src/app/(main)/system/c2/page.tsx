@@ -1,15 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { toast } from "sonner";
-import { PlayIcon, RadioTower, SquareIcon, RefreshCwIcon } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PlayIcon, RadioTower, RefreshCwIcon, SquareIcon } from "lucide-react";
+import { toast } from "sonner";
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +15,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import type { C2Config, ListenerSession, ListenerView } from "@/lib/types";
 
@@ -278,15 +279,9 @@ export default function C2Page() {
                 <Badge variant="secondary">{l.name}</Badge>
                 <span className="font-mono text-sm">:{l.port}</span>
                 <span className="text-muted-foreground text-sm">起于 {fmtTime(l.started_at)}</span>
-                <Badge variant={l.sessions.some((s) => s.open) ? "default" : "outline"}>
-                  {l.sessions.length} 会话
-                </Badge>
+                <Badge variant={l.sessions.some((s) => s.open) ? "default" : "outline"}>{l.sessions.length} 会话</Badge>
                 <div className="grow" />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setExpanded(expanded === l.name ? null : l.name)}
-                >
+                <Button size="sm" variant="ghost" onClick={() => setExpanded(expanded === l.name ? null : l.name)}>
                   {expanded === l.name ? "收起会话" : "查看会话"}
                 </Button>
                 <Button size="sm" variant="outline" className="text-destructive" onClick={() => setPendingStop(l)}>
@@ -308,20 +303,28 @@ export default function C2Page() {
       </Card>
 
       {/* ── 停止确认 ── */}
-      <AlertDialog open={!!pendingStop} onOpenChange={(o) => { if (!o) setPendingStop(null); }}>
+      <AlertDialog
+        open={!!pendingStop}
+        onOpenChange={(o) => {
+          if (!o) setPendingStop(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>停止监听器「{pendingStop?.name}」？</AlertDialogTitle>
             <AlertDialogDescription>
-              端口立即关闭，{pendingStop?.sessions.length ?? 0} 条会话随停止留档（数据保留，可在停止响应中导出）。
-              SSH 中继模式下托管隧道将一并拆除。
+              端口立即关闭，{pendingStop?.sessions.length ?? 0} 条会话随停止留档（数据保留，可在停止响应中导出）。 SSH
+              中继模式下托管隧道将一并拆除。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={stopping}>取消</AlertDialogCancel>
             <AlertDialogAction
               disabled={stopping}
-              onClick={(e) => { e.preventDefault(); if (pendingStop) void stopListener(pendingStop); }}
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingStop) void stopListener(pendingStop);
+              }}
             >
               {stopping ? "停止中…" : "停止"}
             </AlertDialogAction>

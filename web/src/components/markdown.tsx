@@ -41,9 +41,7 @@ const components: Components = {
       <table className="w-full border-collapse text-xs" {...p} />
     </div>
   ),
-  th: ({ node, ...p }) => (
-    <th className="border border-border bg-muted/60 px-2 py-1 text-left font-medium" {...p} />
-  ),
+  th: ({ node, ...p }) => <th className="border border-border bg-muted/60 px-2 py-1 text-left font-medium" {...p} />,
   td: ({ node, ...p }) => <td className="border border-border px-2 py-1 align-top" {...p} />,
 };
 

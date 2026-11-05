@@ -9,10 +9,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn, copyText } from "@/lib/utils";
 
 function statusTone(status: number) {
-  if (status >= 500) return "text-red-500";
-  if (status >= 400) return "text-amber-500";
-  if (status >= 300) return "text-blue-500";
-  if (status >= 200) return "text-emerald-500";
+  if (status >= 500) return "text-destructive";
+  if (status >= 400) return "text-warning";
+  if (status >= 300) return "text-info";
+  if (status >= 200) return "text-success";
   return "text-muted-foreground";
 }
 

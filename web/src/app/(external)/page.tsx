@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+
 import { useRouter } from "next/navigation";
 
 // 根路由跳转到主工作台。注意：不能用服务端 redirect()——`next build` 静态导出
@@ -12,9 +13,5 @@ export default function Home() {
   useEffect(() => {
     router.replace("/function/tasks");
   }, [router]);
-  return (
-    <div className="flex h-dvh items-center justify-center text-muted-foreground">
-      正在进入工作台…
-    </div>
-  );
+  return <div className="flex h-dvh items-center justify-center text-muted-foreground">正在进入工作台…</div>;
 }

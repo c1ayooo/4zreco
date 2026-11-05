@@ -5,13 +5,20 @@ import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
-import { ArrowLeftIcon, ArrowUpRightIcon, ChevronLeftIcon, ChevronRightIcon, FileDownIcon, ShieldAlertIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowUpRightIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  FileDownIcon,
+  ShieldAlertIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
+import { EvidenceView } from "@/components/evidence-view";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
-import { EvidenceView } from "@/components/evidence-view";
 import { Markdown } from "@/components/markdown";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -178,11 +185,8 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               {/* 现场截图（v0.4.9）：关键照片在详情页直接可见，不用翻 Word。
-                  只展示 finding_id 归属本漏洞的图片附件。 */}
-              <FindingShots
-                taskId={finding.task_id ? String(finding.task_id) : contextTaskId}
-                findingId={String(id)}
-              />
+ 只展示 finding_id 归属本漏洞的图片附件。 */}
+              <FindingShots taskId={finding.task_id ? String(finding.task_id) : contextTaskId} findingId={String(id)} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>
@@ -215,7 +219,7 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               {/* 关联流量放在报告之后（v0.4.9）：先看结论与叙事，再下钻原始报文；
-                  v0.4.11 起默认折叠——要看时点「查看详细流量」，不占阅读篇幅。 */}
+ v0.4.11 起默认折叠——要看时点「查看详细流量」，不占阅读篇幅。 */}
               <FindingTrafficPanel
                 key={id}
                 findingId={id}
@@ -355,7 +359,6 @@ export default function FindingDetailPage() {
   );
 }
 
-
 // FindingShots 漏洞现场截图（v0.4.9 起；v0.4.15 交互重做）：默认折叠，
 // 缩略图走服务端缩略图（原图太大，一次加载几十张会破图），悬停放大、
 // 点击弹层看细节；下载在弹层里单独给按钮。
@@ -382,16 +385,12 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
   const isDoc = (a: TaskArtifact) =>
     ["document", "spreadsheet", "presentation", "pdf"].includes(a.kind) ||
     /\.(docx?|xlsx?|pptx?|pdf|odt|ods|odp|csv|rtf)$/i.test(a.name);
-  const own = all.filter(
-    (a) => String(a.finding_id ?? "") === findingId && (a.kind === "image" || isDoc(a)),
-  );
+  const own = all.filter((a) => String(a.finding_id ?? "") === findingId && (a.kind === "image" || isDoc(a)));
   const images = own.filter((a) => a.kind === "image");
   const docs = own.filter((a) => a.kind !== "image" && isDoc(a));
   // 本漏洞已归属但不是可视证据的附件（JSON/日志/HTML），空态时要说清楚，
   // 避免用户误以为“这个漏洞什么都没留下”。
-  const otherOwn = all.filter(
-    (a) => String(a.finding_id ?? "") === findingId && a.kind !== "image" && !isDoc(a),
-  );
+  const otherOwn = all.filter((a) => String(a.finding_id ?? "") === findingId && a.kind !== "image" && !isDoc(a));
   // 可供挑选的任务级证据（未归属的图片/文档）。
   const candidates = all.filter((a) => !a.finding_id && (a.kind === "image" || isDoc(a)));
   const thumbUrl = (id: number) => `${api.artifactUrl(taskId!, id)}?thumb=1`;
@@ -464,15 +463,18 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
                       className="absolute top-1.5 left-1.5 z-10 size-4 accent-primary"
                       checked={checked}
                       onChange={() =>
-                        setPickSelected((cur) =>
-                          cur.includes(a.id) ? cur.filter((x) => x !== a.id) : [...cur, a.id],
-                        )
+                        setPickSelected((cur) => (cur.includes(a.id) ? cur.filter((x) => x !== a.id) : [...cur, a.id]))
                       }
                     />
                     <span className="flex aspect-[4/3] items-center justify-center bg-muted/40">
                       {a.kind === "image" ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={thumbUrl(a.id)} alt={a.note || a.name} loading="lazy" className="h-full w-full object-cover" />
+                        <img
+                          src={thumbUrl(a.id)}
+                          alt={a.note || a.name}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                        />
                       ) : a.preview_state === "ready" ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img

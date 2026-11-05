@@ -20,7 +20,7 @@ import { api, sseUrl } from "@/lib/api";
 import type { UpdateCheck, UpdateProgress } from "@/lib/types";
 
 /** 等待新版本上线的最长时间。一次升级要经过三次进程启动（暂存 → 换装 → 新版），
- *  每次都是秒级，三分钟足够覆盖慢磁盘和 Docker 容器重建。 */
+ * 每次都是秒级，三分钟足够覆盖慢磁盘和 Docker 容器重建。 */
 const RESTART_TIMEOUT_MS = 180_000;
 
 function humanSize(n?: number): string {
@@ -229,7 +229,7 @@ export function UpdateCard() {
         </div>
 
         {info?.boot_notice && (
-          <p className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-700 text-xs dark:text-amber-400">
+          <p className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-2 text-warning text-xs">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
             {info.boot_notice}
           </p>
@@ -261,7 +261,7 @@ export function UpdateCard() {
 
         {info && !info.has_update && info.comparable && !info.error && (
           <p className="flex items-center gap-2 text-muted-foreground text-xs">
-            <CheckCircle2Icon className="size-3.5 text-emerald-600" />
+            <CheckCircle2Icon className="size-3.5 text-success" />
             当前已是最新版本。
           </p>
         )}

@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { ListTodo } from "lucide-react";
+
+import { Circle, CircleCheck, CirclePlay, ListTodo } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -46,7 +47,11 @@ export function TodoPopover({
   }, [open, load]);
 
   const disabled = seq == null;
-  const MARK: Record<string, string> = { pending: "☐", in_progress: "▶", completed: "✔" };
+  const MARK: Record<string, React.ComponentType<{ className?: string }>> = {
+    pending: Circle,
+    in_progress: CirclePlay,
+    completed: CircleCheck,
+  };
   return (
     <Popover open={open} onOpenChange={disabled ? undefined : setOpen}>
       <PopoverTrigger asChild>
@@ -65,16 +70,20 @@ export function TodoPopover({
           最近 Todo{loading ? " · 加载中…" : ""}
         </p>
         {err && <p className="px-1 text-destructive text-xs">{err}</p>}
-        {todos && todos.length === 0 && !loading && (
-          <p className="px-1 text-muted-foreground text-xs">（空）</p>
-        )}
+        {todos && todos.length === 0 && !loading && <p className="px-1 text-muted-foreground text-xs">（空）</p>}
         <ul className="space-y-0.5">
           {(todos ?? []).map((t, i) => (
             <li
               key={`${i}:${t.content}`}
-              className={cn("flex gap-1.5 px-1 text-xs", t.status === "completed" && "text-muted-foreground line-through")}
+              className={cn(
+                "flex gap-1.5 px-1 text-xs",
+                t.status === "completed" && "text-muted-foreground line-through",
+              )}
             >
-              <span className="shrink-0">{MARK[t.status] ?? "☐"}</span>
+              {(() => {
+                const Icon = MARK[t.status] ?? Circle;
+                return <Icon className="mt-0.5 size-3 shrink-0" />;
+              })()}
               <span className="break-words">{t.content}</span>
             </li>
           ))}

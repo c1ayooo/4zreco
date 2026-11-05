@@ -18,7 +18,7 @@ import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Progress } from "@/components/ui/progress";
 import { api } from "@/lib/api";
@@ -80,32 +80,32 @@ const ASSET_TYPE_LABELS: Record<string, string> = {
 };
 
 const ASSET_COLORS: Record<string, string> = {
-  root_domain: "bg-blue-500",
-  ip: "bg-indigo-400",
-  subdomain: "bg-violet-500",
-  app: "bg-orange-400",
-  service: "bg-cyan-500",
-  endpoint: "bg-emerald-500",
+  root_domain: "bg-info",
+  ip: "bg-chart-3",
+  subdomain: "bg-chart-4",
+  app: "bg-warning",
+  service: "bg-chart-5",
+  endpoint: "bg-success",
 };
 
 function statusColor(code: number): string {
-  if (code < 300) return "text-emerald-500";
-  if (code < 400) return "text-blue-400";
-  if (code < 500) return "text-amber-400";
-  return "text-red-400";
+  if (code < 300) return "text-success";
+  if (code < 400) return "text-info";
+  if (code < 500) return "text-warning";
+  return "text-destructive";
 }
 
 function statusBg(code: number): string {
-  if (code < 300) return "bg-emerald-500";
-  if (code < 400) return "bg-blue-400";
-  if (code < 500) return "bg-amber-400";
-  return "bg-red-400";
+  if (code < 300) return "bg-success";
+  if (code < 400) return "bg-info";
+  if (code < 500) return "bg-warning";
+  return "bg-destructive";
 }
 
 // ── sub-components ────────────────────────────────────────────────────────────
 
 function LiveDot({ className }: { className?: string }) {
-  return <span className={cn("inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-blue-400", className)} />;
+  return <span className={cn("inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-info", className)} />;
 }
 
 function SectionTitle({
@@ -191,16 +191,17 @@ export default function DashboardPage() {
       if (loading) return;
       loading = true;
       try {
-        const [findingsPage, fstats, stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
-          api.findingsPage({ page: 1, pageSize: 8, sort: "time" }),
-          api.findingStats(),
-          api.stats(),
-          api.settings(),
-          api.interceptPending(),
-          api.activity(undefined, { limit: 30 }),
-          api.tokenStats(),
-          api.conversationTokens(),
-        ]);
+        const [findingsPage, fstats, stats, settings, pending, activity, tokens, conversationTokens] =
+          await Promise.all([
+            api.findingsPage({ page: 1, pageSize: 8, sort: "time" }),
+            api.findingStats(),
+            api.stats(),
+            api.settings(),
+            api.interceptPending(),
+            api.activity(undefined, { limit: 30 }),
+            api.tokenStats(),
+            api.conversationTokens(),
+          ]);
         if (!alive) return;
         setFindings(findingsPage.items);
         setFindingStatsData(fstats);
@@ -486,15 +487,15 @@ export default function DashboardPage() {
   }
 
   function _workerColor(w: string): string {
-    if (w === "planner") return "text-violet-400";
-    if (w === "mainagent") return "text-cyan-400";
-    return "text-blue-400";
+    if (w === "planner") return "text-chart-4";
+    if (w === "mainagent") return "text-info";
+    return "text-info";
   }
 
   function workerBg(w: string): string {
-    if (w === "planner") return "bg-violet-500/10 text-violet-400 border-violet-500/20";
-    if (w === "mainagent") return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
-    return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+    if (w === "planner") return "bg-chart-4/10 text-chart-4 border-chart-4/20";
+    if (w === "mainagent") return "bg-info/10 text-info border-info/20";
+    return "bg-info/10 text-info border-info/20";
   }
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -502,12 +503,7 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-1 flex-col gap-4 pb-6">
       {/* ── Header ── */}
-      <div>
-        <div>
-          <h1 className="font-semibold text-lg tracking-tight">总览</h1>
-          <p className="text-muted-foreground text-xs">系统全局状态 · 实时刷新</p>
-        </div>
-      </div>
+      <h1 className="font-semibold text-2xl tracking-tight">总览</h1>
 
       {/* ── Row 1: 5 stat cards ── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -523,9 +519,9 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px]">
-            {(tasksByStatus.running ?? 0) > 0 && <span className="text-blue-400">探索 {tasksByStatus.running}</span>}
-            {(tasksByStatus.paused ?? 0) > 0 && <span className="text-amber-400">暂停 {tasksByStatus.paused}</span>}
-            {(tasksByStatus.done ?? 0) > 0 && <span className="text-emerald-400">完成 {tasksByStatus.done}</span>}
+            {(tasksByStatus.running ?? 0) > 0 && <span className="text-info">探索 {tasksByStatus.running}</span>}
+            {(tasksByStatus.paused ?? 0) > 0 && <span className="text-warning">暂停 {tasksByStatus.paused}</span>}
+            {(tasksByStatus.done ?? 0) > 0 && <span className="text-success">完成 {tasksByStatus.done}</span>}
             {tasks.length === 0 && <span className="text-muted-foreground">暂无任务</span>}
           </CardContent>
         </Card>
@@ -539,10 +535,10 @@ export default function DashboardPage() {
             <div className="font-semibold text-2xl tabular-nums">{findingStatsData?.total ?? 0}</div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2.5 text-[10px]">
-            <span className="text-rose-500">严重 {findingsBySev.critical}</span>
-            <span className="text-red-400">高危 {findingsBySev.high}</span>
-            <span className="text-amber-400">中危 {findingsBySev.medium}</span>
-            <span className="text-slate-400">低危 {findingsBySev.low}</span>
+            <span className="text-destructive">严重 {findingsBySev.critical}</span>
+            <span className="text-destructive">高危 {findingsBySev.high}</span>
+            <span className="text-warning">中危 {findingsBySev.medium}</span>
+            <span className="text-muted-foreground">低危 {findingsBySev.low}</span>
           </CardContent>
         </Card>
 
@@ -629,9 +625,6 @@ export default function DashboardPage() {
                 </button>
               ))}
             </div>
-            <span className="font-normal text-[10px] text-muted-foreground">
-              {tokenVersion === "new" ? "llm_usage" : "activity"}
-            </span>
           </div>
           {/* Profile tabs */}
           <div className="flex flex-wrap items-center gap-1">
@@ -669,9 +662,7 @@ export default function DashboardPage() {
                     <span
                       className={cn(
                         "rounded px-1 py-0 text-[8px]",
-                        tokenTab === resolvedKey
-                          ? "bg-background/20 text-background"
-                          : "bg-emerald-500/20 text-emerald-400",
+                        tokenTab === resolvedKey ? "bg-background/20 text-background" : "bg-success/20 text-success",
                       )}
                     >
                       默认
@@ -706,19 +697,19 @@ export default function DashboardPage() {
                     label: "输入(未命中)",
                     value: displayedTokens.input - displayedTokens.cacheRead,
                     barColor: dailyTrendConfig.input.color!,
-                    text: "text-blue-400",
+                    text: "text-info",
                   },
                   {
                     label: "缓存命中",
                     value: displayedTokens.cacheRead,
                     barColor: dailyTrendConfig.cacheRead.color!,
-                    text: "text-emerald-400",
+                    text: "text-success",
                   },
                   {
                     label: "输出",
                     value: displayedTokens.output,
                     barColor: dailyTrendConfig.output.color!,
-                    text: "text-violet-400",
+                    text: "text-chart-4400",
                   },
                 ].map(({ label, value, barColor, text }) => {
                   const pct = total > 0 ? (value / total) * 100 : 0;
@@ -730,7 +721,7 @@ export default function DashboardPage() {
                       </div>
                       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                         <div
-                          className="h-full rounded-full transition-all duration-500"
+                          className="h-full rounded-full transition-[width] duration-500"
                           style={{ width: `${pct}%`, background: barColor }}
                         />
                       </div>
@@ -748,9 +739,7 @@ export default function DashboardPage() {
               return (
                 <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-[10px]">
                   <span className="text-muted-foreground">缓存命中率</span>
-                  <span
-                    className={cn("font-semibold tabular-nums", hitPct > 50 ? "text-emerald-400" : "text-amber-400")}
-                  >
+                  <span className={cn("font-semibold tabular-nums", hitPct > 50 ? "text-success" : "text-warning")}>
                     {hitPct}%
                   </span>
                 </div>
@@ -982,10 +971,7 @@ export default function DashboardPage() {
           <thead>
             <tr className="border-b">
               {["任务", "状态", "引擎", "目标进度", "在途", "最近活动"].map((h) => (
-                <th
-                  key={h}
-                  className="px-4 py-2 text-left font-semibold text-[9px] text-muted-foreground uppercase tracking-widest first:pl-4"
-                >
+                <th key={h} className="px-4 py-2 text-left font-semibold text-xs text-muted-foreground first:pl-4">
                   {h}
                 </th>
               ))}
@@ -1068,7 +1054,7 @@ export default function DashboardPage() {
                   </span>
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                     <div
-                      className={cn("h-full rounded-full", ASSET_COLORS[type] ?? "bg-slate-400")}
+                      className={cn("h-full rounded-full", ASSET_COLORS[type] ?? "bg-muted-foreground")}
                       style={{ width: `${(count / assetMax) * 100}%` }}
                     />
                   </div>
@@ -1114,8 +1100,8 @@ export default function DashboardPage() {
                         className={cn(
                           "shrink-0 rounded border px-1 py-0 font-mono text-[9px]",
                           e.method === "GET"
-                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                            : "border-blue-500/30 bg-blue-500/10 text-blue-400",
+                            ? "border-success/30 bg-success/10 text-success"
+                            : "border-info/30 bg-info/10 text-info",
                         )}
                       >
                         {e.method}
@@ -1145,8 +1131,8 @@ export default function DashboardPage() {
                 className={cn(
                   "text-[10px]",
                   stats?.llm_configured
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                    : "border-red-500/30 bg-red-500/10 text-red-400",
+                    ? "border-success/30 bg-success/10 text-success"
+                    : "border-destructive/30 bg-destructive/10 text-destructive",
                 )}
               >
                 {stats?.llm_configured ? "已配置" : "未配置"}
@@ -1160,7 +1146,7 @@ export default function DashboardPage() {
                 className={cn(
                   "text-[10px]",
                   settings?.traffic_capture
-                    ? "border-violet-500/30 bg-violet-500/10 text-violet-400"
+                    ? "border-chart-4500/30 bg-chart-4500/10 text-chart-4400"
                     : "text-muted-foreground",
                 )}
               >
@@ -1179,19 +1165,19 @@ export default function DashboardPage() {
           {/* pending approvals */}
           {pendingCount > 0 && (
             <div className="mt-3">
-              <div className="mb-1.5 font-medium text-[10px] text-amber-400">待审批 ({pendingCount})</div>
+              <div className="mb-1.5 font-medium text-[10px] text-warning">待审批 ({pendingCount})</div>
               <div className="flex flex-col gap-1.5">
                 {pending.slice(0, 3).map((p) => (
                   <Link
                     key={p.id}
                     href="/system/intercept/approvals"
-                    className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 hover:bg-amber-500/10"
+                    className="flex items-center justify-between rounded-lg border border-warning/20 bg-warning/5 px-2.5 py-2 hover:bg-warning/10"
                   >
                     <div className="min-w-0">
                       <div className="font-medium text-[10px]">{p.tool_name}</div>
                       <div className="text-[9px] text-muted-foreground">{p.agent_name}</div>
                     </div>
-                    <ArrowUpRightIcon className="size-3 shrink-0 text-amber-400" />
+                    <ArrowUpRightIcon className="size-3 shrink-0 text-warning" />
                   </Link>
                 ))}
                 {pendingCount > 3 && (
@@ -1208,7 +1194,7 @@ export default function DashboardPage() {
 
           {pendingCount === 0 && (
             <div className="mt-3 rounded-lg border bg-muted/10 px-3 py-3 text-center text-[10px] text-muted-foreground">
-              <ShieldCheckIcon className="mx-auto mb-1 size-4 text-emerald-500/50" />
+              <ShieldCheckIcon className="mx-auto mb-1 size-4 text-success/50" />
               无待审批拦截
             </div>
           )}

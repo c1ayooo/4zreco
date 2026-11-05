@@ -47,7 +47,7 @@ export function EvidenceView({ text, className }: { text: string; className?: st
               <div
                 key={i}
                 className="mt-2 mb-1 border-primary/40 border-l-2 pl-2 font-semibold text-foreground first:mt-0"
-                >
+              >
                 {b.text}
               </div>
             );
@@ -57,10 +57,7 @@ export function EvidenceView({ text, className }: { text: string; className?: st
           }
           if (b.kind === "code") {
             return (
-              <pre
-                key={i}
-                className="overflow-x-auto rounded border bg-muted/60 px-2 py-1.5 whitespace-pre-wrap"
-              >
+              <pre key={i} className="overflow-x-auto rounded border bg-muted/60 px-2 py-1.5 whitespace-pre-wrap">
                 {b.text}
               </pre>
             );
@@ -97,12 +94,7 @@ function JsonBlock({ raw }: { raw: string }) {
   const clipped = !expanded && lines.length > 12;
   return (
     <div className="rounded border bg-muted/60">
-      <pre
-        className={cn(
-          "overflow-auto px-2 py-1.5 whitespace-pre",
-          clipped ? "max-h-72 overflow-y-auto" : "",
-        )}
-      >
+      <pre className={cn("overflow-auto px-2 py-1.5 whitespace-pre", clipped ? "max-h-72 overflow-y-auto" : "")}>
         {clipped ? lines.slice(0, 12).join("\n") + "\n…" : pretty}
       </pre>
       {lines.length > 12 && (

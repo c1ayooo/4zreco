@@ -17,8 +17,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
-import { useProjectStore } from "@/stores/project/project-provider";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -33,6 +31,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -49,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import type { LLMProfile, Task } from "@/lib/types";
+import { useProjectStore } from "@/stores/project/project-provider";
 
 import { AssetsTab } from "./_tabs/assets-tab";
 import { BroadcastTab } from "./_tabs/broadcast-tab";
@@ -218,7 +218,17 @@ function TaskDetailInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   const [task, setTask] = React.useState<Task | null>(null);
-  const projectOfTask = useProjectStore((s) => (task?.project_id ? s.projects.find((p) => p.id === task.project_id) : undefined));
+  const projectOfTask = useProjectStore((s) =>
+    task?.project_id ? s.projects.find((p) => p.id === task.project_id) : undefined,
+  );
+  // 反向对齐（4zrec「详情跟随实体所属项目」同款）：打开的任务挂了项目而全局
+  // 当前不是它时，把全局项目切过去——切回任务页/对话页看到的口径与详情一致。
+  const globalProjectId = useProjectStore((s) => s.projectId);
+  const setGlobalProject = useProjectStore((s) => s.setProject);
+  React.useEffect(() => {
+    const pid = task?.project_id ?? 0;
+    if (pid > 0 && pid !== globalProjectId) setGlobalProject(pid);
+  }, [task?.project_id, globalProjectId, setGlobalProject]);
   const [paused, setPaused] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState(searchParams.get("tab") || "sessions");
@@ -456,7 +466,7 @@ function TaskDetailInner() {
               <TabsTrigger key={t.value} value={t.value}>
                 {t.label}
                 {t.value === "intercept" && interceptPendingCount > 0 && (
-                  <span className="ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 font-semibold text-[10px] text-white leading-none">
+                  <span className="ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning px-1 font-semibold text-[10px] text-white leading-none">
                     {interceptPendingCount > 99 ? "99+" : interceptPendingCount}
                   </span>
                 )}

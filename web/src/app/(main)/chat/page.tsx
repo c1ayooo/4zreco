@@ -7,7 +7,6 @@ import {
   Bot,
   ChevronDownIcon,
   ChevronRightIcon,
-  FolderIcon,
   ListChecksIcon,
   ListTodoIcon,
   Loader2Icon,
@@ -24,10 +23,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
 import { MentionTextarea } from "@/components/mention-textarea";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
-import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
 import { Transcript } from "@/components/transcript";
 import {
   AlertDialog,
@@ -60,7 +59,7 @@ import { api } from "@/lib/api";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { isBtwCommand } from "@/lib/side-questions";
-import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile, Project, Task } from "@/lib/types";
+import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/stores/project/project-provider";
 
@@ -138,8 +137,8 @@ function groupByAgent(conversations: Conversation[], agentByKey: Map<string, Age
 // console — shown while a turn is streaming.
 function LiveBadge() {
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 font-medium text-[10px] text-blue-600 dark:text-blue-400">
-      <span className="size-1 animate-pulse rounded-full bg-blue-500" />
+    <span className="inline-flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 font-medium text-[10px] text-info">
+      <span className="size-1 animate-pulse rounded-full bg-info" />
       实时
     </span>
   );
@@ -363,119 +362,25 @@ function LLMProfileRow({
   );
 }
 
-// ProjectRow shows the conversation's attached project and lets the user switch
-// it via a Popover. 项目是对话的归属主轴：信息归集 + 建任务时的上下文来源。
-function ProjectRow({ projectId, onChange }: { projectId: number | null; onChange: (id: number | null) => void }) {
-  const [projects, setProjects] = React.useState<Project[]>([]);
-  const [open, setOpen] = React.useState(false);
-  React.useEffect(() => {
-    let alive = true;
-    api
-      .projects()
-      .then((ps) => alive && setProjects(ps.filter((p) => p.status === "active")))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [open]);
-  const current = projectId != null ? projects.find((p) => p.id === projectId) : null;
-
-  return (
-    <div className="flex min-w-0 shrink-0 items-center gap-1 px-1 pb-1 pt-0.5">
-      <FolderIcon className="text-muted-foreground/50 size-3 shrink-0" />
-      <span
-        className={cn("truncate text-xs", current ? "text-foreground/80" : "text-muted-foreground/70")}
-        title={current ? current.name : "未挂项目"}
-      >
-        {current ? current.name : "未挂项目"}
-      </span>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button type="button" className="text-primary flex shrink-0 items-center gap-0.5 text-xs hover:underline">
-            {current ? "更换" : "挂载"}
-            <ChevronDownIcon className="size-3" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-72 p-1">
-          <p className="text-muted-foreground px-2 py-1 text-[11px] font-medium">挂载项目</p>
-          <button
-            type="button"
-            onClick={() => {
-              onChange(null);
-              setOpen(false);
-            }}
-            className={cn(
-              "hover:bg-accent flex w-full flex-col rounded px-2 py-1.5 text-left",
-              current == null && "bg-accent",
-            )}
-          >
-            <span className="text-sm">不挂项目</span>
-            <span className="text-muted-foreground text-[11px]">自由对话，无项目归属</span>
-          </button>
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => {
-                onChange(Number(p.id));
-                setOpen(false);
-              }}
-              className={cn(
-                "hover:bg-accent flex w-full flex-col rounded px-2 py-1.5 text-left",
-                current?.id === Number(p.id) && "bg-accent",
-              )}
-            >
-              <span className="text-sm">{p.name}</span>
-              <span className="text-muted-foreground text-[11px]">
-                任务 {p.task_count} · 范围 {p.scope.length} 条
-              </span>
-            </button>
-          ))}
-          {projects.length === 0 && (
-            <p className="text-muted-foreground px-2 py-1.5 text-[11px]">还没有项目 — 点下方按钮创建</p>
-          )}
-          <div className="mt-1 border-t pt-1">
-            <button
-              type="button"
-              onClick={() => {
-                window.location.href = "/function/projects?create=1";
-              }}
-              className="hover:bg-accent flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-sm"
-            >
-              <PlusIcon className="size-3.5" /> 新建项目
-            </button>
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
 // TaskRow shows the conversation's linked task and lets the user pick/clear it.
-// 绑定任务时会把会话项目自动对齐到任务所属项目（后端 PATCH 语义）；解除只清任务。
-// taskScope 是候选任务的项目范围（会话当前项目；草稿态回落全局当前项目）。
-function TaskRow({
-  taskId,
-  taskScope,
-  onChange,
-}: {
-  taskId: number | null;
-  taskScope: number | null;
-  onChange: (taskId: number | null, taskProjectId: number | null) => void;
-}) {
+// 口径（2026-11-04）：对话只绑任务，项目经任务传递——绑定后后端自动把会话项目
+// 对齐到任务所属项目，解绑时项目归属一并解除。候选任务列全量，行内带项目名。
+function TaskRow({ taskId, onChange }: { taskId: number | null; onChange: (taskId: number | null) => void }) {
   const [tasks, setTasks] = React.useState<Task[]>([]);
   const [open, setOpen] = React.useState(false);
+  const projects = useProjectStore((s) => s.projects);
+  const projectNameById = React.useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
   React.useEffect(() => {
     if (!open) return;
     let alive = true;
     api
-      .tasks(taskScope ? { projectId: taskScope } : undefined)
+      .tasks()
       .then((r) => alive && setTasks(r.tasks))
       .catch(() => alive && setTasks([]));
     return () => {
       alive = false;
     };
-  }, [open, taskScope]);
+  }, [open]);
   const current = taskId != null ? tasks.find((t) => Number(t.id) === taskId) : null;
   const statusLabel = (t: Task) =>
     t.status === "done"
@@ -499,7 +404,9 @@ function TaskRow({
         className={cn("truncate text-xs", current ? "text-foreground/80" : "text-muted-foreground/70")}
         title={current ? `关联任务：${current.description}` : "未关联任务"}
       >
-        {current ? current.name?.slice(0, 24) || current.description.slice(0, 24) || `任务 #${current.id}` : "未关联任务"}
+        {current
+          ? current.name?.slice(0, 24) || current.description.slice(0, 24) || `任务 #${current.id}`
+          : "未关联任务"}
       </span>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
@@ -515,7 +422,7 @@ function TaskRow({
           <button
             type="button"
             onClick={() => {
-              onChange(null, null);
+              onChange(null);
               setOpen(false);
             }}
             className={cn(
@@ -526,28 +433,30 @@ function TaskRow({
             <span className="text-sm">不关联任务</span>
           </button>
           <div className="max-h-60 overflow-y-auto">
-            {tasks.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => {
-                  onChange(Number(t.id), t.project_id ?? null);
-                  setOpen(false);
-                }}
-                className={cn(
-                  "hover:bg-accent flex w-full flex-col rounded px-2 py-1.5 text-left",
-                  taskId != null && Number(t.id) === taskId && "bg-accent",
-                )}
-              >
-                <span className="truncate text-sm">{t.name || t.description || `任务 #${t.id}`}</span>
-                <span className="text-muted-foreground text-[11px]">
-                  #{t.id} · {statusLabel(t)}
-                </span>
-              </button>
-            ))}
-            {tasks.length === 0 && (
-              <p className="text-muted-foreground px-2 py-1.5 text-[11px]">当前项目下还没有任务</p>
-            )}
+            {tasks.map((t) => {
+              const projName = t.project_id != null ? projectNameById.get(t.project_id) : undefined;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(Number(t.id));
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "hover:bg-accent flex w-full flex-col rounded px-2 py-1.5 text-left",
+                    taskId != null && Number(t.id) === taskId && "bg-accent",
+                  )}
+                >
+                  <span className="truncate text-sm">{t.name || t.description || `任务 #${t.id}`}</span>
+                  <span className="text-muted-foreground truncate text-[11px]">
+                    #{t.id} · {statusLabel(t)}
+                    {projName ? ` · ${projName}` : ""}
+                  </span>
+                </button>
+              );
+            })}
+            {tasks.length === 0 && <p className="text-muted-foreground px-2 py-1.5 text-[11px]">还没有任务</p>}
           </div>
         </PopoverContent>
       </Popover>
@@ -574,19 +483,9 @@ function DraftChat({
   const [sending, setSending] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
 
-  // 草稿态也允许先选项目：会话创建后立即 PATCH project_id，首条消息就带归属。
-  const [projectId, setProjectId] = React.useState<number | null>(null);
   // 草稿态也可先选任务：创建后 PATCH task_id，项目对齐到任务所属项目。
-  const globalProjectId = useProjectStore((s) => s.projectId);
-  const globalStatus = useProjectStore((s) => s.status);
-  // 新会话默认挂全局当前项目——只在就绪后补一次，用户显式选「不挂项目」不被覆盖。
-  const draftAutoRef = React.useRef(false);
-  const [draftTask, setDraftTask] = React.useState<{ id: number; projectId: number | null } | null>(null);
-  React.useEffect(() => {
-    if (draftAutoRef.current || globalStatus !== "ready" || globalProjectId <= 0) return;
-    draftAutoRef.current = true;
-    setProjectId((cur) => cur ?? globalProjectId);
-  }, [globalStatus, globalProjectId]);
+  // 口径修订（2026-11-04）：对话不直接挂项目，项目经任务传递。
+  const [draftTask, setDraftTask] = React.useState<number | null>(null);
 
   // default the agent to Auto once agents load.
   React.useEffect(() => {
@@ -595,15 +494,9 @@ function DraftChat({
 
   const agent = agents.find((a) => a.key === agentKey);
 
-  // draftPatch 组装会话创建后的绑定 PATCH（挂载项目/关联任务必须先于首条消息）。
-  function draftPatch(): { project_id?: number; task_id?: number } | null {
-    const patch: { project_id?: number; task_id?: number } = {};
-    if (projectId != null) patch.project_id = projectId;
-    if (draftTask) {
-      patch.task_id = draftTask.id;
-      if (draftTask.projectId) patch.project_id = draftTask.projectId;
-    }
-    return patch.project_id != null || patch.task_id != null ? patch : null;
+  // draftPatch 组装会话创建后的绑定 PATCH（关联任务必须先于首条消息）。
+  function draftPatch(): { task_id?: number } | null {
+    return draftTask != null ? { task_id: draftTask } : null;
   }
 
   async function send() {
@@ -691,13 +584,10 @@ function DraftChat({
         uploading={uploading}
       />
       <div className="flex flex-wrap items-center gap-x-3 px-4">
-        <ProjectRow projectId={projectId} onChange={setProjectId} />
         <TaskRow
-          taskId={draftTask?.id ?? null}
-          taskScope={projectId ?? globalProjectId}
-          onChange={(id, taskProjectId) => {
-            setDraftTask(id != null ? { id, projectId: taskProjectId } : null);
-            if (id != null && taskProjectId) setProjectId(taskProjectId);
+          taskId={draftTask}
+          onChange={(id) => {
+            setDraftTask(id);
           }}
         />
       </div>
@@ -759,22 +649,11 @@ function ChatView({
     }
   }
 
-  async function changeProject(id: number | null) {
+  async function changeTask(taskId: number | null) {
     try {
-      // PATCH 语义：project_id 指向 0 = 取消挂载；省略 = 不改。
-      await api.updateConversation(conv.id, { project_id: id ?? 0 });
-      onConvUpdated();
-    } catch (e) {
-      toast.error(`挂载项目失败：${(e as Error).message}`);
-    }
-  }
-
-  async function changeTask(taskId: number | null, taskProjectId: number | null) {
-    try {
-      // 绑定任务时项目自动对齐到任务所属项目（后端兜底）；解除只清 task_id。
-      const patch: { task_id: number; project_id?: number } = { task_id: taskId ?? 0 };
-      if (taskId != null && taskProjectId) patch.project_id = taskProjectId;
-      await api.updateConversation(conv.id, patch);
+      // 绑定/解绑只发 task_id：项目对齐与解除由后端兜底（绑定→对齐任务所属项目，
+      // 解绑→项目归属一并清除）。
+      await api.updateConversation(conv.id, { task_id: taskId ?? 0 });
       toast.success(taskId != null ? "已关联任务，项目已对齐" : "已解除任务关联");
       onConvUpdated();
     } catch (e) {
@@ -867,14 +746,23 @@ function ChatView({
     };
   }, [running, conv.id, onTitleMaybeChanged]);
 
-  const loadFocusPage = React.useCallback((before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE), [conv.id]);
+  const loadFocusPage = React.useCallback(
+    (before: number) => api.conversationHistory(conv.id, before, HISTORY_PAGE),
+    [conv.id],
+  );
   const mergeFocusPage = React.useCallback((page: { items: Activity[]; hasMore: boolean }) => {
     setMessages((prev) => mergeActivities(page.items, prev));
     earliestRef.current = page.items[0]?.seq ?? earliestRef.current;
     hasMoreRef.current = page.hasMore;
     setHasMore(page.hasMore);
   }, []);
-  const focusHistory = useApprovalHistory(approvalFocus.state?.source, historyLoaded, messages, loadFocusPage, mergeFocusPage);
+  const focusHistory = useApprovalHistory(
+    approvalFocus.state?.source,
+    historyLoaded,
+    messages,
+    loadFocusPage,
+    mergeFocusPage,
+  );
 
   // ---- transcript auto-scroll (open → bottom; stick to bottom unless scrolled up) ----
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -1052,10 +940,9 @@ function ChatView({
 
       <ApprovalExecutionFocus focus={approvalFocus} history={focusHistory} />
 
-      {/* 归属绑定：项目 + 关联任务 */}
+      {/* 归属绑定：关联任务（项目随任务自动对齐） */}
       <div className="flex flex-wrap items-center gap-x-3 border-b px-4 pb-1">
-        <ProjectRow projectId={conv.project_id ?? null} onChange={changeProject} />
-        <TaskRow taskId={conv.task_id ?? null} taskScope={conv.project_id ?? null} onChange={changeTask} />
+        <TaskRow taskId={conv.task_id ?? null} onChange={changeTask} />
       </div>
 
       {/* messages */}
@@ -1070,7 +957,13 @@ function ChatView({
               {hasMore && (
                 <div className="pb-2 text-center text-[11px] text-muted-foreground/70">向上滚动加载更早的消息…</div>
               )}
-              <Transcript activity={messages} live={running} chat fetchDetail={fetchDetail} focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined} />
+              <Transcript
+                activity={messages}
+                live={running}
+                chat
+                fetchDetail={fetchDetail}
+                focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined}
+              />
             </>
           )}
         </div>
@@ -1316,15 +1209,18 @@ export default function ChatPage() {
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
   const [sourceRequested, setSourceRequested] = React.useState(false);
   const [convsLoaded, setConvsLoaded] = React.useState(false);
-  const selectConversation = React.useCallback((id: number | null) => {
-    if (id !== selectedId) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("approval");
-      setSourceRequested(false);
-      window.history.replaceState(null, "", url);
-    }
-    setSelectedId(id);
-  }, [selectedId]);
+  const selectConversation = React.useCallback(
+    (id: number | null) => {
+      if (id !== selectedId) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("approval");
+        setSourceRequested(false);
+        window.history.replaceState(null, "", url);
+      }
+      setSelectedId(id);
+    },
+    [selectedId],
+  );
 
   const [renamingId, setRenamingId] = React.useState<number | null>(null);
   const [renameText, setRenameText] = React.useState("");
@@ -1351,7 +1247,10 @@ export default function ChatPage() {
     const seq = ++conversationListSeq.current;
     try {
       const items = await api.conversations();
-      if (seq === conversationListSeq.current) { setConvs(items); setConvsLoaded(true); }
+      if (seq === conversationListSeq.current) {
+        setConvs(items);
+        setConvsLoaded(true);
+      }
     } catch {
       // Preserve the selected transcript and list on a transient poll failure.
     }
@@ -1441,6 +1340,8 @@ export default function ChatPage() {
 
   const selected = React.useMemo(() => convs.find((c) => c.id === selectedId) ?? null, [convs, selectedId]);
   const agentByKey = React.useMemo(() => new Map(agents.map((agent) => [agent.key, agent])), [agents]);
+  // 口径修订（2026-11-04）：对话只绑任务，项目经任务传递；切项目不影响对话页，
+  // 会话列表恒为全局（只按 Agent 过滤）。
   const filteredConversations = React.useMemo(
     () => (agentFilter === null ? convs : convs.filter((conversation) => conversation.agent_key === agentFilter)),
     [convs, agentFilter],

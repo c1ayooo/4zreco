@@ -153,9 +153,7 @@ export default function ProxyPoolPage() {
     try {
       const res = await api.proxyPoolBulk({ text: bulkText, mode: bulkMode });
       const bad = res.invalid?.length ?? 0;
-      toast.success(
-        `导入完成：新增 ${res.added}、更新 ${res.updated}` + (bad ? `，${bad} 行无效` : ""),
-      );
+      toast.success(`导入完成：新增 ${res.added}、更新 ${res.updated}` + (bad ? `，${bad} 行无效` : ""));
       setBulkOpen(false);
       setBulkText("");
       load();
@@ -181,11 +179,7 @@ export default function ProxyPoolPage() {
           <Badge variant={entries.length > 0 ? "default" : "secondary"}>
             {entries.length > 0 ? `${entries.length} 个上游` : "未启用(直连/全局代理)"}
           </Badge>
-          {deadURLs.size > 0 && (
-            <Badge variant="destructive">
-              {deadURLs.size} 个不可用
-            </Badge>
-          )}
+          {deadURLs.size > 0 && <Badge variant="destructive">{deadURLs.size} 个不可用</Badge>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
@@ -199,9 +193,8 @@ export default function ProxyPoolPage() {
               <DialogHeader>
                 <DialogTitle>批量导入代理</DialogTitle>
                 <DialogDescription>
-                  一行一个。自动识别 <code>1.2.3.4:8080</code>、
-                  <code>http://…</code>、<code>socks5://user:pass@…</code>、
-                  <code>1.2.3.4:8080:user:pass</code>；<code>#</code> 开头是注释；
+                  一行一个。自动识别 <code>1.2.3.4:8080</code>、<code>http://…</code>、<code>socks5://user:pass@…</code>
+                  、<code>1.2.3.4:8080:user:pass</code>；<code>#</code> 开头是注释；
                   <code>名字 | 地址</code> 可指定名称。省略协议按 http 处理。
                 </DialogDescription>
               </DialogHeader>
@@ -210,14 +203,13 @@ export default function ProxyPoolPage() {
                 onChange={(e) => setBulkText(e.target.value)}
                 rows={12}
                 className="font-mono text-xs"
-                placeholder={"# 名称 | 地址\nHK-01 | 1.2.3.4:8080\nsocks5://user:pass@5.6.7.8:1080\n10.0.0.1:3128:user:pass"}
+                placeholder={
+                  "# 名称 | 地址\nHK-01 | 1.2.3.4:8080\nsocks5://user:pass@5.6.7.8:1080\n10.0.0.1:3128:user:pass"
+                }
               />
               <div className="flex items-center gap-3">
                 <Label className="text-xs">导入方式</Label>
-                <Select
-                  value={bulkMode}
-                  onValueChange={(v) => setBulkMode(v as "append" | "replace")}
-                >
+                <Select value={bulkMode} onValueChange={(v) => setBulkMode(v as "append" | "replace")}>
                   <SelectTrigger className="w-40">
                     <SelectValue />
                   </SelectTrigger>
@@ -250,7 +242,7 @@ export default function ProxyPoolPage() {
       </div>
 
       {!capturing && (
-        <p className="text-sm text-amber-500">
+        <p className="text-sm text-warning">
           提示:流量捕获未开启时代理池不生效(worker 流量需经捕获代理 :8788 才走出口轮换)。
         </p>
       )}
@@ -272,8 +264,8 @@ export default function ProxyPoolPage() {
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            连败 5 次自动熔断 10 分钟;池非空时优先于「全局出口代理」。
-            「首次随机」= 同一目标第一次随机选一个出口并固定，该出口挂掉后自动换。
+            连败 5 次自动熔断 10 分钟;池非空时优先于「全局出口代理」。 「首次随机」=
+            同一目标第一次随机选一个出口并固定，该出口挂掉后自动换。
           </p>
         </CardContent>
       </Card>
@@ -344,7 +336,7 @@ export default function ProxyPoolPage() {
                       <td className="py-2 pr-4 font-mono text-xs">{r.url}</td>
                       <td className="py-2 pr-4">
                         {r.ok ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                          <span className="inline-flex items-center gap-1 text-success">
                             <CheckCircle2Icon className="size-4" /> 可用
                           </span>
                         ) : (
@@ -380,8 +372,7 @@ export default function ProxyPoolPage() {
         <CardContent className="space-y-2">
           {entries.length === 0 && (
             <p className="py-3 text-sm text-muted-foreground">
-              暂无条目。用「批量导入」一次贴入整份代理列表，或点「添加」逐条录入
-              （http/https/socks5，支持 user:pass）。
+              暂无条目。用「批量导入」一次贴入整份代理列表，或点「添加」逐条录入 （http/https/socks5，支持 user:pass）。
             </p>
           )}
           {entries.map((e, i) => {
@@ -424,11 +415,7 @@ export default function ProxyPoolPage() {
                     可用
                   </Badge>
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setEntries((p) => p.filter((_, j) => j !== i))}
-                >
+                <Button variant="ghost" size="icon" onClick={() => setEntries((p) => p.filter((_, j) => j !== i))}>
                   <Trash2Icon className="size-4" />
                 </Button>
               </div>

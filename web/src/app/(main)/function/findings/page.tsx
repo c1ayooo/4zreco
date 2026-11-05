@@ -752,12 +752,12 @@ export default function FindingsPage() {
   }
 
   const statCards = [
-    { label: "发现总数", value: stats.total, icon: BugIcon },
-    { label: "待处理", value: stats.pending, tone: "text-amber-500", icon: ClockIcon },
-    { label: "严重", value: stats.critical, tone: "text-rose-600", icon: ShieldAlertIcon },
-    { label: "高危", value: stats.high, tone: "text-red-500", icon: TriangleAlertIcon },
-    { label: "中危", value: stats.medium, tone: "text-amber-500", icon: TriangleAlertIcon },
-    { label: "低危", value: stats.low, tone: "text-slate-500", icon: InfoIcon },
+    { label: "发现总数", value: stats.total },
+    { label: "待处理", value: stats.pending, tone: "text-warning" },
+    { label: "严重", value: stats.critical, tone: "text-destructive" },
+    { label: "高危", value: stats.high, tone: "text-destructive" },
+    { label: "中危", value: stats.medium, tone: "text-warning" },
+    { label: "低危", value: stats.low, tone: "text-muted-foreground" },
   ];
 
   // 导出弹窗里「当前筛选」的条数:两个视图的筛选一致,只是统计口径来源不同。
@@ -817,10 +817,7 @@ export default function FindingsPage() {
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-semibold text-xl tracking-tight">发现</h1>
-          <p className="text-muted-foreground text-sm">跨任务漏洞汇总</p>
-        </div>
+        <h1 className="font-semibold text-2xl tracking-tight">发现</h1>
         <Tabs value={view} onValueChange={(v) => setView(v as FindingView)}>
           <TabsList>
             <TabsTrigger value="flat">全部发现</TabsTrigger>
@@ -831,20 +828,14 @@ export default function FindingsPage() {
       </div>
       <div className="flex flex-1 flex-col gap-4 md:gap-6">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          {statCards.map((stat) => {
-            const StatIcon = stat.icon;
-            return (
-              <Card key={stat.label} className="gap-1 py-4">
-                <CardHeader className="px-4">
-                  <CardDescription>{stat.label}</CardDescription>
-                  <CardTitle className={cn("flex items-center gap-2 text-2xl tabular-nums", stat.tone)}>
-                    <StatIcon className="size-5" aria-hidden="true" />
-                    {stat.value}
-                  </CardTitle>
-                </CardHeader>
-              </Card>
-            );
-          })}
+          {statCards.map((stat) => (
+            <Card key={stat.label} className="gap-1 py-4">
+              <CardHeader className="px-4">
+                <CardDescription>{stat.label}</CardDescription>
+                <CardTitle className={cn("text-2xl tabular-nums", stat.tone)}>{stat.value}</CardTitle>
+              </CardHeader>
+            </Card>
+          ))}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

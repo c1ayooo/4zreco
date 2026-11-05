@@ -43,13 +43,7 @@ function KindBadge({ kind }: { kind: AssetInterceptKind }) {
   return (
     <Badge
       variant="outline"
-      className={
-        cidr
-          ? "border-sky-400 text-sky-600"
-          : fuzzy
-            ? "border-amber-400 text-amber-600"
-            : "border-emerald-400 text-emerald-600"
-      }
+      className={cidr ? "border-info text-info" : fuzzy ? "border-warning text-warning" : "border-success text-success"}
     >
       {KIND_LABEL[kind]}
     </Badge>
@@ -59,7 +53,7 @@ function KindBadge({ kind }: { kind: AssetInterceptKind }) {
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <Label className="font-medium text-muted-foreground text-xs uppercase tracking-wide">{label}</Label>
+      <Label className="font-medium text-muted-foreground text-xs">{label}</Label>
       {children}
       {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </div>
@@ -286,9 +280,7 @@ export default function AssetInterceptPage() {
                 <SelectContent>
                   {KIND_GROUPS.map((g) => (
                     <React.Fragment key={g}>
-                      <div className="px-2 py-1 font-semibold text-[10px] text-muted-foreground uppercase tracking-wider">
-                        {g}
-                      </div>
+                      <div className="px-2 py-1 font-semibold text-xs text-muted-foreground">{g}</div>
                       {KIND_OPTIONS.filter((o) => o.group === g).map((o) => (
                         <SelectItem key={o.value} value={o.value}>
                           {o.label}

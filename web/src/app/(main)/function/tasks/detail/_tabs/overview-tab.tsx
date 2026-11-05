@@ -10,10 +10,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ClockIcon,
+  CoinsIcon,
   ImageIcon,
   ImageOffIcon,
   KeyRoundIcon,
-  CoinsIcon,
   ListChecksIcon,
   PencilIcon,
   PlusIcon,
@@ -24,6 +24,7 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -34,19 +35,18 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
-import { toast } from "sonner";
 import type {
-  AuthCheckResult,
   AssetInterceptKind,
   AssetInterceptRule,
+  AuthCheckResult,
   Finding,
   ModelTokenStat,
   Stats,
   Task,
-  TaskConstraint,
-  TaskGoal,
   TaskArtifact,
   TaskAuthConfigView,
+  TaskConstraint,
+  TaskGoal,
   TaskNode,
   TaskScopeRow,
 } from "@/lib/types";
@@ -465,7 +465,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       {/* 证据附件（v0.4.9）：截图缩略图 + 数据样本/日志列表 + 证据包下载。 */}
       <TaskArtifactsCard taskId={taskId} />
       {/* 目标管理：查看/新增/修改/删除本任务的探索目标。新增与修改会通知规划者并复活任务，
-          删除仅通知规划者（不复活）。目标 = 最终可交付/可核验的结果，不是攻击步骤或侦察动作。 */}
+ 删除仅通知规划者（不复活）。目标 = 最终可交付/可核验的结果，不是攻击步骤或侦察动作。 */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -501,7 +501,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             <Button size="sm" variant="outline" disabled={goalBusy || !goalText.trim()} onClick={() => void addGoal()}>
               <PlusIcon className="size-3.5" /> 添加
             </Button>
-            {goalErr && <span className="text-red-500 text-xs">{goalErr}</span>}
+            {goalErr && <span className="text-destructive text-xs">{goalErr}</span>}
           </div>
           {/* 目标列表 */}
           {goals.length > 0 ? (
@@ -538,7 +538,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       disabled={goalBusy || !editText.trim()}
                       onClick={() => void saveEditGoal(g)}
                     >
-                      <CheckIcon className="size-3.5 text-emerald-500" />
+                      <CheckIcon className="size-3.5 text-success" />
                     </Button>
                     <Button
                       size="sm"
@@ -575,7 +575,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       disabled={goalBusy}
                       onClick={() => void removeGoal(g)}
                     >
-                      <Trash2Icon className="size-3.5 text-red-500" />
+                      <Trash2Icon className="size-3.5 text-destructive" />
                     </Button>
                   </div>
                 ),
@@ -587,12 +587,12 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         </CardContent>
       </Card>
       {/* 操作约束管理：allow=允许 / deny=禁止。约束会在下一轮规划时注入 planner/worker 的系统
-          提示以框定探索边界（注入范围可在 系统设置 里按 planner/worker 开关）。改动不即时打断，
-          下一轮规划自然读到。 */}
+ 提示以框定探索边界（注入范围可在 系统设置 里按 planner/worker 开关）。改动不即时打断，
+ 下一轮规划自然读到。 */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ShieldAlertIcon className="size-4 text-amber-500" /> 操作约束
+            <ShieldAlertIcon className="size-4 text-warning" /> 操作约束
             <span className="font-normal text-muted-foreground text-xs">
               （框定 planner/worker 的探索边界，共 {constraints.length} 条；改动下一轮规划生效）
             </span>
@@ -627,7 +627,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             >
               <PlusIcon className="size-3.5" /> 添加
             </Button>
-            {conErr && <span className="text-red-500 text-xs">{conErr}</span>}
+            {conErr && <span className="text-destructive text-xs">{conErr}</span>}
           </div>
           {/* 约束列表 */}
           {constraints.length > 0 ? (
@@ -661,7 +661,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       disabled={conBusy || !editConText.trim()}
                       onClick={() => void saveEditConstraint(c)}
                     >
-                      <CheckIcon className="size-3.5 text-emerald-500" />
+                      <CheckIcon className="size-3.5 text-success" />
                     </Button>
                     <Button
                       size="sm"
@@ -677,9 +677,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                   <div key={c.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
                     <span
                       className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
-                        c.kind === "allow"
-                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                          : "bg-red-500/15 text-red-600 dark:text-red-400"
+                        c.kind === "allow" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
                       }`}
                     >
                       {c.kind === "allow" ? "允许" : "禁止"}
@@ -701,7 +699,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       disabled={conBusy}
                       onClick={() => void removeConstraint(c)}
                     >
-                      <Trash2Icon className="size-3.5 text-red-500" />
+                      <Trash2Icon className="size-3.5 text-destructive" />
                     </Button>
                   </div>
                 ),
@@ -719,7 +717,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <TargetIcon className="size-4 text-emerald-500" /> 资产测试覆盖度
+              <TargetIcon className="size-4 text-success" /> 资产测试覆盖度
               <span className="font-normal text-muted-foreground text-xs">（粗估，仅供参考）</span>
             </CardTitle>
           </CardHeader>
@@ -752,7 +750,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <CoinsIcon className="size-4 text-amber-500" /> LLM Token 用量
+            <CoinsIcon className="size-4 text-warning" /> LLM Token 用量
             <span className="font-normal text-muted-foreground text-xs">
               （按模型统计{tokenTotals.calls > 0 ? `，共 ${tokenTotals.calls} 次调用` : ""}）
             </span>
@@ -777,7 +775,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 </span>
                 <span className="tabular-nums">
                   <span className="text-muted-foreground">缓存命中率 </span>
-                  <span className="font-semibold text-emerald-500">
+                  <span className="font-semibold text-success">
                     {cacheHitRate(tokenTotals.cacheRead, tokenTotals.input)}
                   </span>
                 </span>
@@ -805,7 +803,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                         <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.input_tokens)}</td>
                         <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.output_tokens)}</td>
                         <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.cache_read_tokens)}</td>
-                        <td className="py-1.5 text-right text-emerald-500 tabular-nums">
+                        <td className="py-1.5 text-right text-success tabular-nums">
                           {cacheHitRate(m.cache_read_tokens, m.input_tokens)}
                         </td>
                       </tr>
@@ -823,7 +821,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ShieldCheckIcon className="size-4 text-emerald-500" /> 测试范围
+            <ShieldCheckIcon className="size-4 text-success" /> 测试范围
             <span className="font-normal text-muted-foreground text-xs">
               （覆盖度分母 + 授权边界，共 {scope.length} 条）
             </span>
@@ -873,7 +871,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             >
               <PlusIcon className="size-3.5" /> 添加
             </Button>
-            {scopeErr && <span className="text-red-500 text-xs">{scopeErr}</span>}
+            {scopeErr && <span className="text-destructive text-xs">{scopeErr}</span>}
           </div>
           {/* 范围列表 */}
           {scope.length > 0 ? (
@@ -892,7 +890,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       className="h-6 shrink-0 px-1.5"
                       onClick={() => void removeScope(row)}
                     >
-                      <Trash2Icon className="size-3.5 text-red-500" />
+                      <Trash2Icon className="size-3.5 text-destructive" />
                     </Button>
                   ) : (
                     <span className="shrink-0 text-muted-foreground text-xs">继承</span>
@@ -909,7 +907,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ActivityIcon className="size-4 text-blue-500" /> 心跳
+            <ActivityIcon className="size-4 text-info" /> 心跳
           </CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -973,16 +971,16 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <AlertTriangleIcon className="size-4 text-amber-500" /> 需要关注
+              <AlertTriangleIcon className="size-4 text-warning" /> 需要关注
             </CardTitle>
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-3 text-sm">
             <div>
-              <div className="font-semibold text-2xl text-red-600 tabular-nums">{taskFindings.length}</div>
+              <div className="font-semibold text-2xl text-destructive tabular-nums">{taskFindings.length}</div>
               <div className="text-muted-foreground text-xs">确认漏洞</div>
             </div>
             <div>
-              <div className="font-semibold text-2xl text-blue-600 tabular-nums">{running.length}</div>
+              <div className="font-semibold text-2xl text-info tabular-nums">{running.length}</div>
               <div className="text-muted-foreground text-xs">执行中</div>
             </div>
             <div>
@@ -990,7 +988,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               <div className="text-muted-foreground text-xs">frontier 待领</div>
             </div>
             <div>
-              <div className="font-semibold text-2xl text-red-600 tabular-nums">{blocked.length}</div>
+              <div className="font-semibold text-2xl text-destructive tabular-nums">{blocked.length}</div>
               <div className="text-muted-foreground text-xs">被拦意图</div>
             </div>
           </CardContent>
@@ -999,7 +997,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <BugIcon className="size-4 text-red-500" /> 最近发现
+              <BugIcon className="size-4 text-destructive" /> 最近发现
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
@@ -1015,12 +1013,12 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       </div>
 
       {/* Blocked intents — 出错/被拦(如 LLM 网络问题)的意图，可一键重跑：置回 open，
-          worker 会重新认领、从头再跑（已写回图谱的数据保留）；任务若已终态/暂停会自动复活。 */}
+ worker 会重新认领、从头再跑（已写回图谱的数据保留）；任务若已终态/暂停会自动复活。 */}
       {blocked.length > 0 && (
-        <Card className="border-red-500/30">
+        <Card className="border-destructive/30">
           <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle className="flex items-center gap-2 text-sm">
-              <AlertTriangleIcon className="size-4 text-red-500" /> 被拦/出错意图
+              <AlertTriangleIcon className="size-4 text-destructive" /> 被拦/出错意图
               <span className="font-normal text-muted-foreground text-xs">（共 {blocked.length} 条，可重跑）</span>
             </CardTitle>
             <Button size="sm" variant="outline" disabled={rerunning.has("__all__")} onClick={() => void rerunAll()}>
@@ -1182,7 +1180,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <ShieldCheckIcon className="size-4 text-sky-500" /> 任务级资产拦截 / 允许
+          <ShieldCheckIcon className="size-4 text-info" /> 任务级资产拦截 / 允许
           <span className="font-normal text-muted-foreground text-xs">
             （仅本任务生效，不进全局；先拦截后允许，共 {rules.length} 条）
           </span>
@@ -1222,7 +1220,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
           <Button size="sm" variant="outline" disabled={busy || !newPattern.trim()} onClick={() => void add()}>
             <PlusIcon className="size-3.5" /> 添加
           </Button>
-          {err && <span className="text-red-500 text-xs">{err}</span>}
+          {err && <span className="text-destructive text-xs">{err}</span>}
         </div>
         {/* 规则列表 */}
         {rules.length > 0 ? (
@@ -1274,7 +1272,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
                     disabled={busy || !editPattern.trim()}
                     onClick={() => void saveEdit(r)}
                   >
-                    <CheckIcon className="size-3.5 text-emerald-500" />
+                    <CheckIcon className="size-3.5 text-success" />
                   </Button>
                   <Button
                     size="sm"
@@ -1290,9 +1288,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
                 <div key={r.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
-                      r.action === "allow"
-                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                        : "bg-red-500/15 text-red-600 dark:text-red-400"
+                      r.action === "allow" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
                     }`}
                   >
                     {r.action === "allow" ? "允许" : "拦截"}
@@ -1319,7 +1315,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
                     disabled={busy}
                     onClick={() => void remove(r)}
                   >
-                    <Trash2Icon className="size-3.5 text-red-500" />
+                    <Trash2Icon className="size-3.5 text-destructive" />
                   </Button>
                 </div>
               ),
@@ -1334,7 +1330,6 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
     </Card>
   );
 }
-
 
 // TaskAuthCard 显示任务级登录凭据摘要，并提供一次真实登录自检（后端发真实请求，
 // 回显只含状态码/命中说明，不含密码）。未配置凭据时整卡不渲染。
@@ -1382,7 +1377,7 @@ function TaskAuthCard({ taskId }: { taskId: string }) {
       </CardHeader>
       {result && (
         <CardContent className="text-sm">
-          <span className={result.ok ? "text-emerald-600" : "text-red-600"}>
+          <span className={result.ok ? "text-success" : "text-destructive"}>
             {result.ok ? "登录成功" : "登录未通过"}
           </span>
           <span className="text-muted-foreground">
@@ -1394,7 +1389,6 @@ function TaskAuthCard({ taskId }: { taskId: string }) {
     </Card>
   );
 }
-
 
 // TaskArtifactsCard 任务证据附件（v0.4.9 起；v0.4.15 交互重做）：
 // 默认折叠；缩略图走服务端 480px 缩略图（一次拉几十张 3MB 原图会导致部分
@@ -1491,7 +1485,8 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
     if (ext === "pdf" || a.kind === "pdf") return "PDF";
     return a.kind;
   };
-  const fmtSize = (n: number) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
+  const fmtSize = (n: number) =>
+    n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
   const thumbUrl = (id: number) => `${api.artifactUrl(taskId, id)}?thumb=1`;
   const fullUrl = (id: number) => api.artifactUrl(taskId, id);
   const downloadUrl = (id: number) => `${api.artifactUrl(taskId, id)}?download=1`;
@@ -1527,8 +1522,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
         : filter === "file"
           ? files.map((a) => a.id)
           : list.map((a) => a.id);
-  const selectVisible = () =>
-    setSelected((cur) => Array.from(new Set([...cur, ...visibleIDs])));
+  const selectVisible = () => setSelected((cur) => Array.from(new Set([...cur, ...visibleIDs])));
   return (
     <>
       <Card>
@@ -1559,7 +1553,8 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
           <CardContent className="flex flex-col gap-4">
             {list.length === 0 && (
               <p className="text-muted-foreground text-sm">
-                暂无证据附件。可点右上「扫描补登记」把历史任务已抓到的图片纳入证据库；新任务会由 worker 在取证时自动登记。
+                暂无证据附件。可点右上「扫描补登记」把历史任务已抓到的图片纳入证据库；新任务会由 worker
+                在取证时自动登记。
               </p>
             )}
             {selected.length > 0 && (
@@ -1731,7 +1726,9 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                       checked={selected.includes(a.id)}
                       onChange={() => toggleSelected(a.id)}
                     />
-                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">{a.kind}</span>
+                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
+                      {a.kind}
+                    </span>
                     <span className="min-w-0 flex-1 truncate">{a.name}</span>
                     {a.finding_id ? (
                       <span className="shrink-0 text-muted-foreground text-xs">#{a.finding_id}</span>

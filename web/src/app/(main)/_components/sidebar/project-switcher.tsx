@@ -68,7 +68,9 @@ export function ProjectSwitcher() {
                 <DropdownMenuItem key={p.id} onClick={() => switchTo(p.id)} className="gap-2">
                   <span className="min-w-0 flex-1 truncate">
                     {p.name}
-                    {p.status === "archived" ? <span className="text-muted-foreground ml-1 text-[11px]">已归档</span> : null}
+                    {p.status === "archived" ? (
+                      <span className="text-muted-foreground ml-1 text-[11px]">已归档</span>
+                    ) : null}
                   </span>
                   <span className="text-muted-foreground shrink-0 text-[11px] tabular-nums">{p.task_count} 任务</span>
                   {p.id === projectId ? <CheckIcon className="text-primary size-4 shrink-0" /> : null}

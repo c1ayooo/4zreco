@@ -1,24 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { toast } from "sonner";
-import { PlusIcon, RefreshCwIcon, ServerIcon, Trash2Icon } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
+import { PlusIcon, RefreshCwIcon, ServerIcon, Trash2Icon } from "lucide-react";
+import { toast } from "sonner";
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,9 +15,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
-import type { MCPServer, MCPTool, Agent } from "@/lib/types";
+import type { Agent, MCPServer, MCPTool } from "@/lib/types";
 
 type Transport = "stdio" | "http" | "sse";
 type FormState = {
@@ -71,7 +66,10 @@ export default function MCPPage() {
   const [refreshing, setRefreshing] = React.useState(false);
 
   const load = React.useCallback(() => {
-    api.agents().then(setAgents).catch(() => {});
+    api
+      .agents()
+      .then(setAgents)
+      .catch(() => {});
     api
       .mcpServers()
       .then((ss) => {
@@ -317,10 +315,7 @@ export default function MCPPage() {
               onChange={(e) => setF({ url: e.target.value })}
             />
             <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={form.insecure}
-                onCheckedChange={(v) => setF({ insecure: v === true })}
-              />
+              <Checkbox checked={form.insecure} onCheckedChange={(v) => setF({ insecure: v === true })} />
               跳过 TLS 证书校验（自签证书）
             </label>
           </div>
@@ -334,9 +329,7 @@ export default function MCPPage() {
           <Textarea
             id="m-env"
             className="font-mono"
-            placeholder={
-              form.transport !== "stdio" ? "Authorization=Bearer xxxx" : "API_KEY=xxxx\nFOO=bar"
-            }
+            placeholder={form.transport !== "stdio" ? "Authorization=Bearer xxxx" : "API_KEY=xxxx\nFOO=bar"}
             value={form.env}
             onChange={(e) => setF({ env: e.target.value })}
           />
@@ -364,9 +357,7 @@ export default function MCPPage() {
               <div key={t.name} className="py-2.5">
                 <code className="font-mono text-sm">{t.name}</code>
                 {t.description && (
-                  <p className="mt-0.5 text-muted-foreground text-xs leading-relaxed">
-                    {t.description}
-                  </p>
+                  <p className="mt-0.5 text-muted-foreground text-xs leading-relaxed">{t.description}</p>
                 )}
               </div>
             ))}
@@ -378,10 +369,7 @@ export default function MCPPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
-      <div>
-        <h1 className="font-semibold text-xl tracking-tight">MCP</h1>
-        <p className="text-muted-foreground text-sm">外部 MCP 工具服务器 · 按 Agent 授权可见</p>
-      </div>
+      <h1 className="font-semibold text-2xl tracking-tight">MCP</h1>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <button
@@ -407,17 +395,8 @@ export default function MCPPage() {
                   {s.transport}
                 </Badge>
                 <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                  <Switch
-                    checked={s.enabled}
-                    onCheckedChange={() => toggleEnabled(s)}
-                    aria-label="启用"
-                  />
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    aria-label="删除"
-                    onClick={() => setPendingDelete(s)}
-                  >
+                  <Switch checked={s.enabled} onCheckedChange={() => toggleEnabled(s)} aria-label="启用" />
+                  <Button size="icon" variant="outline" aria-label="删除" onClick={() => setPendingDelete(s)}>
                     <Trash2Icon className="text-destructive" />
                   </Button>
                 </div>
@@ -447,15 +426,10 @@ export default function MCPPage() {
       </div>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent
-          side="right"
-          className="w-full data-[side=right]:sm:max-w-lg"
-        >
+        <SheetContent side="right" className="w-full data-[side=right]:sm:max-w-lg">
           <SheetHeader>
             <SheetTitle>{editing ? editing.name : "添加 MCP 服务器"}</SheetTitle>
-            <SheetDescription>
-              stdio（本地起进程）或 http（远程 Streamable HTTP）
-            </SheetDescription>
+            <SheetDescription>stdio（本地起进程）或 http（远程 Streamable HTTP）</SheetDescription>
           </SheetHeader>
 
           {editing ? (
@@ -466,9 +440,7 @@ export default function MCPPage() {
             >
               <TabsList>
                 <TabsTrigger value="config">配置</TabsTrigger>
-                <TabsTrigger value="tools">
-                  工具列表{tools.length ? `（${tools.length}）` : ""}
-                </TabsTrigger>
+                <TabsTrigger value="tools">工具列表{tools.length ? `（${tools.length}）` : ""}</TabsTrigger>
               </TabsList>
               <TabsContent value="config" className="min-h-0 flex-1 overflow-y-auto">
                 {renderForm()}
@@ -496,7 +468,12 @@ export default function MCPPage() {
       </Sheet>
 
       {/* ── 删除二次确认 ── */}
-      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => {
+          if (!o) setPendingDelete(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>删除 MCP 服务器「{pendingDelete?.name}」？</AlertDialogTitle>
@@ -508,7 +485,10 @@ export default function MCPPage() {
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
             <AlertDialogAction
               disabled={deleting}
-              onClick={(e) => { e.preventDefault(); if (pendingDelete) void removeServer(pendingDelete); }}
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingDelete) void removeServer(pendingDelete);
+              }}
             >
               {deleting ? "删除中…" : "删除"}
             </AlertDialogAction>
