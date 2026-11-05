@@ -71,6 +71,32 @@ func WithPublisher(ctx context.Context, publish Publisher) context.Context {
 	return context.WithValue(ctx, publisherKey{}, publish)
 }
 
+// WithAttempt returns a context carrying the Capture for the model calls of one
+// run — the same stamping Attach does inside its QueryDeps wrapper, exported so
+// the eino-side half of the snapshot seam (the acllm CaptureModel decorator,
+// 刀③) can read it per call. A model call whose context carries no Capture
+// passes through unsnapshotted (boundProvider's rule).
+func WithAttempt(ctx context.Context, c *Capture) context.Context {
+	return context.WithValue(ctx, attemptKey{}, c)
+}
+
+// AttemptFrom returns the Capture stamped on ctx by WithAttempt, or nil.
+func AttemptFrom(ctx context.Context) *Capture {
+	c, _ := ctx.Value(attemptKey{}).(*Capture)
+	return c
+}
+
+// NewCapture builds a standalone Capture — the eino-side seam constructor
+// (刀③): assemble one per run, stamp it onto call contexts with WithAttempt,
+// and the acllm CaptureModel decorator snapshots through it. runID 0 defaults
+// to Attach's nano-timestamp identity.
+func NewCapture(parent Parent, runID int64, publish Publisher) *Capture {
+	if runID == 0 {
+		runID = time.Now().UnixNano()
+	}
+	return &Capture{parent: parent, runID: runID, publish: publish}
+}
+
 type Capture struct {
 	mu      sync.Mutex
 	parent  Parent
@@ -104,7 +130,7 @@ func Attach(ctx context.Context, parent Parent, deps harness.QueryDeps, provider
 	return context.WithValue(ctx, captureKey{}, c), deps
 }
 
-func (c *Capture) save(req llm.CompletionRequest, model Model) {
+func (c *Capture) Save(req llm.CompletionRequest, model Model) {
 	copy, err := CloneRequest(req)
 	if err != nil {
 		return
@@ -136,7 +162,7 @@ func Finish(ctx context.Context, messages []llm.Message) {
 		prefix = append(prefix, req.Messages[0])
 	}
 	req.Messages = append(prefix, llm.MessagesForAPI(messages)...)
-	c.save(req, s.Model)
+	c.Save(req, s.Model)
 }
 
 type boundProvider struct {
@@ -158,7 +184,7 @@ func (p *boundProvider) Stream(ctx context.Context, req llm.CompletionRequest) i
 			}
 			return
 		}
-		c.save(req, p.model)
+		c.Save(req, p.model)
 		acc := llm.NewAccumulator()
 		failed := false
 		complete := false
@@ -178,7 +204,7 @@ func (p *boundProvider) Stream(ctx context.Context, req llm.CompletionRequest) i
 		if !failed && complete && ctx.Err() == nil {
 			msg := acc.Message()
 			req.Messages = llm.MessagesForAPI(append(append([]llm.Message{}, req.Messages...), msg))
-			c.save(req, p.model)
+			c.Save(req, p.model)
 		}
 	}
 }
@@ -186,12 +212,12 @@ func (p *boundProvider) Stream(ctx context.Context, req llm.CompletionRequest) i
 func (p *boundProvider) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
 	c, _ := ctx.Value(attemptKey{}).(*Capture)
 	if c != nil {
-		c.save(req, p.model)
+		c.Save(req, p.model)
 	}
 	msg, stop, usage, err := p.inner.Complete(ctx, req)
 	if c != nil && err == nil && ctx.Err() == nil {
 		req.Messages = llm.MessagesForAPI(append(append([]llm.Message{}, req.Messages...), msg))
-		c.save(req, p.model)
+		c.Save(req, p.model)
 	}
 	return msg, stop, usage, err
 }

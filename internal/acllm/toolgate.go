@@ -1,22 +1,26 @@
 // The tool gate: the eino-side execution surface for bridged tools
-// (docs/Eino深度接入方案-2026-11-05.md §3.2 模板注入 + §3.3 并发分流 + §4-P1 第 4 条).
+// (docs/Eino深度接入方案-2026-11-05.md §3.2 模板注入 + §3.3 并发分流 + §4-P1 第 4 条;
+// 刀③ 落地 guard 链 / deferred 硬门控 / PostToolUse 审计尾钩).
 //
 // ToolGate is a ChatModelAgentMiddleware whose WrapInvokableToolCall wraps every
-// kernel-managed tool call with norma execOne's ordering, up to the hooks that
-// belong to the middleware-assembly cut (guard chain / HITL / steer → tool
-// interrupt, PostToolUse audit — those land in the next cut and slot in at the
-// marked points without re-ordering anything here):
+// kernel-managed tool call with norma execOne's ordering, verbatim:
 //
+//  0. deferred 硬门控（V5 双保险的执行期那一半；schema 过滤另一半在
+//     deferredMiddleware）——锁定的 deferred 工具直呼即报错
 //  1. schema validation (unless the tool opts out via RawInput)
 //  2. permission pipeline — full norma parity (mode / rule lists / ask
 //     callback); 4zreco agents run bypass today
-//  3. [下一刀挂点] PreToolUse hooks / guard 链 / steer — ask → tool.StatefulInterrupt
+//  3. PreToolUse hooks（guard 链 egress→tarpit→规则→judge + steer drain +
+//     空转拦截 + toollog——宿主把整条包装链经 SetHooks 交进来）。本刀 ask 仍走
+//     现有 channel HandleAsk（判定函数在 internal/guard、internal/intercept，
+//     R4 红线不动）；P2 HITL 才把 ask 换成 tool.StatefulInterrupt
 //  4. ToolContext 注入（ToolUseID = adk.ToolContext.CallID）+ 并发分流
 //     (IsConcurrencySafe → toolsched) + panic-safe call
-//     [下一刀挂点] 墙钟：norma 的「仅工具受 MaxDuration」语义在工具 ctx 上落地
+//     [刀④挂点] 墙钟：norma 的「仅工具受 MaxDuration」语义在工具 ctx 上落地
 //     （见步骤 4 注释）；本刀沿用 Runner ctx 携带的 deadline（4zrec 取舍）
 //  5. capOutput（幂等，唯一收口）
-//  6. [下一刀挂点] PostToolUse 审计 / toollog
+//  6. PostToolUse hooks（guard.postToolUse 归因分类器 + toollog——同一
+//     ToolHooks seam 的 PostToolUse 半边，在结果文本定形之后）
 //  7. "(no output)" 归一 + OnResult 观测
 //
 // Like 4zrec's gateMiddleware, the returned endpoint NEVER returns a non-nil Go
@@ -41,6 +45,17 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
+// ToolHooks is the PreToolUse/PostToolUse seam the host hands to the gate —
+// structurally the norma harness.HookRunner minus Stop (the kernel has no Stop
+// hook; 方案 §3.1 — 空转续跑上移 engine，刀④). Any *hook.Registry
+// (guard.Guard.Hooks()) and the agent package's wrappers (steerHooks,
+// toolLogHooks, idleStopHooks) satisfy it, so the guard chain runs here with
+// its judgment code untouched in internal/guard (R4 红线).
+type ToolHooks interface {
+	PreToolUse(ctx context.Context, name string, input []byte) (block bool, message string, updated []byte)
+	PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool)
+}
+
 // ToolGate adapts a set of CoreTools onto an eino agent: the same list goes to
 // ToEinoTools for model binding and into the gate for execution. Not safe to
 // mutate after NewToolGate; one gate per runner run's toolset.
@@ -53,13 +68,22 @@ type ToolGate struct {
 	mode  acperm.Mode                // permission mode (zero → bypass, 4zreco 现状)
 	sched *toolScheduler
 
+	// hooks 是 PreToolUse/PostToolUse 尾钩 seam（guard 链 + steer + toollog +
+	// 归因分类器——宿主装配的整条包装链）。nil = 无钩子。
+	hooks ToolHooks
+
+	// deferred/unlock 是 V5 延迟工具的执行期硬门控输入（SetDeferred）：
+	// deferred 集合里的名字，凡 unlock 未解锁者，直呼即在步骤 0 报错。
+	deferred map[string]bool
+	unlock   *actool.UnlockSet
+
 	// Permission policy inputs (norma harness QueryInput parity): allow/deny
 	// rules consulted by the pipeline's rule stages, and the interactive
 	// approval callback consulted at the ask stage. 4zreco agents run bypass
 	// and leave all three unset today; the fields exist so a future non-bypass
 	// mode keeps norma semantics instead of silently dropping them. The ask
-	// callback here is policy-level only — the guard/intercept chain (下一刀)
-	// owns the real ask → tool.StatefulInterrupt path.
+	// callback here is policy-level only — the guard/intercept chain's real
+	// ask 走 SetHooks 注入的链内 HandleAsk（channel 语义照旧，P2 才换 Interrupt）.
 	allowed    []string
 	disallowed []string
 	ask        acperm.CanUseTool
@@ -106,6 +130,28 @@ func (g *ToolGate) SetDenyRules(rules []string) *ToolGate { g.disallowed = rules
 // kernel cut — the guard/intercept chain turns asks into tool interrupts.
 func (g *ToolGate) SetAsk(ask acperm.CanUseTool) *ToolGate { g.ask = ask; return g }
 
+// SetHooks installs the PreToolUse/PostToolUse seam: the guard chain
+// (egress→tarpit→规则→judge, ask 走 HandleAsk channel), the engine's steer
+// wrapper, toollog and the attribution classifier all ride it — pass the same
+// composed runner the norma path built (agent 包的 wrapToolLog/steerHooks 链)。
+// nil = no hooks.
+func (g *ToolGate) SetHooks(hooks ToolHooks) *ToolGate { g.hooks = hooks; return g }
+
+// SetDeferred arms the V5 execution-time hard gate: names in deferred whose
+// unlock set does not contain them error out at execOne step 0 ("load the
+// skill that provides it first", 4zrec wording). The schema-withholding half
+// lives in deferredMiddleware (middleware.go). unlock may be nil (everything
+// in deferred stays locked).
+func (g *ToolGate) SetDeferred(deferred []string, unlock *actool.UnlockSet) *ToolGate {
+	set := make(map[string]bool, len(deferred))
+	for _, n := range deferred {
+		set[n] = true
+	}
+	g.deferred = set
+	g.unlock = unlock
+	return g
+}
+
 // Managed returns the managed tools in registration order — the exact list
 // that fed NewToolGate (and ToEinoTools for binding). The gate keeps the slice
 // so the order cannot drift (toolset_snapshot_hash stability, 方案 §4-P1 第 8 条).
@@ -136,10 +182,18 @@ func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.Invok
 }
 
 // execOne resolves and runs a single tool call — norma harness execOne
-// ordering, up to the hooks marked for the middleware-assembly cut. It never
-// panics; failures become error results.
+// ordering, verbatim. It never panics; failures become error results.
 func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID, args string) (text string, isErr bool, extras []llm.Message) {
 	fail := func(msg string) (string, bool, []llm.Message) { return msg, true, nil }
+
+	// 0. Deferred hard gate (V5 双保险): a locked deferred tool is not callable
+	//    directly — the model must go through ExecuteExtraTool after its skill
+	//    loaded (the access tool runs the same check internally). The schema
+	//    filter in deferredMiddleware keeps the name out of the tool list; this
+	//    gate closes the hallucinated-direct-call hole.
+	if g.deferred[t.Name()] && g.unlock != nil && !g.unlock.Has(t.Name()) {
+		return fail("Error: tool " + t.Name() + " is not unlocked in this session — load the skill that provides it first.")
+	}
 
 	input := ArgsFromEino(args)
 
@@ -180,18 +234,30 @@ func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID, args 
 		input = dec.UpdatedInput
 	}
 
-	// 3. [下一刀挂点] PreToolUse hooks / guard 链 / steer。挂点在此、并发之前
-	//    （norma execOne 顺序）：ask → tool.StatefulInterrupt（P2 HITL）。
+	// 3. PreToolUse hooks — the guard chain blocking point (norma
+	//    harness/tools.go:78): egress→tarpit→规则→judge via the guard's hook
+	//    registry, steer drain and 空转拦截 via the engine's wrapper — whatever
+	//    composed chain the host passed to SetHooks. First block halts; the
+	//    message becomes the tool error result. 本刀 ask 在链内走现有 channel
+	//    HandleAsk（分钟级阻塞照旧）；P2 HITL 才把 ask 换成
+	//    tool.StatefulInterrupt（挂点已由 4zrec hitl.go 验证，此处先不动）。
+	if g.hooks != nil {
+		if block, msg, updated := g.hooks.PreToolUse(ctx, t.Name(), input); block {
+			return fail("Blocked by hook: " + msg)
+		} else if len(updated) > 0 {
+			input = updated
+		}
+	}
 
 	// 4. Execute under the concurrency discipline: safe tools run alongside
 	//    each other, a non-safe tool requires exclusive access (norma FIFO +
 	//    exclusivity), bounded by MaxConcurrency.
 	//
-	//    墙钟语义（刀③勿漏）：norma 的 loop.toolCtx（harness/query.go）把 run 的
+	//    墙钟语义（刀④勿漏）：norma 的 loop.toolCtx（harness/query.go）把 run 的
 	//    MaxDuration 只压在工具执行上——超预算的工具被 mid-flight 打断进收尾，
-	//    模型流不被切。本刀在裸 ctx 上执行：deadline 由刀③/④ 的 runCtx 装配
+	//    模型流不被切。本刀在裸 ctx 上执行：deadline 由刀④ 的 runCtx 装配
 	//    经 Runner 传入（4zrec Session.Prompt 同款：WithTimeout(MaxDuration) 后
-	//    交给 runner，模型与工具同受墙钟——4zrec 已接受的取舍）。若刀③要还原
+	//    交给 runner，模型与工具同受墙钟——4zrec 已接受的取舍）。若刀④要还原
 	//    norma 的「仅工具受墙钟」，在这里从 ctx 派生工具专用 ctx 换给 Call。
 	tc := g.tpl.toolContext(callID)
 	ctx = WithToolContext(ctx, tc)
@@ -203,13 +269,25 @@ func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID, args 
 		res = actool.Errorf("Error: " + callErr.Error())
 	}
 
-	// 5. Global output cap at the single post-tool choke point + flatten to
-	//    the plain-string tool_result (idempotent — tools that captured
-	//    themselves are left alone; empty results become "(no output)", norma
-	//    execOne's normalization).
+	// 5. Global output cap at the single post-tool choke point (idempotent —
+	//    tools that captured themselves are left alone; CaptureOnce marker,
+	//    norma harness/tools.go:106), then flatten to the model-facing
+	//    plain-string tool_result. The model view joins blocks with "\n" and
+	//    normalizes empty results to "(no output)" — the bridging shape the
+	//    刀② conversion layer froze (eino carries one string where norma ships
+	//    separate content blocks); the HOOK payload below does NOT use it.
 	text = FlattenToolResult(tc, res)
 
-	// 6. [下一刀挂点] PostToolUse 审计 / toollog（在结果文本定形之后）。
+	// 6. PostToolUse audit / 归因尾钩 (norma harness/tools.go:110-115, verbatim
+	//    payload rules — 评审第 1 轮 #1)：在 "(no output)" 归一之前、cap 之后
+	//    触发，payload = json.Marshal(res.Flatten())，即 cap 后结果按 norma
+	//    Result.Flatten 本体扁平化（多文本块无分隔符直拼、空结果为 ""）。
+	//    guard.postToolUse 归因分类器、toollog、注入台账等经同一 ToolHooks
+	//    seam 的 PostToolUse 半边。
+	if g.hooks != nil {
+		raw, _ := json.Marshal(res.Flatten())
+		g.hooks.PostToolUse(ctx, t.Name(), input, raw, res.IsError)
+	}
 
 	return text, res.IsError, res.Extra
 }
