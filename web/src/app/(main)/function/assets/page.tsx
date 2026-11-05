@@ -64,13 +64,13 @@ import type { Asset, Company, CompanyScopeRule } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const METHOD_COLOR: Record<string, string> = {
-  GET: "bg-emerald-100 text-emerald-700",
-  POST: "bg-blue-100 text-blue-700",
-  PUT: "bg-amber-100 text-amber-700",
-  PATCH: "bg-orange-100 text-orange-700",
-  DELETE: "bg-red-100 text-red-700",
-  HEAD: "bg-purple-100 text-purple-700",
-  OPTIONS: "bg-slate-100 text-slate-600",
+  GET: "bg-success text-success",
+  POST: "bg-info text-info",
+  PUT: "bg-warning text-warning",
+  PATCH: "bg-warning/15 text-warning",
+  DELETE: "bg-destructive/15 text-destructive",
+  HEAD: "bg-muted text-muted-foreground",
+  OPTIONS: "bg-muted text-muted-foreground",
 };
 
 function MethodBadge({ method }: { method: string }) {
@@ -88,10 +88,10 @@ function MethodBadge({ method }: { method: string }) {
 }
 
 function statusTone(code: number) {
-  if (code >= 500) return "text-red-500";
-  if (code >= 400) return "text-amber-500";
-  if (code >= 300) return "text-blue-500";
-  if (code >= 200) return "text-emerald-500";
+  if (code >= 500) return "text-destructive";
+  if (code >= 400) return "text-warning";
+  if (code >= 300) return "text-info";
+  if (code >= 200) return "text-success";
   return "text-muted-foreground";
 }
 
@@ -112,9 +112,7 @@ function HoneypotBadge({ score, evidence }: { score?: number; evidence?: string 
       title={`蜜罐评分 ${score.toFixed(2)}\n命中签名:\n${sigs}`}
       className={cn(
         "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none",
-        high
-          ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-          : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+        high ? "bg-destructive text-destructive" : "bg-warning text-warning",
       )}
     >
       {high ? "蜜罐" : "疑似"}
@@ -634,12 +632,7 @@ export default function AssetsPage() {
               let domainCell: React.ReactNode = "—";
               if (isHttp && a.url) {
                 domainCell = (
-                  <a
-                    href={a.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-blue-600 hover:underline dark:text-blue-400"
-                  >
+                  <a href={a.url} target="_blank" rel="noreferrer" className="text-info hover:underline">
                     {a.domain || a.url}
                   </a>
                 );

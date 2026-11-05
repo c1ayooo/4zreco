@@ -38,6 +38,11 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      # Eino 接入架构红线门禁（docs/Eino深度接入方案-2026-11-05.md §8.2）。
+      # 依赖 go 工具链（内部跑 go list -deps ./internal/db），故排在 setup-go 之后。
+      # 注意：脚本必须保持可执行位（见 a9dffbc 教训，丢位会导致 exit 126）。
+      - name: Eino boundary check
+        run: ./scripts/check-eino-boundary.sh
       - name: Test
         # -p 1: 连 PG 的测试包不止持有跨包 advisory lock 的 db/agent/server 三个
         # (llmrec/evidence/traffic 等无锁),CI 多核并行时与 agent 包写事务死锁

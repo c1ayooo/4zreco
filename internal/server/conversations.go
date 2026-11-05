@@ -210,6 +210,12 @@ func (s *Server) pgRenameConversation(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 对话的项目归属经任务传递（口径修订 2026-11-04：直接挂项目的入口已删）。
+	// 解绑任务且未显式给项目时，项目归属随任务一起解除，不留孤儿归属。
+	if req.TaskID != nil && *req.TaskID == 0 && req.ProjectID == nil {
+		zero := int64(0)
+		req.ProjectID = &zero
+	}
 	if req.Title != nil {
 		title := strings.TrimSpace(*req.Title)
 		if title == "" {
