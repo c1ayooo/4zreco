@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 新增：IM 交互机器人（对话式接入网关，移植自 4zrec）
+
+- 四平台接入：飞书/Lark 长连接（手写 pbbp2 帧 + 分片重组 + ACK + Typing 表情）、
+  钉钉 Stream WS、Telegram 长轮询（可选出口代理）、企业微信回调（sha1 验签 +
+  AES-CBC 加解密，端点免 JWT 自验签）。
+- 新包 `internal/imhub`（协议/平台适配/命令集/会话映射），`internal/server` 只留
+  薄接线（启动钩子、回调路由、settings im_bot 分支）；与单向漏洞推送
+  （internal/notify）域隔离，notify 仅新增 `FeishuTenantToken` 供 IM 复用。
+- 会话映射 `im_sessions`（schema 幂等段 + FK 级联）：每个 IM chat 绑定一个平台
+  会话，`/bond /new /commands` 与 web 对话页共用同一套命令（web 发送路径同款
+  分流），自然语言走与对话页相同的 busy 控制与运行链路（eino 内核）；会话不挂
+  项目，绑定经 `/bond` 显式设置。
+- 配置：settings 键 `im_bot_config` 整包 JSON；回显只给 `*_set` 布尔（凭据明文
+  不出服务端），写入 nil=不改、""=清除，保存即全停重起收发循环。设置页新增
+  「IM 机器人」卡片（四平台分区 + 企微回调地址回显）。
+- 4zreco 适配：项目清单展示「任务 N · 对话 N」（本仓 Project 无 AssetCount）；
+  hitl_mode=eino 时 IM「处理中」回执附加 web 审批提示，且 IM 轮挂 30 分钟独立
+  等待上限（具名取消原因 `im_turn_wait_exceeded`）——审批 park 长挂不再占住
+  busy 槽，中断活动（含部分输出）会回给 IM 用户。
+- 测试：帧编解码/企微加解密/telegram 归一化/命令路由/配置掩码（后者 DSN 门控）。
+
 ### 修复：并行工具调用在 eino 折叠时炸裂（DeepSeek Responses 实测触发）
 
 - 症状：DeepSeek 官方 API（`openai-responses` 格式）下 planner/主 Agent 一轮返回

@@ -1808,3 +1808,22 @@ CREATE INDEX IF NOT EXISTS idx_hitl_pending_checkpoint_checkpoint
 -- 等价 norma defaultEmptyTurnNudges=2。落在意图节点行上（列加在
 -- exploration_nodes），跨 run/跨重试持久——norma 时代是内存计数，重跑即清零。
 ALTER TABLE exploration_nodes ADD COLUMN IF NOT EXISTS empty_turn_nudges INT NOT NULL DEFAULT 0;
+
+-- ============================================================================
+-- IM 交互机器人（对话式接入网关）
+-- 每个 IM 平台的聊天(chat)映射到一个平台会话,IM 里的 /bond /new 与对话页操作
+-- 同一条链路。conversation_id 级联删除:会话删掉映射自动消失,下次该 chat 来
+-- 消息自动开新会话。配置本体是 settings 键 im_bot_config(一个 JSON 包),无 DDL。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS im_sessions (
+    platform        TEXT NOT NULL,
+    chat_id         TEXT NOT NULL,
+    conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id         TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (platform, chat_id)
+);
+DROP TRIGGER IF EXISTS trg_im_sessions_upd ON im_sessions;
+CREATE TRIGGER trg_im_sessions_upd BEFORE UPDATE ON im_sessions
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();

@@ -611,6 +611,7 @@ function ChatView({
   initial,
   onTitleMaybeChanged,
   onConvUpdated,
+  onSelectConversation,
 }: {
   conv: Conversation;
   agents: Agent[];
@@ -620,6 +621,8 @@ function ChatView({
   initial?: { input?: string; attachments?: ChatAttachment[] };
   onTitleMaybeChanged: () => void;
   onConvUpdated: () => void;
+  // /new 轮换出后继会话时由 send() 回调切换过去（页面级 selectedId）。
+  onSelectConversation: (id: number) => void;
 }) {
   const approvalFocus = useApprovalFocus({ conversationId: conv.id });
   const [messages, setMessages] = React.useState<Activity[]>([]);
@@ -879,10 +882,22 @@ function ChatView({
     setInput("");
     setAttachments([]);
     try {
-      await api.sendConversationMessage(conv.id, msg, atts.length ? atts : undefined);
-      // The live loop pulls the persisted human turn immediately. Sharing that
-      // fetch avoids racing a separate post-send request against the poller.
-      setRunning(true);
+      const r = await api.sendConversationMessage(conv.id, msg, atts.length ? atts : undefined);
+      if (r.new_conversation_id) {
+        // /new：平台已建好新会话（回复写在新会话里）。先刷列表再切换，
+        // 避免列表未就绪时新会话短暂渲染成草稿页；旧会话保持干净。
+        await onConvUpdated();
+        onSelectConversation(r.new_conversation_id);
+      } else if (r.status === "handled") {
+        // 斜杠命令：指令+回复已同步落库，拉一次尾部即可，不进入运行轮询。
+        const tail = await api.conversationMessages(conv.id, cursorRef.current);
+        if (tail.items.length) setMessages((prev) => mergeActivities(prev, tail.items));
+        cursorRef.current = Math.max(cursorRef.current, tail.cursor);
+      } else {
+        // The live loop pulls the persisted human turn immediately. Sharing that
+        // fetch avoids racing a separate post-send request against the poller.
+        setRunning(true);
+      }
     } catch (e) {
       toast.error(`发送失败：${(e as Error).message}`);
       setInput(msg); // restore so the user doesn't lose their text
@@ -1681,6 +1696,7 @@ export default function ChatPage() {
               initial={pendingByConv[selected.id]}
               onTitleMaybeChanged={reloadConvs}
               onConvUpdated={reloadConvs}
+              onSelectConversation={selectConversation}
             />
           ) : sourceRequested ? (
             <div role="status" className="p-6 text-muted-foreground text-sm">

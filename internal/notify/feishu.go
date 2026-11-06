@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -169,6 +170,61 @@ func feishuButton(label, url string) map[string]any {
 			"type": "primary",
 		}},
 	}
+}
+
+// ---- tenant_access_token（自建应用形态，IM 接入网关等外部模块复用）----
+
+// feishuTokenEntry 缓存 tenant_access_token。token 按 app_id 缓存、进程内共享：
+// 通知渠道实现本身无状态（凭据从 cfg 传入），但 token 是派生凭据，逐条消息
+// 重取会把凭据校验接口打成热点，且该接口有频率限制。
+type feishuTokenEntry struct {
+	token    string
+	expireAt time.Time
+}
+
+var (
+	feishuTokenMu    sync.Mutex
+	feishuTokenCache = map[string]feishuTokenEntry{}
+)
+
+func feishuTenantToken(ctx context.Context, appID, appSecret string, force bool) (string, error) {
+	feishuTokenMu.Lock()
+	defer feishuTokenMu.Unlock()
+	if e, ok := feishuTokenCache[appID]; ok && !force && time.Now().Before(e.expireAt) {
+		return e.token, nil
+	}
+	raw, err := doJSON(ctx, "POST", "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+		nil, map[string]string{"app_id": appID, "app_secret": appSecret})
+	if err != nil {
+		return "", err
+	}
+	var res struct {
+		Code              int    `json:"code"`
+		Msg               string `json:"msg"`
+		TenantAccessToken string `json:"tenant_access_token"`
+		Expire            int64  `json:"expire"` // 秒
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return "", fmt.Errorf("解析飞书 token 响应失败: %w (%s)", err, snippet(raw))
+	}
+	if res.Code != 0 {
+		return "", Permanent(fmt.Errorf("飞书应用凭据无效（%d）: %s", res.Code, res.Msg))
+	}
+	if res.TenantAccessToken == "" {
+		return "", Permanent(errors.New("飞书 token 响应缺少 tenant_access_token"))
+	}
+	// 提前 5 分钟视为过期，避免边界上的在途请求被拒。
+	feishuTokenCache[appID] = feishuTokenEntry{
+		token:    res.TenantAccessToken,
+		expireAt: time.Now().Add(time.Duration(res.Expire)*time.Second - 5*time.Minute),
+	}
+	return res.TenantAccessToken, nil
+}
+
+// FeishuTenantToken 为需要直接调飞书开放平台 API 的模块（如 IM 接入网关）导出
+// 租户 token；缓存与失效语义同通知渠道内部实现。
+func FeishuTenantToken(ctx context.Context, appID, appSecret string, force bool) (string, error) {
+	return feishuTenantToken(ctx, appID, appSecret, force)
 }
 
 // feishuItemLines 渲染单个漏洞的 lark_md 正文。

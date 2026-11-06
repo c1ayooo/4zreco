@@ -24,6 +24,7 @@ import (
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hostd"
+	"github.com/c1ayooo/4zreco/internal/imhub"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/listener"
 	"github.com/c1ayooo/4zreco/internal/llmpool"
@@ -65,6 +66,10 @@ type Server struct {
 	// listeners 是红队回连接收器管理器（listener 包）：接住反弹 shell/OOB 回连
 	// 并留证。绑定端口无需特权（1024+），不经 hostd。
 	listeners *listener.Manager
+
+	// imHub 是 IM 交互机器人网关（imhub 包）：飞书/钉钉/Telegram 长连接与企微
+	// 回调的收发循环管理。协议/命令/会话映射都在 imhub，这里只持引用。
+	imHub *imhub.Hub
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -274,6 +279,9 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
 		// 与触发器的业务节奏不同，且两者失败互不牵连——推送卡住不该影响 agent 触发。
 		go newNotifier(s).Run(s.ctx)
+		// IM 交互机器人网关（对话式接入）：按 im_bot_config 启动飞书/钉钉/Telegram
+		// 收发循环（企微走 HTTP 回调，无常驻循环）。与上面的单向漏洞推送互不相干。
+		s.startIMHub()
 		// Fill the tool cache for any enabled MCP that has none yet (notably the
 		// seeded browser MCP on first run). Async so it never blocks startup.
 		go s.discoverEmptyMCPsOnStartup()
@@ -897,6 +905,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/llm/records/{id}", s.pgGetLLMRecord)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
+	// IM 交互机器人：企微回调（GET URL 验证 / POST 消息回调）。飞书/钉钉/Telegram
+	// 走出站长连接，不需要入站路由；本路由在 requireAuth 豁免（回调无法携带 JWT，
+	// 端点内部用回调配置的 Token/EncodingAESKey 自验签）。
+	mux.HandleFunc("GET "+imhub.WecomCallbackPath, s.imWecomCallback)
+	mux.HandleFunc("POST "+imhub.WecomCallbackPath, s.imWecomCallback)
 	// 漏洞 IM 推送。渠道是「多实例 + 各自过滤规则」的资源，因此独立成一组
 	// REST 接口，而不是塞进扁平的 /api/settings 键值里。
 	mux.HandleFunc("GET /api/notify/meta", s.notifyMeta)
@@ -3572,6 +3585,8 @@ func (s *Server) settingsPayload() map[string]any {
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
 		"notify_public_base_url":     notifyPublicBaseURL(s.m.pg),
 		"notify_digest_interval_min": notifyDigestIntervalMin(s.m.pg),
+		// IM 交互机器人（对话式接入）：与上面的单向推送是两个域。凭据只回 *_set。
+		"im_bot": s.imBotPayload(),
 		// 漏洞情报/回连配置(net_context 工具读取展示给 agent)
 		"egress_hint":     egressHint(s.m.pg),
 		"egress_port_map": egressPortMap(s.m.pg),
@@ -3669,6 +3684,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		NotifyEnabled    *bool   `json:"notify_enabled"`
 		NotifyBaseURL    *string `json:"notify_public_base_url"`
 		NotifyDigestMins *int    `json:"notify_digest_interval_min"`
+		// IM 交互机器人（对话式接入）：凭据指针语义同 BraveKey——nil=不改、
+		// ""=清除。保存后 imhub 立即全停重起各平台收发循环。
+		ImBot *imhub.SettingsInput `json:"im_bot"`
 		// 漏洞情报/回连:对外可达地址说明与端口映射说明(自由文本,net_context
 		// 工具读取展示给 agent)。null=不改,空串=清空。
 		EgressHint    *string `json:"egress_hint"`
@@ -3736,6 +3754,18 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.m.pg.SetSetting(settingNotifyDigestMinutes, strconv.Itoa(*req.NotifyDigestMins)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.ImBot != nil {
+		// IM 接入配置：合并保存后 imhub 立即全停重起各平台循环（即时生效），
+		// 不参与下面的 agent 重建。
+		if s.imHub == nil {
+			writeErr(w, 500, "IM 接入未就绪（数据库未连接）")
+			return
+		}
+		if err := s.imHub.Apply(*req.ImBot); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

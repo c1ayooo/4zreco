@@ -17,6 +17,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/c1ayooo/4zreco/internal/imhub"
 )
 
 const (
@@ -348,11 +350,12 @@ func requestIdentity(r *http.Request) string {
 
 // requireAuth wraps h with JWT validation and injects the credential identity
 // into the request context.
-// /api/auth/* and /api/health are exempt.
+// /api/auth/* and /api/health are exempt. /api/im/wecom/callback 豁免——企业微信
+// 回调无法携带 JWT，端点内部用回调配置的 Token/EncodingAESKey 自验签。
 func (s *Server) requireAuth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, "/api/auth/") || p == "/api/health" {
+		if strings.HasPrefix(p, "/api/auth/") || p == "/api/health" || p == imhub.WecomCallbackPath {
 			h.ServeHTTP(w, r)
 			return
 		}

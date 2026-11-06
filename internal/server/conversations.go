@@ -14,6 +14,7 @@ import (
 
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/imhub"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/sidequestion"
 )
@@ -433,6 +434,12 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" && len(req.Attachments) == 0 {
 		writeErr(w, 400, "消息不能为空")
+		return
+	}
+	// 斜杠命令（/bond /new /commands…）：平台直接处理，不经 LLM，指令+回复进对话流。
+	// IM 侧（imhub）与 web 共用同一套命令；/new 的响应带 new_conversation_id。
+	if _, isCmd := imhub.ParseChatCommand(msg); isCmd {
+		s.handleConversationCommand(w, pg, c, msg)
 		return
 	}
 	agentMessage, ok := s.prepareChatMentionMessage(w, msg)

@@ -23,6 +23,7 @@ import type {
   IntentAsset,
   RetestState,
   ScopeRow,
+  Settings,
   Task,
   TaskArchive,
   TaskAssetMutation,
@@ -2243,7 +2244,14 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
   if (path === "/traffic") return D.traffic;
   if (path === "/traffic/exchange") return D.trafficDetail;
   if (path === "/settings" && m === "GET") return D.settings;
-  if (path === "/settings" && m === "PUT") return { ...D.settings, ...b };
+  if (path === "/settings" && m === "PUT") {
+    // im_bot 在真实后端是「合并整包」（imhub Apply 后 Payload 恒回四平台全段）。
+    // mock 同构做一层深合并，避免单平台保存的部分补丁把其它平台段冲掉。
+    const patch = b as Partial<Settings> & { im_bot?: Partial<Settings["im_bot"]> };
+    const next = { ...D.settings, ...patch };
+    if (patch.im_bot) next.im_bot = { ...D.settings.im_bot, ...patch.im_bot };
+    return next;
+  }
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };
   if (path === "/settings/python/detect") return { python_interpreter: "/usr/bin/python3" };
   if (path === "/chat")

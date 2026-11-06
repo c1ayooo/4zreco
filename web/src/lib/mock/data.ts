@@ -3350,6 +3350,24 @@ export const settings: Settings = {
   notify_enabled: true,
   notify_public_base_url: "",
   notify_digest_interval_min: 30,
+  // IM 交互机器人：后端 Payload 恒回四平台全段，mock 同构给完整零值段——
+  // 否则演示模式保存单平台后（PUT 是部分补丁）apply 读缺段即炸。
+  im_bot: {
+    agent_key: "auto",
+    feishu: { enabled: false, app_id: "", app_secret_set: false },
+    dingtalk: { enabled: false, client_id: "", client_secret_set: false },
+    telegram: { enabled: false, bot_token_set: false, proxy: "" },
+    wecom: {
+      enabled: false,
+      corp_id: "",
+      corp_secret_set: false,
+      agent_id: 0,
+      callback_token_set: false,
+      encoding_aes_key_set: false,
+      callback_url: "",
+      base_url_set: false,
+    },
+  },
   egress_hint: "",
   egress_port_map: "",
   auto_finish_enabled: true,

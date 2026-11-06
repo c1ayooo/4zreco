@@ -50,6 +50,7 @@ import type {
   FindingTraffic,
   FindingTrafficDetail,
   HostenvStatus,
+  ImBotSettingsInput,
   InstallBatchResult,
   InstallJob,
   IntentAsset,
@@ -883,6 +884,8 @@ export const api = {
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+  // IM 交互机器人配置：密钥留空=不上送（不改），后端保存即全停重起对应平台的收发循环。
+  setIMBot: (patch: ImBotSettingsInput) => put<Settings>(`/settings`, { im_bot: patch }),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
     web_search_backend?: string;
@@ -1214,7 +1217,9 @@ export const api = {
   conversationMsgDetail: (id: number, seq: number) =>
     get<{ detail: string }>(`/conversations/${id}/messages/${seq}`).then((r) => r.detail ?? ""),
   sendConversationMessage: (id: number, message: string, attachments?: ChatAttachment[]) =>
-    post<{ status: string }>(`/conversations/${id}/messages`, { message, attachments }),
+    // new_conversation_id 由 /new 返回，前端收到后切到新会话；status="handled"
+    // 表示斜杠命令已同步落库（无需进入运行轮询）。
+    post<{ status: string; new_conversation_id?: number }>(`/conversations/${id}/messages`, { message, attachments }),
   stopConversation: (id: number) => post<{ status: string }>(`/conversations/${id}/stop`, {}),
   saveAgentPrompt: (key: string, template: string, note = "") =>
     put<{ version: number }>(`/agents/${key}/prompt`, { template, note }),

@@ -1098,9 +1098,46 @@ export interface Settings {
   notify_enabled?: boolean; // 推送总开关，默认开；用于维护期一键止血
   notify_public_base_url?: string; // 漏洞详情回链的外部访问地址；空=消息不带回链
   notify_digest_interval_min?: number; // 汇总模式周期（分钟），默认 30
+  // ---- IM 交互机器人（对话式接入：IM 里 /bond 绑定项目任务、/new 新会话）----
+  im_bot?: ImBotSettings;
   // ---- 漏洞情报/回连（net_context 工具读取展示给 agent）----
   egress_hint?: string; // 对外可达地址说明(公网 IP/宿主内网地址等,自由文本)
   egress_port_map?: string; // 端口映射说明(容器端口→宿主端口)
+}
+
+// IM 交互机器人各平台的凭据回显：密钥类只回 *_set（值永不返回）；PUT 时对应字段
+// 省略=不改、空串=清除。
+export interface ImBotSettings {
+  agent_key: string;
+  feishu: { enabled: boolean; app_id: string; app_secret_set: boolean };
+  dingtalk: { enabled: boolean; client_id: string; client_secret_set: boolean };
+  telegram: { enabled: boolean; bot_token_set: boolean; proxy: string };
+  wecom: {
+    enabled: boolean;
+    corp_id: string;
+    corp_secret_set: boolean;
+    agent_id: number;
+    callback_token_set: boolean;
+    encoding_aes_key_set: boolean;
+    callback_url: string;
+    base_url_set: boolean;
+  };
+}
+
+// PUT /settings 里 im_bot 的写入形状（write-only 密钥字段）。
+export interface ImBotSettingsInput {
+  agent_key?: string;
+  feishu?: { enabled: boolean; app_id?: string; app_secret?: string };
+  dingtalk?: { enabled: boolean; client_id?: string; client_secret?: string };
+  telegram?: { enabled: boolean; bot_token?: string; proxy?: string };
+  wecom?: {
+    enabled: boolean;
+    corp_id?: string;
+    corp_secret?: string;
+    agent_id?: number;
+    callback_token?: string;
+    encoding_aes_key?: string;
+  };
 }
 
 // ---- 漏洞 IM 推送 ----
