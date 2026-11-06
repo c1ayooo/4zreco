@@ -65,7 +65,8 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
       defaultOpen={defaultOpen}
       style={
         {
-          "--sidebar-width": "calc(var(--spacing) * 68)",
+          // 侧栏宽度：68 缩 20% → 54.4（17rem → 13.6rem）
+          "--sidebar-width": "calc(var(--spacing) * 54.4)",
         } as React.CSSProperties
       }
     >
