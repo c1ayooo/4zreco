@@ -2,7 +2,11 @@
 
 import * as React from "react";
 
+import { ScrollTextIcon } from "lucide-react";
+
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { sseUrl } from "@/lib/api";
 import { MOCK } from "@/lib/mock/enabled";
@@ -80,6 +84,7 @@ export default function LogsPage() {
   const [paused, setPaused] = React.useState(false);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
   const [hasMore, setHasMore] = React.useState(false);
+  const [streamError, setStreamError] = React.useState("");
   const bottom = React.useRef<HTMLDivElement>(null);
   const stick = React.useRef(true);
   const pausedRef = React.useRef(false);
@@ -102,6 +107,7 @@ export default function LogsPage() {
       return;
     }
     const es = new EventSource(sseUrl("/api/logs/stream?since=0"));
+    es.onopen = () => setStreamError("");
     es.onmessage = (e) => {
       if (pausedRef.current) return;
       try {
@@ -110,6 +116,10 @@ export default function LogsPage() {
       } catch {
         /* ignore malformed frame */
       }
+    };
+    es.onerror = () => {
+      // EventSource 会自动重连；断连期间就地提示，恢复后 onopen 清除。
+      setStreamError("实时日志连接中断，正在自动重连");
     };
     return () => es.close();
   }, []);
@@ -177,11 +187,11 @@ export default function LogsPage() {
   }, [lines]);
 
   return (
-    <div className="flex flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div>
         <h1 className="font-semibold text-2xl tracking-tight">系统日志</h1>
       </div>
-      <div className="flex flex-1 flex-col gap-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <Input
             placeholder="过滤(文本 / tag)…"
@@ -219,12 +229,18 @@ export default function LogsPage() {
           </span>
         </div>
 
+        {streamError && (
+          <Alert variant="destructive">
+            <AlertDescription>{streamError}</AlertDescription>
+          </Alert>
+        )}
+
         <div
           onScroll={(e) => {
             const el = e.currentTarget;
             stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
           }}
-          className="h-[calc(100vh-14rem)] overflow-auto rounded-lg border bg-card p-2 font-mono text-xs leading-relaxed"
+          className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card p-2 font-mono text-xs leading-relaxed"
         >
           {hasMore && (
             <div className="flex justify-center py-2">
@@ -240,7 +256,15 @@ export default function LogsPage() {
             </div>
           )}
           {filtered.length === 0 ? (
-            <p className="py-10 text-center text-muted-foreground">暂无日志。</p>
+            <Empty className="py-10">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <ScrollTextIcon />
+                </EmptyMedia>
+                <EmptyTitle>暂无日志</EmptyTitle>
+                <EmptyDescription>服务输出会实时出现在这里</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
             filtered.map((l) => {
               const body =
@@ -249,9 +273,7 @@ export default function LogsPage() {
                 <div key={l.seq} className="flex items-start gap-2 px-1 py-0.5 hover:bg-muted/40">
                   <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", levelDot[l.level])} />
                   <span className="shrink-0 text-muted-foreground tabular-nums">{fmtTime(l.ts)}</span>
-                  {l.tag && (
-                    <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-foreground/70">{l.tag}</span>
-                  )}
+                  {l.tag && <span className="shrink-0 rounded bg-muted px-1 text-foreground/70 text-xs">{l.tag}</span>}
                   <span className={cn("min-w-0 whitespace-pre-wrap break-words", levelTone[l.level])}>{body}</span>
                 </div>
               );

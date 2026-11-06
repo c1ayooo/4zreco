@@ -17,6 +17,7 @@ import {
   type LucideIcon,
   PauseIcon,
   PlayIcon,
+  RadioIcon,
   SearchIcon,
   TargetIcon,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -81,8 +83,8 @@ const KIND_META: Record<string, KindMeta> = {
   hint: {
     label: "提示",
     icon: LightbulbIcon,
-    dot: "bg-chart-4500",
-    chip: "bg-chart-4500/15 text-chart-4600 dark:text-chart-4400",
+    dot: "bg-info",
+    chip: "bg-info/15 text-info",
   },
   digest: {
     label: "压缩",
@@ -230,7 +232,7 @@ function AssetList({ assets, dense = false }: { assets: FindingAsset[]; dense?: 
               )}
               title={`${typeLabel} · ${a.label}`}
             >
-              <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">{typeLabel}</span>
+              <span className="shrink-0 rounded bg-muted px-1 text-muted-foreground text-xs">{typeLabel}</span>
               <code className="truncate font-mono text-xs">{a.label}</code>
             </li>
           );
@@ -264,7 +266,7 @@ function RelatedNodeCard({ node, assets }: { node: TaskNode; assets: FindingAsse
       </div>
       <p className="line-clamp-4 break-words text-xs">{summary || "（无摘要）"}</p>
       <AssetList assets={assets} dense />
-      <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border bg-muted/40 p-2 font-mono text-[11px]">
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border bg-muted/40 p-2 font-mono text-xs">
         {prettyPayload(node.payload)}
       </pre>
     </div>
@@ -350,7 +352,7 @@ function BroadcastRow({
       {/* 时间列 */}
       <div className="py-3 text-right text-muted-foreground text-xs tabular-nums">
         <div>{Number.isNaN(ts) ? "--:--:--" : clockFmt.format(ts)}</div>
-        <div className="text-[11px] opacity-70">{relTime(ts, now)}</div>
+        <div className="text-xs opacity-70">{relTime(ts, now)}</div>
       </div>
 
       {/* 时间轴:竖线 + 类型圆点 */}
@@ -371,6 +373,8 @@ function BroadcastRow({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls={`broadcast-row-${node.id}-detail`}
           className="flex w-full min-w-0 items-start gap-2 text-left"
         >
           <ChevronRightIcon
@@ -385,7 +389,7 @@ function BroadcastRow({
                 <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">P{node.priority}</span>
               )}
               {fresh && (
-                <span className="rounded bg-primary px-1.5 py-0.5 font-semibold text-[10px] text-primary-foreground">
+                <span className="rounded bg-primary px-1.5 py-0.5 font-semibold text-primary-foreground text-xs">
                   新
                 </span>
               )}
@@ -396,7 +400,10 @@ function BroadcastRow({
         </button>
 
         {open && (
-          <div className="mt-2 ml-5 flex flex-col gap-3 rounded-md border bg-muted/30 p-3">
+          <div
+            id={`broadcast-row-${node.id}-detail`}
+            className="mt-2 ml-5 flex flex-col gap-3 rounded-md border bg-muted/30 p-3"
+          >
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground text-xs">
               <span>
                 节点 <code className="font-mono">#{node.id}</code>
@@ -658,9 +665,19 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
             ))}
           </div>
         ) : items.length === 0 ? (
-          <p className="py-10 text-center text-muted-foreground text-sm">
-            {query || kinds.length > 0 ? "没有符合条件的播报。" : "这个任务还没有产生探索节点。"}
-          </p>
+          <Empty className="py-10">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <RadioIcon />
+              </EmptyMedia>
+              <EmptyTitle>{query || kinds.length > 0 ? "没有符合条件的播报" : "还没有探索节点"}</EmptyTitle>
+              <EmptyDescription>
+                {query || kinds.length > 0
+                  ? "调整搜索词或类型筛选，或清除筛选查看全部。"
+                  : "探索开始后，意图、事实与发现会按时间播报在这里。"}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           groups.map((group) => (
             <div key={group.day}>

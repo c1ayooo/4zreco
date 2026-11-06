@@ -35,10 +35,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHead } from "@/components/ui/sortable-head";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -142,6 +144,7 @@ export default function TrafficPage() {
   const [selected, setSelected] = React.useState<TrafficExchange | null>(null);
   const [detail, setDetail] = React.useState<TrafficDetail | null>(null);
   const [detailLoading, setDetailLoading] = React.useState(false);
+  const [detailError, setDetailError] = React.useState(false);
 
   const [hosts, setHosts] = React.useState<TrafficHost[]>([]); // target picker
   const [selectedHosts, setSelectedHosts] = React.useState<string[]>([]); // checked in picker
@@ -308,13 +311,14 @@ export default function TrafficPage() {
     let alive = true;
     setDetailLoading(true);
     setDetail(null);
+    setDetailError(false);
     api
       .trafficExchange(selected.id)
       .then((d) => {
         if (alive) setDetail(d);
       })
       .catch(() => {
-        if (alive) setDetail({ req: "（无法加载报文）", resp: "" });
+        if (alive) setDetailError(true);
       })
       .finally(() => {
         if (alive) setDetailLoading(false);
@@ -334,6 +338,7 @@ export default function TrafficPage() {
     );
 
   const exchanges = React.useMemo(() => traffic?.exchanges ?? [], [traffic]);
+  const isFiltered = Boolean(hostQ || queryQ) || method !== "all" || hasAdvancedFilter;
   const total = traffic?.total ?? exchanges.length;
   const pageCount = Math.max(1, Math.ceil(total / size));
   const rangeStart = total === 0 ? 0 : page * size + 1;
@@ -481,12 +486,10 @@ export default function TrafficPage() {
           <Trash2Icon className="size-3.5" />
           删除该目标
         </Button>
-        {/* Outline rather than a second destructive button: this one ignores every
- filter, so it must not look one mis-click away from "删除该目标". */}
         <Button
-          variant="outline"
+          variant="destructive"
           size="sm"
-          className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          className="h-8"
           disabled={!traffic?.count || deleting}
           title={traffic?.count ? "删除全部流量并压实存储" : "当前没有流量记录"}
           onClick={() => setDeleteMode("all")}
@@ -721,10 +724,29 @@ export default function TrafficPage() {
                     <TableCell className="text-right text-xs tabular-nums">{fmtBytes(e.resp_len)}</TableCell>
                   </TableRow>
                 ))}
-                {exchanges.length === 0 && (
+                {traffic === null &&
+                  Array.from({ length: 8 }).map((_, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 骨架行无数据语义，按索引渲染
+                    <TableRow key={i}>
+                      <TableCell colSpan={8} className="py-1.5">
+                        <Skeleton className="h-4 w-full" />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                {traffic !== null && exchanges.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-12 text-center text-muted-foreground text-sm">
-                      {traffic === null ? "加载中…" : "没有匹配的流量。"}
+                    <TableCell colSpan={8} className="p-0">
+                      <Empty>
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <RadioTowerIcon />
+                          </EmptyMedia>
+                          <EmptyTitle>{isFiltered ? "没有匹配的流量" : "暂无流量记录"}</EmptyTitle>
+                          <EmptyDescription>
+                            {isFiltered ? "请调整或清除筛选条件。" : "捕获开启后，新流量将显示在这里。"}
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
                     </TableCell>
                   </TableRow>
                 )}
@@ -762,24 +784,38 @@ export default function TrafficPage() {
                   <TabsTrigger value="response">响应 Response</TabsTrigger>
                 </TabsList>
                 <TabsContent value="request" className="min-h-0 overflow-auto">
-                  {detailLoading ? (
+                  {detailLoading && (
                     <div className="flex items-center gap-2 p-5 text-muted-foreground text-xs">
                       <Loader2Icon className="size-3.5 animate-spin" />
                       加载报文…
                     </div>
-                  ) : (
+                  )}
+                  {!detailLoading && detailError && (
+                    <Alert variant="destructive" className="m-5">
+                      <TriangleAlertIcon />
+                      <AlertTitle>报文加载失败</AlertTitle>
+                      <AlertDescription>请稍后重试，或重新选择该条流量。</AlertDescription>
+                    </Alert>
+                  )}
+                  {!detailLoading && !detailError && (
                     <HttpCodeBlock raw={requestWithHost(detail?.req ?? "", selected)} />
                   )}
                 </TabsContent>
                 <TabsContent value="response" className="min-h-0 overflow-auto">
-                  {detailLoading ? (
+                  {detailLoading && (
                     <div className="flex items-center gap-2 p-5 text-muted-foreground text-xs">
                       <Loader2Icon className="size-3.5 animate-spin" />
                       加载报文…
                     </div>
-                  ) : (
-                    <HttpCodeBlock raw={detail?.resp ?? ""} />
                   )}
+                  {!detailLoading && detailError && (
+                    <Alert variant="destructive" className="m-5">
+                      <TriangleAlertIcon />
+                      <AlertTitle>报文加载失败</AlertTitle>
+                      <AlertDescription>请稍后重试，或重新选择该条流量。</AlertDescription>
+                    </Alert>
+                  )}
+                  {!detailLoading && !detailError && <HttpCodeBlock raw={detail?.resp ?? ""} />}
                 </TabsContent>
               </Tabs>
             </>
@@ -828,12 +864,12 @@ export default function TrafficPage() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
             <AlertDialogAction
+              variant="destructive"
               onClick={(e) => {
                 e.preventDefault();
                 confirmDelete();
               }}
               disabled={deleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deleting ? `${deleteVerb}中…` : `确认${deleteVerb}`}
             </AlertDialogAction>

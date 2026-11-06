@@ -52,6 +52,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -115,6 +116,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -328,6 +330,8 @@ function compareTasks(left: Task, right: Task, field: TaskSortField, direction: 
 export default function TasksPage() {
   const [activeTab, setActiveTab] = React.useState("current");
   const [tasks, setTasks] = React.useState<Task[]>([]);
+  // 首帧拉取完成前渲染 Skeleton，避免「暂无任务」空态在数据到达前闪现。
+  const [tasksLoaded, setTasksLoaded] = React.useState(false);
   const [categories, setCategories] = React.useState<TaskCategory[]>([]);
   const [categoriesLoaded, setCategoriesLoaded] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -522,6 +526,7 @@ export default function TasksPage() {
     api
       .tasks({ projectId: globalProjectId > 0 ? globalProjectId : undefined })
       .then((r) => {
+        setTasksLoaded(true);
         const next = r.tasks.map((t) => (t.id === r.active ? { ...t, active: true } : t));
         const sig = JSON.stringify(next);
         if (sig === lastRef.current) return;
@@ -843,256 +848,277 @@ export default function TasksPage() {
   );
 
   return (
-    <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
-      <TabsList className="mx-4 lg:mx-6">
-        <TabsTrigger value="current">当前任务</TabsTrigger>
-        <TabsTrigger value="archived">已归档</TabsTrigger>
-      </TabsList>
-      <TabsContent value="current">
-        <Card>
-          <CardContent className="flex flex-col gap-4 px-0 pt-6">
-            <div className="flex flex-wrap items-center gap-2 px-4 lg:px-6">
-              <div className="relative w-full sm:max-w-xs">
-                <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="搜索描述 / 目标 / ID"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="pl-8"
-                />
-                {query && (
-                  <button
-                    type="button"
-                    onClick={() => setQuery("")}
-                    aria-label="清除搜索"
-                    className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    <XIcon className="size-4" />
-                  </button>
-                )}
-              </div>
-              <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as TaskStatus | "all")}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="状态" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="all">全部状态</SelectItem>
-                    {STATUS_OPTIONS.map((s) => (
-                      <SelectItem key={s.value} value={s.value}>
-                        {s.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="任务分类" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="all">全部分类</SelectItem>
-                    <SelectItem value={UNCATEGORIZED_VALUE}>未分类</SelectItem>
-                    {categories.map((category) => (
-                      <SelectItem key={category.id} value={String(category.id)}>
-                        {category.name}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <span className="text-muted-foreground text-xs tabular-nums">
-                {filtered.length}/{tasks.length} 条
-              </span>
-              {selectedIds.size > 0 && (
-                <>
-                  <span className="text-xs tabular-nums">已选 {selectedIds.size} 个</span>
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
-                    取消选择
-                  </Button>
-                  {pausableTaskIDs.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={batchControlling !== null}
-                      onClick={() => void controlSelectedTasks("pause", pausableTaskIDs)}
-                    >
-                      {batchControlling === "pause" ? (
-                        <Spinner data-icon="inline-start" />
-                      ) : (
-                        <PauseIcon data-icon="inline-start" />
-                      )}
-                      暂停 {pausableTaskIDs.length}
-                    </Button>
-                  )}
-                  {resumableTaskIDs.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={batchControlling !== null}
-                      onClick={() => void controlSelectedTasks("resume", resumableTaskIDs)}
-                    >
-                      {batchControlling === "resume" ? (
-                        <Spinner data-icon="inline-start" />
-                      ) : (
-                        <PlayIcon data-icon="inline-start" />
-                      )}
-                      继续 {resumableTaskIDs.length}
-                    </Button>
-                  )}
-                  {archivableTaskIDs.length > 0 && (
-                    <ArchiveConfirmDialog
-                      count={archivableTaskIDs.length}
-                      onConfirm={archiveSelectedTasks}
-                      trigger={
-                        <Button size="sm" variant="outline">
-                          <ArchiveIcon data-icon="inline-start" />
-                          归档 {archivableTaskIDs.length}
-                        </Button>
-                      }
-                    />
-                  )}
-                  <MoveTasksCategoryDialog
-                    categories={categories}
-                    count={selectedIds.size}
-                    moving={movingCategory}
-                    onMove={moveSelectedTasksCategory}
+    <div className="flex flex-1 flex-col gap-4 md:gap-6">
+      <h1 className="font-semibold text-2xl tracking-tight">任务</h1>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
+        <TabsList>
+          <TabsTrigger value="current">当前任务</TabsTrigger>
+          <TabsTrigger value="archived">已归档</TabsTrigger>
+        </TabsList>
+        <TabsContent value="current">
+          <Card>
+            <CardContent className="flex flex-col gap-4 px-0 pt-6">
+              <div className="flex flex-wrap items-center gap-2 px-4 lg:px-6">
+                <div className="relative w-full sm:max-w-xs">
+                  <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="搜索描述 / 目标 / ID"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="pl-8"
                   />
-                  <BulkDeleteTasksDialog ids={[...selectedIds]} onDelete={deleteTasks} />
-                </>
-              )}
-              <ConcurrencySettingsDialog />
-              <CategoryManagementSheet
-                categories={categories}
-                tasks={tasks}
-                onChanged={refreshCategoriesAndTasks}
-                onTaskMoved={applyTaskCategoryMove}
-              />
-              <CreateTaskSheet
-                tasks={tasks}
-                categories={categories}
-                onCreated={refreshCategoriesAndTasks}
-                onCategoriesChanged={refreshCategoriesAndTasks}
-              />
-            </div>
-
-            {tasks.length === 0 ? (
-              llmReady === false ? (
-                // 冷启动第一屏：没配 LLM 时空列表只会让人茫然——直接给出下一步。
-                <div className="mx-4 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-16 text-center lg:mx-6">
-                  <p className="font-medium text-sm text-foreground">先配置 LLM 通道，再创建第一个任务</p>
-                  <p className="text-muted-foreground max-w-md text-sm">
-                    探索由 LLM 多 Agent 驱动：没有可用通道，任务创建后也无法推进。 支持 Anthropic / OpenAI / 任意 OpenAI
-                    兼容网关，建议配 ≥2 个通道开启轮询。
-                  </p>
-                  <Button asChild size="sm">
-                    <Link href="/system/llm">去配置 LLM</Link>
-                  </Button>
+                  {query && (
+                    <button
+                      type="button"
+                      onClick={() => setQuery("")}
+                      aria-label="清除搜索"
+                      className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      <XIcon className="size-4" />
+                    </button>
+                  )}
                 </div>
-              ) : (
-                <div className="mx-4 flex items-center justify-center rounded-lg border border-dashed py-20 text-muted-foreground text-sm lg:mx-6">
-                  暂无任务，点击右上角「新建任务」开始。
-                </div>
-              )
-            ) : filtered.length === 0 ? (
-              <div className="mx-4 flex items-center justify-center rounded-lg border border-dashed py-20 text-muted-foreground text-sm lg:mx-6">
-                没有匹配的任务。
-              </div>
-            ) : (
-              <Table className="**:data-[slot='table-cell']:px-4 **:data-[slot='table-head']:px-4">
-                <TableHeader className="[&_tr]:border-t">
-                  <TableRow>
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={headerChecked}
-                        onCheckedChange={(checked) => toggleSelectedPage(checked === true)}
-                        aria-label="选择本页全部任务"
+                <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as TaskStatus | "all")}>
+                  <SelectTrigger className="w-36">
+                    <SelectValue placeholder="状态" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="all">全部状态</SelectItem>
+                      {STATUS_OPTIONS.map((s) => (
+                        <SelectItem key={s.value} value={s.value}>
+                          {s.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="任务分类" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="all">全部分类</SelectItem>
+                      <SelectItem value={UNCATEGORIZED_VALUE}>未分类</SelectItem>
+                      {categories.map((category) => (
+                        <SelectItem key={category.id} value={String(category.id)}>
+                          {category.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <span className="text-muted-foreground text-xs tabular-nums">
+                  {filtered.length}/{tasks.length} 条
+                </span>
+                {selectedIds.size > 0 && (
+                  <>
+                    <span className="text-xs tabular-nums">已选 {selectedIds.size} 个</span>
+                    <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+                      取消选择
+                    </Button>
+                    {pausableTaskIDs.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={batchControlling !== null}
+                        onClick={() => void controlSelectedTasks("pause", pausableTaskIDs)}
+                      >
+                        {batchControlling === "pause" ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : (
+                          <PauseIcon data-icon="inline-start" />
+                        )}
+                        暂停 {pausableTaskIDs.length}
+                      </Button>
+                    )}
+                    {resumableTaskIDs.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={batchControlling !== null}
+                        onClick={() => void controlSelectedTasks("resume", resumableTaskIDs)}
+                      >
+                        {batchControlling === "resume" ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : (
+                          <PlayIcon data-icon="inline-start" />
+                        )}
+                        继续 {resumableTaskIDs.length}
+                      </Button>
+                    )}
+                    {archivableTaskIDs.length > 0 && (
+                      <ArchiveConfirmDialog
+                        count={archivableTaskIDs.length}
+                        onConfirm={archiveSelectedTasks}
+                        trigger={
+                          <Button size="sm" variant="outline">
+                            <ArchiveIcon data-icon="inline-start" />
+                            归档 {archivableTaskIDs.length}
+                          </Button>
+                        }
                       />
-                    </TableHead>
-                    <SortableTaskHead
-                      field="id"
-                      label="ID"
-                      activeField={sortField}
-                      direction={sortDirection}
-                      className="font-mono"
-                      onSort={sortTasksBy}
+                    )}
+                    <MoveTasksCategoryDialog
+                      categories={categories}
+                      count={selectedIds.size}
+                      moving={movingCategory}
+                      onMove={moveSelectedTasksCategory}
                     />
-                    <TableHead>名称</TableHead>
-                    <TableHead>描述</TableHead>
-                    <TableHead>目标</TableHead>
-                    <SortableTaskHead
-                      field="status"
-                      label="状态"
-                      activeField={sortField}
-                      direction={sortDirection}
-                      onSort={sortTasksBy}
-                    />
-                    <TableHead className="text-center">目标进度</TableHead>
-                    <TableHead className="text-center" title="严重 / 高 / 中 / 低">
-                      漏洞 <span className="font-normal text-muted-foreground">严/高/中/低</span>
-                    </TableHead>
-                    <TableHead className="text-center">运行中 Worker</TableHead>
-                    <SortableTaskHead
-                      field="created"
-                      label="创建时间"
-                      activeField={sortField}
-                      direction={sortDirection}
-                      align="right"
-                      onSort={sortTasksBy}
-                    />
-                    <SortableTaskHead
-                      field="duration"
-                      label="运行时长"
-                      activeField={sortField}
-                      direction={sortDirection}
-                      align="right"
-                      onSort={sortTasksBy}
-                    />
-                    <TableHead className="text-right">Token</TableHead>
-                    <TableHead className="sticky right-0 z-10 bg-card text-right shadow-[-1px_0_0_0_hsl(var(--border))]">
-                      操作
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paginated.map((task) => (
-                    <TaskRow
-                      key={task.id}
-                      task={task}
-                      // running 任务才吃 nowSec;其余行传 0 —— props 不变,memo 就能拦下每秒 tick
-                      // 带来的整表重渲染,只让在跑的那几行走时长。
-                      nowSec={task.status === "running" ? nowSec : 0}
-                      projectName={task.project_id ? projectMap.get(task.project_id) : undefined}
-                      onDelete={deleteTask}
-                      onControl={controlTask}
-                      onRename={renameTask}
-                      onTogglePinned={toggleTaskPinned}
-                      onArchive={queueTaskArchive}
-                      selected={selectedIds.has(task.id)}
-                      onSelectedChange={toggleSelected}
-                    />
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-            <TablePagination
-              page={page}
-              pageSize={pageSize}
-              total={filtered.length}
-              onPageChange={setPage}
-              onPageSizeChange={(nextPageSize) => {
-                setPageSize(nextPageSize);
-                setPage(1);
-              }}
-            />
-          </CardContent>
-        </Card>
-      </TabsContent>
-      <TabsContent value="archived">
-        <TaskArchivesPanel onChanged={load} />
-      </TabsContent>
-    </Tabs>
+                    <BulkDeleteTasksDialog ids={[...selectedIds]} onDelete={deleteTasks} />
+                  </>
+                )}
+                <ConcurrencySettingsDialog />
+                <CategoryManagementSheet
+                  categories={categories}
+                  tasks={tasks}
+                  onChanged={refreshCategoriesAndTasks}
+                  onTaskMoved={applyTaskCategoryMove}
+                />
+                <CreateTaskSheet
+                  tasks={tasks}
+                  categories={categories}
+                  onCreated={refreshCategoriesAndTasks}
+                  onCategoriesChanged={refreshCategoriesAndTasks}
+                />
+              </div>
+
+              {tasks.length === 0 ? (
+                !tasksLoaded ? (
+                  // 首帧拉取中：骨架行对齐表格行高，避免空态在数据到达前闪现。
+                  <div className="flex flex-col gap-2 px-4 lg:px-6" aria-hidden="true">
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                  </div>
+                ) : llmReady === false ? (
+                  // 冷启动第一屏：没配 LLM 时空列表只会让人茫然——直接给出下一步。
+                  <div className="mx-4 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-16 text-center lg:mx-6">
+                    <p className="font-medium text-foreground text-sm">先配置 LLM 通道，再创建第一个任务</p>
+                    <p className="max-w-md text-muted-foreground text-sm">
+                      探索由 LLM 多 Agent 驱动：没有可用通道，任务创建后也无法推进。支持 Anthropic / OpenAI / 任意
+                      OpenAI 兼容网关，建议配 ≥2 个通道开启轮询。
+                    </p>
+                    <Button asChild size="sm">
+                      <Link href="/system/llm">去配置 LLM</Link>
+                    </Button>
+                  </div>
+                ) : (
+                  <Empty className="mx-4 py-20 lg:mx-6">
+                    <EmptyHeader>
+                      <EmptyTitle>暂无任务</EmptyTitle>
+                      <EmptyDescription>点击右上角「新建任务」开始。</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )
+              ) : filtered.length === 0 ? (
+                <Empty className="mx-4 py-20 lg:mx-6">
+                  <EmptyHeader>
+                    <EmptyTitle>没有匹配的任务</EmptyTitle>
+                    <EmptyDescription>调整搜索或筛选条件后重试。</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <Table className="table-fixed">
+                  <TableHeader className="[&_tr]:border-t">
+                    <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={headerChecked}
+                          onCheckedChange={(checked) => toggleSelectedPage(checked === true)}
+                          aria-label="选择本页全部任务"
+                        />
+                      </TableHead>
+                      <SortableTaskHead
+                        field="id"
+                        label="ID"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        className="hidden font-mono xl:table-cell"
+                        onSort={sortTasksBy}
+                      />
+                      <TableHead>名称</TableHead>
+                      <TableHead className="hidden sm:table-cell">描述</TableHead>
+                      <TableHead className="hidden lg:table-cell">目标</TableHead>
+                      <SortableTaskHead
+                        field="status"
+                        label="状态"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        onSort={sortTasksBy}
+                      />
+                      <TableHead className="hidden text-center xl:table-cell">目标进度</TableHead>
+                      <TableHead className="hidden text-center lg:table-cell" title="严重 / 高 / 中 / 低">
+                        漏洞 <span className="font-normal text-muted-foreground">严/高/中/低</span>
+                      </TableHead>
+                      <TableHead className="hidden text-center xl:table-cell">运行中 Worker</TableHead>
+                      <SortableTaskHead
+                        field="created"
+                        label="创建时间"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        align="right"
+                        className="hidden md:table-cell"
+                        onSort={sortTasksBy}
+                      />
+                      <SortableTaskHead
+                        field="duration"
+                        label="运行时长"
+                        activeField={sortField}
+                        direction={sortDirection}
+                        align="right"
+                        className="hidden xl:table-cell"
+                        onSort={sortTasksBy}
+                      />
+                      <TableHead className="hidden text-right xl:table-cell">Token</TableHead>
+                      <TableHead className="sticky right-0 z-10 w-44 bg-card text-right shadow-[-1px_0_0_0_var(--border)]">
+                        操作
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {paginated.map((task) => (
+                      <TaskRow
+                        key={task.id}
+                        task={task}
+                        // running 任务才吃 nowSec;其余行传 0 —— props 不变,memo 就能拦下每秒 tick
+                        // 带来的整表重渲染,只让在跑的那几行走时长。
+                        nowSec={task.status === "running" ? nowSec : 0}
+                        projectName={task.project_id ? projectMap.get(task.project_id) : undefined}
+                        onDelete={deleteTask}
+                        onControl={controlTask}
+                        onRename={renameTask}
+                        onTogglePinned={toggleTaskPinned}
+                        onArchive={queueTaskArchive}
+                        selected={selectedIds.has(task.id)}
+                        onSelectedChange={toggleSelected}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+              <TablePagination
+                page={page}
+                pageSize={pageSize}
+                total={filtered.length}
+                onPageChange={setPage}
+                onPageSizeChange={(nextPageSize) => {
+                  setPageSize(nextPageSize);
+                  setPage(1);
+                }}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="archived">
+          <TaskArchivesPanel onChanged={load} />
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }
 
@@ -1268,7 +1294,7 @@ const TaskRow = React.memo(function TaskRow({
           aria-label={`选择任务 ${task.id}`}
         />
       </TableCell>
-      <TableCell>
+      <TableCell className="hidden xl:table-cell">
         <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{task.id}</code>
       </TableCell>
       <TableCell className="font-medium">
@@ -1279,7 +1305,7 @@ const TaskRow = React.memo(function TaskRow({
           {projectName && (
             <Badge
               variant="secondary"
-              className="shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal"
+              className="shrink-0 gap-1 px-1.5 py-0 font-normal text-xs"
               title={`归属项目：${projectName}`}
             >
               <FolderKanbanIcon className="size-3" />
@@ -1288,7 +1314,7 @@ const TaskRow = React.memo(function TaskRow({
           )}
         </div>
       </TableCell>
-      <TableCell className="max-w-40 text-muted-foreground">
+      <TableCell className="hidden text-muted-foreground sm:table-cell">
         <Link
           href={`/function/tasks/detail?id=${encodeURIComponent(task.id)}`}
           className="block truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1297,20 +1323,20 @@ const TaskRow = React.memo(function TaskRow({
           {task.description}
         </Link>
       </TableCell>
-      <TableCell className="max-w-40 truncate text-muted-foreground" title={task.goal}>
+      <TableCell className="hidden max-w-40 truncate text-muted-foreground lg:table-cell" title={task.goal}>
         {task.goal}
       </TableCell>
       <TableCell>
         <StatusBadge domain="task" value={task.status} dot />
       </TableCell>
-      <TableCell className="text-center text-muted-foreground text-xs tabular-nums">
+      <TableCell className="hidden text-center text-muted-foreground text-xs tabular-nums xl:table-cell">
         {typeof task.goals_total === "number" && task.goals_total > 0 ? (
           `${task.goals_met}/${task.goals_total}`
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
-      <TableCell className="text-center text-xs tabular-nums">
+      <TableCell className="hidden text-center text-xs tabular-nums lg:table-cell">
         {(() => {
           const f = task.findings;
           const total = f ? f.critical + f.high + f.medium + f.low : 0;
@@ -1324,12 +1350,12 @@ const TaskRow = React.memo(function TaskRow({
               <span className="text-muted-foreground">/</span>
               {seg(f.medium, "text-warning")}
               <span className="text-muted-foreground">/</span>
-              {seg(f.low, "text-slate-600 dark:text-slate-400")}
+              {seg(f.low, "text-muted-foreground")}
             </span>
           );
         })()}
       </TableCell>
-      <TableCell className="text-center text-xs tabular-nums">
+      <TableCell className="hidden text-center text-xs tabular-nums xl:table-cell">
         {task.in_flight && task.in_flight > 0 ? (
           <span className="font-medium text-foreground">{task.in_flight}</span>
         ) : task.status === "running" && taskStalled(task, nowSec) ? (
@@ -1352,10 +1378,10 @@ const TaskRow = React.memo(function TaskRow({
           <span className="text-muted-foreground">0</span>
         )}
       </TableCell>
-      <TableCell className="whitespace-nowrap text-right text-muted-foreground text-xs tabular-nums">
+      <TableCell className="hidden whitespace-nowrap text-right text-muted-foreground text-xs tabular-nums md:table-cell">
         {fmtDateTime(task.created_unix)}
       </TableCell>
-      <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
+      <TableCell className="hidden whitespace-nowrap text-right text-xs tabular-nums xl:table-cell">
         {(() => {
           const secs = taskDuration(task, nowSec);
           if (secs <= 0) return <span className="text-muted-foreground">—</span>;
@@ -1367,7 +1393,7 @@ const TaskRow = React.memo(function TaskRow({
         })()}
       </TableCell>
       <TableCell
-        className="whitespace-nowrap text-right text-xs tabular-nums"
+        className="hidden whitespace-nowrap text-right text-xs tabular-nums xl:table-cell"
         title={
           task.tokens
             ? `输入 ${task.tokens.input_tokens} · 缓存 ${task.tokens.cache_read_tokens} · 输出 ${task.tokens.output_tokens}`
@@ -1386,7 +1412,7 @@ const TaskRow = React.memo(function TaskRow({
           "—"
         )}
       </TableCell>
-      <TableCell className="sticky right-0 z-10 bg-card text-right shadow-[-1px_0_0_0_hsl(var(--border))] group-hover:bg-muted/50">
+      <TableCell className="sticky right-0 z-10 bg-card text-right shadow-[-1px_0_0_0_var(--border)] group-hover:bg-muted/50">
         <div className="flex items-center justify-end gap-0.5">
           <Button size="icon" variant="ghost" asChild aria-label="查看任务详情" title="查看任务详情">
             <Link href={`/function/tasks/detail?id=${encodeURIComponent(task.id)}`}>
@@ -1960,18 +1986,22 @@ function TaskArchivesPanel({ onChanged }: { onChanged: () => void }) {
           )}
         </div>
         {loading ? (
-          <div className="flex justify-center py-20">
-            <Spinner />
+          <div className="flex flex-col gap-2 px-4 lg:px-6" aria-hidden="true">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
           </div>
         ) : archives.length === 0 ? (
-          <Empty className="mx-4 border border-dashed lg:mx-6">
+          <Empty className="mx-4 lg:mx-6">
             <EmptyHeader>
               <EmptyTitle>暂无任务归档</EmptyTitle>
               <EmptyDescription>暂停或终态任务可从当前任务列表归档。</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (
-          <Table className="**:data-[slot='table-cell']:px-4 **:data-[slot='table-head']:px-4">
+          <Table className="table-fixed">
             <TableHeader className="[&_tr]:border-t">
               <TableRow>
                 <TableHead className="w-10">
@@ -1984,13 +2014,13 @@ function TaskArchivesPanel({ onChanged }: { onChanged: () => void }) {
                   />
                 </TableHead>
                 <TableHead>任务</TableHead>
-                <TableHead>原状态</TableHead>
-                <TableHead>分类</TableHead>
-                <TableHead>归档时间</TableHead>
-                <TableHead>压缩大小</TableHead>
-                <TableHead>数据量</TableHead>
+                <TableHead className="hidden md:table-cell">原状态</TableHead>
+                <TableHead className="hidden sm:table-cell">分类</TableHead>
+                <TableHead className="hidden lg:table-cell">归档时间</TableHead>
+                <TableHead className="hidden xl:table-cell">压缩大小</TableHead>
+                <TableHead className="hidden xl:table-cell">数据量</TableHead>
                 <TableHead className="min-w-44">处理状态</TableHead>
-                <TableHead className="text-right">操作</TableHead>
+                <TableHead className="w-24 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -2025,20 +2055,24 @@ function TaskArchivesPanel({ onChanged }: { onChanged: () => void }) {
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <StatusBadge domain="task" value={archive.original_status} dot />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{archive.category_name || "未分类"}</TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground text-xs">
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">
+                      {archive.category_name || "未分类"}
+                    </TableCell>
+                    <TableCell className="hidden whitespace-nowrap text-muted-foreground text-xs lg:table-cell">
                       {archiveDate(archive.archived_at || archive.requested_at)}
                     </TableCell>
                     <TableCell
-                      className="whitespace-nowrap text-xs"
+                      className="hidden whitespace-nowrap text-xs xl:table-cell"
                       title={`压缩前 ${formatArchiveBytes(archive.original_size)}`}
                     >
                       {archiveCompressionLabel(archive)}
                     </TableCell>
-                    <TableCell className="text-xs tabular-nums">{archiveDataTotal(archive).toLocaleString()}</TableCell>
+                    <TableCell className="hidden text-xs tabular-nums xl:table-cell">
+                      {archiveDataTotal(archive).toLocaleString()}
+                    </TableCell>
                     <TableCell>
                       <div className="flex min-w-0 flex-col gap-1.5">
                         <ArchiveStateBadge state={archive.state} />
@@ -3376,9 +3410,9 @@ function CreateTaskSheet({
         <div className="flex-1 overflow-y-auto p-6">
           <div className="grid gap-5">
             {noProjectsAtAll && (
-              <div className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+              <div className="flex items-center gap-3 rounded-lg border border-warning/50 bg-warning/15 p-4">
                 <div className="flex-1 text-sm">
-                  <div className="font-medium text-amber-600 dark:text-amber-400">还没有项目</div>
+                  <div className="font-medium text-warning">还没有项目</div>
                   <div className="text-muted-foreground">任务必须挂在项目下——先创建一个项目，再回来新建任务。</div>
                 </div>
                 <Button size="sm" asChild>
@@ -3387,15 +3421,11 @@ function CreateTaskSheet({
               </div>
             )}
             {allViewBlocked && (
-              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-destructive">
-                  <TriangleAlertIcon className="size-4 shrink-0" />
-                  当前处于「全部」视图，不能创建任务
-                </div>
-                <div className="mt-1 pl-6 text-sm text-muted-foreground">
-                  请先在左上角项目切换器选择一个具体项目，再回来新建任务。
-                </div>
-              </div>
+              <Alert variant="destructive">
+                <TriangleAlertIcon />
+                <AlertTitle>当前处于「全部」视图，不能创建任务</AlertTitle>
+                <AlertDescription>请先在左上角项目切换器选择一个具体项目，再回来新建任务。</AlertDescription>
+              </Alert>
             )}
             <TaskTemplateControls
               description={description}
@@ -3518,8 +3548,9 @@ function CreateTaskSheet({
             <Field>
               <FieldLabel htmlFor="task-auth-url">目标登录凭据（可选）</FieldLabel>
               <div className="grid gap-2">
-                <label className="flex items-center gap-2 text-sm">
+                <label htmlFor="task-auth-enabled" className="flex items-center gap-2 text-sm">
                   <Checkbox
+                    id="task-auth-enabled"
                     checked={authCfg.enabled}
                     onCheckedChange={(v) => setAuthCfg((c) => ({ ...c, enabled: !!v }))}
                   />

@@ -336,7 +336,8 @@ function AssetTreeRow({
         "group flex items-center gap-1 rounded-md pr-1 text-sm",
         selected ? "bg-accent" : "hover:bg-accent/50",
       )}
-      style={{ paddingLeft: `${node.depth * 10}px` }}
+      // 缩进按 12px(= 3 × 4px spacing 刻度)逐层递进。
+      style={{ paddingLeft: `${node.depth * 12}px` }}
     >
       {hasChildren ? (
         <button

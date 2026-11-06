@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { AlertTriangle } from "lucide-react";
 
+import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -138,10 +139,7 @@ export default function LoginPage() {
               <path d="M17 20v-6a7 7 0 0 1 14 0v6" />
               <circle cx="24" cy="31" r="2.5" fill="currentColor" stroke="none" />
             </svg>
-            <div>
-              <h1 className="font-semibold text-xl tracking-tight">控制台登录</h1>
-              <p className="mt-1 text-muted-foreground text-sm">仅限授权运维人员访问</p>
-            </div>
+            <h1 className="font-semibold text-2xl tracking-tight">控制台登录</h1>
           </div>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
@@ -179,9 +177,14 @@ export default function LoginPage() {
                 </button>
               </Label>
             </div>
-            {error && <p className="text-destructive text-sm">{error}</p>}
+            {error && (
+              <Alert variant="destructive">
+                <AlertTriangle />
+                <AlertTitle>{error}</AlertTitle>
+              </Alert>
+            )}
             <Button type="submit" className="w-full" disabled={loading || !password || !agreed}>
-              {loading ? "登录中..." : "登录"}
+              {loading ? "登录中…" : "登录"}
             </Button>
           </form>
         </div>
@@ -206,7 +209,8 @@ export default function LoginPage() {
             <p>本系统仅供授权人员在合法授权范围内开展安全评估工作。登录即表示您确认已理解并接受以下约束：</p>
             <ul className="ml-5 list-disc space-y-2">
               <li>
-                仅可对**已获得明确书面授权**的目标开展测试；对任何未授权系统发起扫描、探测或利用均属违规乃至违法行为；
+                仅可对<strong>已获得明确书面授权</strong>
+                的目标开展测试；对任何未授权系统发起扫描、探测或利用均属违规乃至违法行为；
               </li>
               <li>本系统具备在服务器上执行命令的能力——请妥善保管访问凭据，凭据泄露等同于服务器控制权泄露；</li>
               <li>

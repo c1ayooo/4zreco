@@ -57,6 +57,7 @@ export default function C2Page() {
   const [listeners, setListeners] = React.useState<ListenerView[]>([]);
   const [name, setName] = React.useState("");
   const [port, setPort] = React.useState("");
+  const [startError, setStartError] = React.useState("");
   const [starting, setStarting] = React.useState(false);
   const [pendingStop, setPendingStop] = React.useState<ListenerView | null>(null);
   const [stopping, setStopping] = React.useState(false);
@@ -128,13 +129,14 @@ export default function C2Page() {
     const p = Number(port);
     const nm = name.trim();
     if (!nm) {
-      toast.error("请填写监听器名称");
+      setStartError("请填写监听器名称");
       return;
     }
     if (!Number.isInteger(p) || p < 1024 || p > 65535) {
-      toast.error("端口须为 1024-65535 的整数（低端口绑定为特权操作，走外部转发）");
+      setStartError("端口须为 1024-65535 的整数（低端口绑定为特权操作，走外部转发）");
       return;
     }
+    setStartError("");
     setStarting(true);
     try {
       const r = await api.startListener(nm, p);
@@ -165,11 +167,15 @@ export default function C2Page() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto">
+      <div>
+        <h1 className="font-semibold text-2xl tracking-tight">监听器 / C2</h1>
+      </div>
+
       {/* ── C2 出口配置 ── */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <RadioTower className="size-4" /> C2 出口配置
           </CardTitle>
         </CardHeader>
@@ -243,7 +249,7 @@ export default function C2Page() {
       {/* ── 监听器 ── */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between text-base">
+          <CardTitle className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-2">
               <RadioTower className="size-4" /> 回连接收器（{listeners.length}）
             </span>
@@ -256,16 +262,32 @@ export default function C2Page() {
           <div className="grid items-end gap-2 sm:grid-cols-[1fr_140px_auto]">
             <div className="grid gap-1">
               <Label>监听器名称</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 shell-main" />
+              <Input
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setStartError("");
+                }}
+                placeholder="例如 shell-main"
+              />
             </div>
             <div className="grid gap-1">
               <Label>端口（1024-65535）</Label>
-              <Input value={port} onChange={(e) => setPort(e.target.value)} placeholder="4444" inputMode="numeric" />
+              <Input
+                value={port}
+                onChange={(e) => {
+                  setPort(e.target.value);
+                  setStartError("");
+                }}
+                placeholder="4444"
+                inputMode="numeric"
+              />
             </div>
             <Button onClick={() => void startListener()} disabled={starting}>
               <PlayIcon /> {starting ? "启动中…" : "启动监听"}
             </Button>
           </div>
+          {startError && <p className="text-destructive text-xs">{startError}</p>}
 
           {listeners.length === 0 && (
             <p className="text-muted-foreground text-sm">
@@ -273,32 +295,36 @@ export default function C2Page() {
             </p>
           )}
 
-          {listeners.map((l) => (
-            <div key={l.name} className="rounded-lg border">
-              <div className="flex flex-wrap items-center gap-2 p-3">
-                <Badge variant="secondary">{l.name}</Badge>
-                <span className="font-mono text-sm">:{l.port}</span>
-                <span className="text-muted-foreground text-sm">起于 {fmtTime(l.started_at)}</span>
-                <Badge variant={l.sessions.some((s) => s.open) ? "default" : "outline"}>{l.sessions.length} 会话</Badge>
-                <div className="grow" />
-                <Button size="sm" variant="ghost" onClick={() => setExpanded(expanded === l.name ? null : l.name)}>
-                  {expanded === l.name ? "收起会话" : "查看会话"}
-                </Button>
-                <Button size="sm" variant="outline" className="text-destructive" onClick={() => setPendingStop(l)}>
-                  <SquareIcon /> 停止
-                </Button>
-              </div>
-              {expanded === l.name && (
-                <div className="border-t">
-                  {l.sessions.length === 0 ? (
-                    <p className="text-muted-foreground p-3 text-sm">尚无回连会话。</p>
-                  ) : (
-                    l.sessions.map((s) => <SessionRow key={s.id} s={s} />)
+          {listeners.length > 0 && (
+            <div className="flex flex-col divide-y">
+              {listeners.map((l) => (
+                <div key={l.name}>
+                  <div className="flex flex-wrap items-center gap-2 py-3">
+                    <Badge variant="secondary">{l.name}</Badge>
+                    <span className="font-mono text-sm">:{l.port}</span>
+                    <span className="text-muted-foreground text-sm">起于 {fmtTime(l.started_at)}</span>
+                    <Badge variant="secondary">{l.sessions.length} 会话</Badge>
+                    <div className="grow" />
+                    <Button size="sm" variant="ghost" onClick={() => setExpanded(expanded === l.name ? null : l.name)}>
+                      {expanded === l.name ? "收起会话" : "查看会话"}
+                    </Button>
+                    <Button size="sm" variant="destructive" onClick={() => setPendingStop(l)}>
+                      <SquareIcon /> 停止
+                    </Button>
+                  </div>
+                  {expanded === l.name && (
+                    <div>
+                      {l.sessions.length === 0 ? (
+                        <p className="pb-3 text-muted-foreground text-sm">尚无回连会话</p>
+                      ) : (
+                        l.sessions.map((s) => <SessionRow key={s.id} s={s} />)
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              ))}
             </div>
-          ))}
+          )}
         </CardContent>
       </Card>
 

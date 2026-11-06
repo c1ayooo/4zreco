@@ -25,10 +25,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { statusMeta } from "@/lib/status";
@@ -121,16 +123,30 @@ function FindingDetailInner() {
   );
 
   if (!finding) {
+    // 块级加载一律骨架行块,行高对齐真实布局(头部 + 左双卡 / 右状态卡);
+    // 拉取完成后仍无数据才是「未找到」。
+    if (!loaded) {
+      return (
+        <div className="flex flex-1 flex-col gap-4 p-4 lg:p-6">
+          <Skeleton className="h-20 w-full" />
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="flex flex-col gap-4 lg:col-span-2">
+              <Skeleton className="h-28 w-full" />
+              <Skeleton className="h-48 w-full" />
+            </div>
+            <Skeleton className="h-72 w-full" />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center">
-        <p className="text-muted-foreground">{loaded ? `未找到发现 ${id}` : "加载中…"}</p>
-        {loaded && (
-          <Button asChild variant="outline">
-            <Link href="/function/findings">
-              <ArrowLeftIcon /> 返回发现列表
-            </Link>
-          </Button>
-        )}
+        <p className="text-muted-foreground">未找到发现 {id}</p>
+        <Button asChild variant="outline">
+          <Link href="/function/findings">
+            <ArrowLeftIcon /> 返回发现列表
+          </Link>
+        </Button>
       </div>
     );
   }
@@ -155,7 +171,7 @@ function FindingDetailInner() {
           <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs">#{finding.id}</code>
           <Separator orientation="vertical" className="mx-1 h-4" />
           <Button size="sm" variant="outline" onClick={() => api.downloadFindingDocx(finding.id)}>
-            <FileDownIcon /> 导出 Word
+            <FileDownIcon data-icon="inline-start" /> 导出 Word
           </Button>
           <StatusBadge domain="severity" value={finding.severity} dot />
           <StatusBadge domain="finding" value={finding.status} dot />
@@ -250,7 +266,7 @@ function FindingDetailInner() {
                     <StatusBadge domain="severity" value={finding.severity} dot />
                   ) : (
                     <Select value={finding.severity} onValueChange={(v) => changeSeverity(v as Severity)}>
-                      <SelectTrigger size="sm" className="h-7 w-auto border-none px-1 shadow-none focus-visible:ring-0">
+                      <SelectTrigger size="sm" className="h-7 w-auto border-none px-1 shadow-none">
                         <StatusBadge domain="severity" value={finding.severity} dot />
                       </SelectTrigger>
                       <SelectContent position="popper" align="end">
@@ -272,7 +288,7 @@ function FindingDetailInner() {
                     <StatusBadge domain="finding" value={finding.status} dot />
                   ) : (
                     <Select value={finding.status} onValueChange={(v) => changeStatus(v as FindingStatus)}>
-                      <SelectTrigger size="sm" className="h-7 w-auto border-none px-1 shadow-none focus-visible:ring-0">
+                      <SelectTrigger size="sm" className="h-7 w-auto border-none px-1 shadow-none">
                         <StatusBadge domain="finding" value={finding.status} dot />
                       </SelectTrigger>
                       <SelectContent position="popper" align="end">
@@ -458,12 +474,13 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
                       checked ? "ring-2 ring-primary" : ""
                     }`}
                   >
-                    <input
-                      type="checkbox"
-                      className="absolute top-1.5 left-1.5 z-10 size-4 accent-primary"
+                    <Checkbox
+                      className="absolute top-1.5 left-1.5 z-10"
                       checked={checked}
-                      onChange={() =>
-                        setPickSelected((cur) => (cur.includes(a.id) ? cur.filter((x) => x !== a.id) : [...cur, a.id]))
+                      onCheckedChange={(next) =>
+                        setPickSelected((cur) =>
+                          next === true ? (cur.includes(a.id) ? cur : [...cur, a.id]) : cur.filter((x) => x !== a.id),
+                        )
                       }
                     />
                     <span className="flex aspect-[4/3] items-center justify-center bg-muted/40">
@@ -484,12 +501,12 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
                           className="h-full w-full object-cover object-top"
                         />
                       ) : (
-                        <span className="p-2 text-center text-[11px] text-muted-foreground">
+                        <span className="p-2 text-center text-muted-foreground text-xs">
                           {a.preview_state === "pending" ? "预览生成中…" : "暂无预览"}
                         </span>
                       )}
                     </span>
-                    <span className="line-clamp-2 bg-background/90 px-1.5 py-1 text-[10px]">
+                    <span className="line-clamp-2 bg-background/90 px-1.5 py-1 text-xs">
                       {a.kind === "image" ? "" : `${docLabel(a)} · `}
                       {a.name}
                     </span>
@@ -587,7 +604,7 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
                     title={a.note || a.name}
                   >
                     {broken[a.id] ? (
-                      <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground">
+                      <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-muted-foreground text-xs">
                         无法预览
                         <span className="line-clamp-2 break-all">{a.name}</span>
                       </span>
@@ -598,10 +615,10 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
                         alt={a.note || a.name}
                         loading="lazy"
                         onError={() => setBroken((b) => ({ ...b, [a.id]: true }))}
-                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                        className="h-full w-full object-cover"
                       />
                     )}
-                    <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
+                    <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-xs text-white">
                       {a.note || a.name}
                     </span>
                   </button>
@@ -634,16 +651,16 @@ function FindingShots({ taskId, findingId }: { taskId?: string; findingId: strin
                           src={previewUrl(a.id, 1)}
                           alt={a.note || a.name}
                           loading="lazy"
-                          className="h-full w-full object-cover object-top transition-transform duration-200 group-hover:scale-105"
+                          className="h-full w-full object-cover object-top"
                         />
                       ) : (
-                        <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-3 text-center text-[11px] text-muted-foreground">
+                        <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-3 text-center text-muted-foreground text-xs">
                           <FileDownIcon className="size-5" />
                           {stateText}
                           {a.preview_error ? <span className="line-clamp-2 break-all">{a.preview_error}</span> : null}
                         </span>
                       )}
-                      <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                      <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-0.5 text-xs text-white">
                         {docLabel(a)}
                         {ready ? ` · ${a.preview_pages} 页` : ""} · {a.name}
                       </span>

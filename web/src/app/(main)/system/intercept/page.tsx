@@ -9,11 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -39,8 +41,8 @@ function fmtTokens(n: number): string {
 // JudgeStat 是一块统计数字(标签 + 数值)。
 function JudgeStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border bg-muted/20 px-3 py-2">
-      <div className="text-[10px] text-muted-foreground">{label}</div>
+    <div className="rounded-lg bg-muted/40 px-3 py-2">
+      <div className="text-muted-foreground text-xs">{label}</div>
       <div className="mt-0.5 font-semibold text-lg tabular-nums">{value}</div>
     </div>
   );
@@ -58,7 +60,7 @@ function JudgeSparkbars({ daily }: { daily: JudgeDayUsage[] }) {
           <div
             key={d.date}
             title={`${d.date} · ${d.calls} 次 · ${fmtTokens(total)} tokens`}
-            className="min-w-[2px] flex-1 rounded-sm bg-chart-4500/60 hover:bg-chart-4500"
+            className="min-w-[2px] flex-1 rounded-sm bg-info/60 hover:bg-info/80"
             style={{ height: `${h}%` }}
           />
         );
@@ -252,11 +254,11 @@ function JudgeCard() {
       {/* 启用开关 —— 独立高亮条 */}
       <div
         className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-3 ${
-          cfg.enabled ? "border-chart-4400/50 bg-chart-450/40 dark:bg-chart-4950/20" : "bg-muted/40"
+          cfg.enabled ? "border-success/50 bg-success/15" : "bg-muted/40"
         }`}
       >
         <div className="flex items-center gap-2.5">
-          <BotIcon className={`h-5 w-5 shrink-0 ${cfg.enabled ? "text-chart-4600" : "text-muted-foreground"}`} />
+          <BotIcon className={`h-5 w-5 shrink-0 ${cfg.enabled ? "text-success" : "text-muted-foreground"}`} />
           <div>
             <p className="font-semibold text-sm leading-tight">模型兜底审批</p>
             <p className="mt-0.5 text-muted-foreground text-xs">
@@ -296,7 +298,7 @@ function JudgeCard() {
             </div>
             {usage.daily.length > 0 && (
               <div className="mt-4">
-                <p className="mb-2 text-xs font-medium text-muted-foreground">近 30 天每日消耗（输入 + 输出）</p>
+                <p className="mb-2 font-medium text-muted-foreground text-xs">近 30 天每日消耗（输入 + 输出）</p>
                 <JudgeSparkbars daily={usage.daily} />
               </div>
             )}
@@ -325,7 +327,7 @@ function JudgeCard() {
                 placeholder="留空使用内置模板"
                 spellCheck={false}
               />
-              <p className="text-right text-[11px] text-muted-foreground">{cfg.prompt.length} 字</p>
+              <p className="text-right text-muted-foreground text-xs">{cfg.prompt.length} 字</p>
             </CardContent>
           </Card>
 
@@ -333,7 +335,7 @@ function JudgeCard() {
           <Card className="lg:col-span-2">
             <CardContent className="space-y-5 p-4">
               <div className="space-y-4">
-                <p className="font-semibold text-xs text-muted-foreground">判定模型与策略</p>
+                <p className="font-semibold text-muted-foreground text-xs">判定模型与策略</p>
                 <Field label="审批模型">
                   <Select value={String(cfg.profile_id || 0)} onValueChange={(v) => patch({ profile_id: Number(v) })}>
                     <SelectTrigger>
@@ -359,7 +361,7 @@ function JudgeCard() {
                       if (n > 0) patch({ timeout_seconds: n });
                     }}
                   />
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="mt-1 text-muted-foreground text-xs">
                     思考型模型（强制 adaptive thinking 的那些）的判定耗时随命令长度而变：
                     短命令几秒，长命令（几百上千字符的 shell 脚本）明显更久；正文为空时还会
                     升预算重试。给短了会把「模型其实能判定」误判成超时失败——默认 180 秒。
@@ -389,7 +391,7 @@ function JudgeCard() {
               <Separator />
 
               <div className="space-y-4">
-                <p className="font-semibold text-xs text-muted-foreground">人工审批（模型判为「转人工」时）</p>
+                <p className="font-semibold text-muted-foreground text-xs">人工审批（模型判为「转人工」时）</p>
                 <Field label="审批等待超时（秒）">
                   <Input
                     type="number"
@@ -445,6 +447,8 @@ export default function InterceptPage() {
   const [saving, setSaving] = React.useState(false);
   const [regexErr, setRegexErr] = React.useState("");
   const [regexWarn, setRegexWarn] = React.useState(false); // true = JS 无法解析但可能是合法 Go 语法
+  const [nameErr, setNameErr] = React.useState(false);
+  const [patternErr, setPatternErr] = React.useState(false);
 
   // ---- tool scope dialog ----
   const [scopeOpen, setScopeOpen] = React.useState(false);
@@ -509,6 +513,8 @@ export default function InterceptPage() {
     setEditing(null);
     setForm(defaultForm());
     setRegexErr("");
+    setNameErr(false);
+    setPatternErr(false);
     setOpen(true);
   }
 
@@ -528,22 +534,18 @@ export default function InterceptPage() {
       timeout_action: rule.timeout_action,
     });
     setRegexErr("");
+    setNameErr(false);
+    setPatternErr(false);
     setOpen(true);
   }
 
   async function handleSave() {
-    if (!form.name.trim()) {
-      toast.error("名称不能为空");
-      return;
-    }
-    if (!form.pattern.trim()) {
-      toast.error("模式不能为空");
-      return;
-    }
-    if (regexErr) {
-      toast.error("正则表达式语法无效");
-      return;
-    }
+    const nameEmpty = !form.name.trim();
+    const patternEmpty = !form.pattern.trim();
+    setNameErr(nameEmpty);
+    setPatternErr(patternEmpty);
+    if (nameEmpty || patternEmpty) return;
+    if (regexErr) return;
     setSaving(true);
     try {
       if (editing) {
@@ -625,14 +627,14 @@ export default function InterceptPage() {
   // ---- render ----
 
   return (
-    <div className="flex flex-1 flex-col gap-5 p-6">
+    <div className="flex flex-1 flex-col gap-5">
       {/* ---- header ---- */}
       <h1 className="font-semibold text-2xl tracking-tight">命令拦截</h1>
 
       {/* ---- 拦截范围信息条（规则匹配与模型兜底共用：不在范围内的工具两者都不介入）---- */}
       <div
         className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5 ${
-          scopeTools.length === 0 ? "border-warning/60 bg-warning/50" : "bg-muted/40"
+          scopeTools.length === 0 ? "border-warning/60 bg-warning/15" : "bg-muted/40"
         }`}
       >
         <div className="flex min-w-0 items-center gap-2 text-sm">
@@ -681,48 +683,59 @@ export default function InterceptPage() {
           <Card>
             <CardContent className="p-0">
               {loading ? (
-                <p className="p-6 text-muted-foreground text-sm">加载中…</p>
-              ) : rules.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-                  <ShieldAlertIcon className="h-8 w-8 text-muted-foreground/40" />
-                  <p className="text-muted-foreground text-sm">暂无规则</p>
-                  <Button size="sm" variant="outline" onClick={openNew}>
-                    <PlusIcon className="h-4 w-4" />
-                    新建第一条规则
-                  </Button>
+                <div className="flex flex-col gap-3 p-4">
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
                 </div>
+              ) : rules.length === 0 ? (
+                <Empty className="py-16">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <ShieldAlertIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>暂无规则</EmptyTitle>
+                    <EmptyDescription>新建后按优先级逐条匹配命令</EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button size="sm" variant="outline" onClick={openNew}>
+                      <PlusIcon className="h-4 w-4" />
+                      新建第一条规则
+                    </Button>
+                  </EmptyContent>
+                </Empty>
               ) : (
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="w-[72px]">优先级</TableHead>
+                      <TableHead className="hidden w-[72px] md:table-cell">优先级</TableHead>
                       <TableHead>名称</TableHead>
-                      <TableHead className="w-[90px]">目标</TableHead>
-                      <TableHead className="w-[80px]">类型</TableHead>
+                      <TableHead className="hidden w-[90px] sm:table-cell">目标</TableHead>
+                      <TableHead className="hidden w-[80px] sm:table-cell">类型</TableHead>
                       <TableHead>模式</TableHead>
-                      <TableHead className="w-[72px]">策略</TableHead>
+                      <TableHead className="w-[120px]">策略</TableHead>
                       <TableHead className="w-[64px] text-center">启用</TableHead>
                       <TableHead className="w-[80px]" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {rules.map((rule) => (
-                      <TableRow key={rule.id} className={!rule.enabled ? "opacity-40" : ""}>
-                        <TableCell>
+                      <TableRow key={rule.id} aria-disabled={!rule.enabled || undefined}>
+                        <TableCell className="hidden md:table-cell">
                           <span className="font-mono text-xs tabular-nums">{rule.priority}</span>
                         </TableCell>
-                        <TableCell className="font-medium text-sm">{rule.name}</TableCell>
-                        <TableCell>
+                        <TableCell className="truncate font-medium text-sm">{rule.name}</TableCell>
+                        <TableCell className="hidden sm:table-cell">
                           <span className="text-muted-foreground text-xs">
                             {rule.match_target === "tool_name" ? "工具名" : "输入内容"}
                           </span>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="hidden sm:table-cell">
                           <span className="text-muted-foreground text-xs">
                             {rule.match_type === "regex" ? "正则" : "字符串"}
                           </span>
                         </TableCell>
-                        <TableCell className="max-w-[220px]">
+                        <TableCell>
                           <code className="block truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
                             {rule.pattern}
                           </code>
@@ -738,7 +751,7 @@ export default function InterceptPage() {
  不一致。现在规则自己的声明优先于全局，所以必须让用户
  看得到「这条规则自己是怎么算的」。
  */}
-                          <div className="mt-1 whitespace-nowrap text-[10px] text-muted-foreground">
+                          <div className="mt-1 truncate text-muted-foreground text-xs">
                             {rule.timeout_enabled
                               ? `超时 ${rule.timeout_seconds}s → ${rule.timeout_action === "allow" ? "放行" : "拒绝"}`
                               : "超时用全局配置"}
@@ -749,13 +762,20 @@ export default function InterceptPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-end gap-0.5">
-                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(rule)}>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              aria-label={`编辑规则「${rule.name}」`}
+                              onClick={() => openEdit(rule)}
+                            >
                               <PencilIcon className="h-3.5 w-3.5" />
                             </Button>
                             <Button
                               size="icon"
                               variant="ghost"
                               className="h-7 w-7 text-destructive hover:text-destructive"
+                              aria-label={`删除规则「${rule.name}」`}
                               onClick={() => handleDelete(rule.id)}
                             >
                               <Trash2Icon className="h-3.5 w-3.5" />
@@ -787,7 +807,15 @@ export default function InterceptPage() {
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
             <Field label="名称">
-              <Input placeholder="给规则起个名字" value={form.name} onChange={(e) => set({ name: e.target.value })} />
+              <Input
+                placeholder="给规则起个名字"
+                value={form.name}
+                onChange={(e) => {
+                  set({ name: e.target.value });
+                  if (nameErr) setNameErr(false);
+                }}
+              />
+              {nameErr && <p className="text-destructive text-xs">名称不能为空</p>}
             </Field>
 
             <Field label="优先级（数字越大越先匹配）">
@@ -831,9 +859,13 @@ export default function InterceptPage() {
               <Input
                 placeholder={form.match_type === "regex" ? "^Bash$" : "rm -rf"}
                 value={form.pattern}
-                onChange={(e) => set({ pattern: e.target.value })}
+                onChange={(e) => {
+                  set({ pattern: e.target.value });
+                  if (patternErr) setPatternErr(false);
+                }}
                 className={regexErr ? "border-destructive focus-visible:ring-destructive" : ""}
               />
+              {patternErr && <p className="mt-1 text-destructive text-xs">模式不能为空</p>}
               {regexErr && <p className="mt-1 text-destructive text-xs">{regexErr}</p>}
               {regexWarn && (
                 <p className="mt-1 text-warning text-xs">
@@ -963,12 +995,17 @@ export default function InterceptPage() {
 
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
             {scopeLoading ? (
-              <p className="py-4 text-muted-foreground text-sm">加载中…</p>
+              <div className="space-y-2 py-1">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+              </div>
             ) : (
               toolGroups.map((group, gi) => (
                 <div key={group.label}>
                   {gi > 0 && <Separator className="mb-5" />}
-                  <p className="mb-2 font-semibold text-xs text-muted-foreground">{group.label}</p>
+                  <p className="mb-2 font-semibold text-muted-foreground text-xs">{group.label}</p>
                   <div className="space-y-0.5">
                     {group.tools.map((t) => (
                       <div key={t.key} className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50">
@@ -981,13 +1018,13 @@ export default function InterceptPage() {
                           <div className="flex items-center gap-1.5">
                             <span className="font-mono text-sm">{t.key}</span>
                             {t.kind && t.kind !== "builtin" && (
-                              <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                              <Badge variant="outline" className="px-1 py-0 text-xs">
                                 {t.kind}
                               </Badge>
                             )}
                           </div>
                           {t.description && (
-                            <p className="line-clamp-1 text-[11px] text-muted-foreground">{t.description}</p>
+                            <p className="line-clamp-1 text-muted-foreground text-xs">{t.description}</p>
                           )}
                         </label>
                       </div>

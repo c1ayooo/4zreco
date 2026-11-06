@@ -46,10 +46,7 @@ export function UpdateBadge() {
       className="inline-flex items-center gap-1.5 rounded-full bg-primary px-2.5 py-1 font-medium text-primary-foreground text-xs transition-opacity hover:opacity-90"
     >
       {/* 呼吸点：顶栏元素很多，纯文字容易被忽略，动效让它一眼可见。 */}
-      <span className="relative flex size-1.5">
-        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary-foreground opacity-75" />
-        <span className="relative inline-flex size-1.5 rounded-full bg-primary-foreground" />
-      </span>
+      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary-foreground" />
       <ArrowUpCircleIcon className="size-3.5" />
       <span className="hidden sm:inline">新版本 {latest}</span>
       <span className="sm:hidden">新版本</span>

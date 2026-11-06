@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -93,7 +94,7 @@ function MethodBadge({ method }: { method: string }) {
   return (
     <span
       className={cn(
-        "inline-block rounded px-1.5 py-0.5 font-mono font-semibold text-[10px] leading-none",
+        "inline-block rounded px-1.5 py-0.5 font-mono font-semibold text-xs leading-none",
         METHOD_COLOR[normalized] ?? "bg-muted text-muted-foreground",
       )}
     >
@@ -156,6 +157,7 @@ function SourceCell({ asset }: { asset: Asset }) {
 
 function AssetCard({
   children,
+  colCls,
   cols,
   loaded,
   onPage,
@@ -165,6 +167,8 @@ function AssetCard({
   total,
 }: {
   children: React.ReactNode;
+  /** 与 cols 一一对应的响应式列存活类（hidden …:table-cell），头格与行格须同用。 */
+  colCls?: (string | undefined)[];
   cols: string[];
   loaded: boolean;
   onPage: (page: number) => void;
@@ -179,13 +183,16 @@ function AssetCard({
   const end = Math.min(total, page * size + rows.length);
   let tableRows: React.ReactNode;
   if (!loaded) {
-    tableRows = (
-      <TableRow>
-        <TableCell colSpan={cols.length} className="py-14 text-center">
-          <Spinner className="mx-auto" />
-        </TableCell>
+    // 骨架行块对齐真实行高，避免首帧跳变；比单格转圈更快给出列布局预期。
+    tableRows = [0, 1, 2, 3, 4].map((i) => (
+      <TableRow key={i}>
+        {cols.map((column, index) => (
+          <TableCell key={column} className={colCls?.[index]}>
+            <Skeleton className="h-4 w-3/4" />
+          </TableCell>
+        ))}
       </TableRow>
-    );
+    ));
   } else if (rows.length > 0) {
     tableRows = rows;
   } else {
@@ -203,8 +210,10 @@ function AssetCard({
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-card">
             <TableRow>
-              {cols.map((column) => (
-                <TableHead key={column}>{column}</TableHead>
+              {cols.map((column, index) => (
+                <TableHead key={column} className={colCls?.[index]}>
+                  {column}
+                </TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -506,12 +515,16 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         {searchBox}
 
         <TabsContent value="root_domain" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <AssetCard cols={["域名", "ICP 备案", "来源", "操作"]} {...commonCardProps}>
+          <AssetCard
+            cols={["域名", "ICP 备案", "来源", "操作"]}
+            colCls={[undefined, "hidden sm:table-cell", "hidden md:table-cell", undefined]}
+            {...commonCardProps}
+          >
             {rows.map((asset) => (
               <TableRow key={asset.id}>
                 <TableCell className="font-medium font-mono text-xs">{asset.domain}</TableCell>
-                <TableCell className="text-xs">{asset.icp || "—"}</TableCell>
-                <TableCell>
+                <TableCell className="hidden text-xs sm:table-cell">{asset.icp || "—"}</TableCell>
+                <TableCell className="hidden md:table-cell">
                   <SourceCell asset={asset} />
                 </TableCell>
                 <TableCell className="w-16">{removeButton(asset)}</TableCell>
@@ -521,15 +534,26 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         </TabsContent>
 
         <TabsContent value="ip" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <AssetCard cols={["IP", "C段", "绑定域名", "开放端口", "来源", "操作"]} {...commonCardProps}>
+          <AssetCard
+            cols={["IP", "C段", "绑定域名", "开放端口", "来源", "操作"]}
+            colCls={[
+              undefined,
+              "hidden lg:table-cell",
+              "hidden md:table-cell",
+              "hidden xl:table-cell",
+              "hidden md:table-cell",
+              undefined,
+            ]}
+            {...commonCardProps}
+          >
             {rows.map((asset) => (
               <TableRow key={asset.id}>
                 <TableCell className="font-medium font-mono text-xs">{asset.ip}</TableCell>
-                <TableCell className="font-mono text-xs">{asset.c_segment || "—"}</TableCell>
-                <TableCell>
+                <TableCell className="hidden font-mono text-xs lg:table-cell">{asset.c_segment || "—"}</TableCell>
+                <TableCell className="hidden md:table-cell">
                   <Chips items={asset.bound_domains ?? []} mono />
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden xl:table-cell">
                   <Chips
                     items={(asset.open_ports ?? []).map((item) =>
                       item.service ? `${item.port}/${item.service}` : String(item.port),
@@ -537,7 +561,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
                     mono
                   />
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   <SourceCell asset={asset} />
                 </TableCell>
                 <TableCell className="w-16">{removeButton(asset)}</TableCell>
@@ -547,16 +571,27 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         </TabsContent>
 
         <TabsContent value="subdomain" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <AssetCard cols={["域名", "根域名", "解析类型", "解析值", "来源", "操作"]} {...commonCardProps}>
+          <AssetCard
+            cols={["域名", "根域名", "解析类型", "解析值", "来源", "操作"]}
+            colCls={[
+              undefined,
+              "hidden sm:table-cell",
+              "hidden xl:table-cell",
+              undefined,
+              "hidden md:table-cell",
+              undefined,
+            ]}
+            {...commonCardProps}
+          >
             {rows.map((asset) => (
               <TableRow key={asset.id}>
                 <TableCell className="font-medium font-mono text-xs">{asset.domain}</TableCell>
-                <TableCell className="font-mono text-xs">{asset.root_domain || "—"}</TableCell>
-                <TableCell className="text-xs">{asset.record_type || "—"}</TableCell>
+                <TableCell className="hidden font-mono text-xs sm:table-cell">{asset.root_domain || "—"}</TableCell>
+                <TableCell className="hidden text-xs xl:table-cell">{asset.record_type || "—"}</TableCell>
                 <TableCell className="max-w-xs truncate font-mono text-xs">
                   {(Array.isArray(asset.record_value) ? asset.record_value.join(", ") : asset.record_value) || "—"}
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   <SourceCell asset={asset} />
                 </TableCell>
                 <TableCell className="w-16">{removeButton(asset)}</TableCell>
@@ -566,19 +601,33 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         </TabsContent>
 
         <TabsContent value="app" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <AssetCard cols={["应用", "地址", "分类", "标题", "指纹", "来源", "操作"]} {...commonCardProps}>
+          <AssetCard
+            cols={["应用", "地址", "分类", "标题", "指纹", "来源", "操作"]}
+            colCls={[
+              undefined,
+              "hidden sm:table-cell",
+              "hidden xl:table-cell",
+              "hidden md:table-cell",
+              "hidden lg:table-cell",
+              "hidden md:table-cell",
+              undefined,
+            ]}
+            {...commonCardProps}
+          >
             {rows.map((asset) => (
               <TableRow key={asset.id}>
                 <TableCell className="max-w-48 truncate font-medium text-xs">{asset.app_name || "—"}</TableCell>
-                <TableCell className="max-w-xs truncate font-mono text-xs" title={asset.url}>
+                <TableCell className="hidden max-w-xs truncate font-mono text-xs sm:table-cell" title={asset.url}>
                   {asset.url || "—"}
                 </TableCell>
-                <TableCell className="text-xs">{asset.category || "—"}</TableCell>
-                <TableCell className="max-w-48 truncate text-xs">{asset.page_title || "—"}</TableCell>
-                <TableCell>
+                <TableCell className="hidden text-xs xl:table-cell">{asset.category || "—"}</TableCell>
+                <TableCell className="hidden max-w-48 truncate text-xs md:table-cell">
+                  {asset.page_title || "—"}
+                </TableCell>
+                <TableCell className="hidden lg:table-cell">
                   <Chips items={asset.technologies ?? []} />
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   <SourceCell asset={asset} />
                 </TableCell>
                 <TableCell className="w-16">{removeButton(asset)}</TableCell>
@@ -590,6 +639,16 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         <TabsContent value="service" className="mt-0 flex min-h-0 flex-1 flex-col">
           <AssetCard
             cols={["地址 / 服务", "状态码", "标题", "响应长度", "指纹", "认证", "来源", "操作"]}
+            colCls={[
+              undefined,
+              "hidden sm:table-cell",
+              "hidden xl:table-cell",
+              "hidden xl:table-cell",
+              "hidden lg:table-cell",
+              "hidden lg:table-cell",
+              "hidden md:table-cell",
+              undefined,
+            ]}
             {...commonCardProps}
           >
             {rows.map((asset) => {
@@ -602,7 +661,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
                   <TableCell className="max-w-xs truncate font-mono text-xs" title={address}>
                     {address || "—"}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="hidden sm:table-cell">
                     {asset.status_code != null ? (
                       <span
                         className={cn("font-mono font-semibold text-xs tabular-nums", statusTone(asset.status_code))}
@@ -613,12 +672,16 @@ export function AssetsTab({ taskId }: { taskId: string }) {
                       "—"
                     )}
                   </TableCell>
-                  <TableCell className="max-w-48 truncate text-xs">{asset.page_title || "—"}</TableCell>
-                  <TableCell className="text-xs tabular-nums">{fmtBytes(asset.content_length)}</TableCell>
-                  <TableCell>
+                  <TableCell className="hidden max-w-48 truncate text-xs xl:table-cell">
+                    {asset.page_title || "—"}
+                  </TableCell>
+                  <TableCell className="hidden text-xs tabular-nums xl:table-cell">
+                    {fmtBytes(asset.content_length)}
+                  </TableCell>
+                  <TableCell className="hidden lg:table-cell">
                     <Chips items={asset.technologies ?? []} />
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="hidden lg:table-cell">
                     {(asset.auth ?? []).length === 0 ? (
                       <span className="text-muted-foreground text-xs">—</span>
                     ) : (
@@ -627,7 +690,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
                         return (
                           <span
                             key={`${asset.id}-${item.type ?? ""}-${item.username ?? ""}-${JSON.stringify(item)}`}
-                            className="inline-flex items-center gap-1 text-[11px]"
+                            className="inline-flex items-center gap-1 text-xs"
                           >
                             <KeyRoundIcon className="size-3 text-muted-foreground" />
                             <span className="font-mono">{item.type || item.username || "认证"}</span>
@@ -636,7 +699,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
                       })
                     )}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="hidden md:table-cell">
                     <SourceCell asset={asset} />
                   </TableCell>
                   <TableCell className="w-16">{removeButton(asset)}</TableCell>
@@ -647,7 +710,11 @@ export function AssetsTab({ taskId }: { taskId: string }) {
         </TabsContent>
 
         <TabsContent value="endpoint" className="mt-0 flex min-h-0 flex-1 flex-col">
-          <AssetCard cols={["方法", "完整地址", "参数", "来源", "操作"]} {...commonCardProps}>
+          <AssetCard
+            cols={["方法", "完整地址", "参数", "来源", "操作"]}
+            colCls={[undefined, undefined, "hidden sm:table-cell", "hidden md:table-cell", undefined]}
+            {...commonCardProps}
+          >
             {rows.map((asset) => (
               <TableRow key={asset.id}>
                 <TableCell className="w-16">
@@ -656,7 +723,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
                 <TableCell className="max-w-sm truncate font-mono text-xs" title={asset.url}>
                   {asset.url || "—"}
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden sm:table-cell">
                   <Chips
                     items={(asset.params ?? []).map((param) => {
                       const item = param as Record<string, string>;
@@ -665,7 +732,7 @@ export function AssetsTab({ taskId }: { taskId: string }) {
                     mono
                   />
                 </TableCell>
-                <TableCell>
+                <TableCell className="hidden md:table-cell">
                   <SourceCell asset={asset} />
                 </TableCell>
                 <TableCell className="w-16">{removeButton(asset)}</TableCell>

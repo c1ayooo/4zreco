@@ -20,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
@@ -51,6 +52,11 @@ export default function SystemSettingsPage() {
   const [pyInterp, setPyInterp] = React.useState("");
   const [workers, setWorkers] = React.useState("3");
   const [savingWorkers, setSavingWorkers] = React.useState(false);
+  // 数值校验错误就近显示（toast 只留给请求失败）。
+  const [workersError, setWorkersError] = React.useState("");
+  const [autoFinishError, setAutoFinishError] = React.useState("");
+  const [intentBudgetError, setIntentBudgetError] = React.useState("");
+  const [compactionError, setCompactionError] = React.useState("");
   // 任务自动收尾（v0.5.0）。
   const [autoFinishEnabled, setAutoFinishEnabled] = React.useState(true);
   const [autoFinishIdle, setAutoFinishIdle] = React.useState("3");
@@ -157,9 +163,10 @@ export default function SystemSettingsPage() {
   const saveWorkers = () => {
     const n = Number(workers);
     if (!Number.isInteger(n) || n <= 0) {
-      toast.error("并发数必须是大于 0 的整数");
+      setWorkersError("并发数必须是大于 0 的整数");
       return;
     }
+    setWorkersError("");
     setSavingWorkers(true);
     api
       .setSettings({ workers: n })
@@ -177,21 +184,22 @@ export default function SystemSettingsPage() {
     const cov = Number(autoFinishCoverage);
     const max = Number(autoFinishMax);
     if (!Number.isInteger(idle) || idle < 2 || idle > 20) {
-      toast.error("连续无新增轮数必须在 2–20 之间");
+      setAutoFinishError("连续无新增轮数必须在 2–20 之间");
       return;
     }
     if (!Number.isInteger(min) || min < 1 || min > 50) {
-      toast.error("最少规划轮数必须在 1–50 之间");
+      setAutoFinishError("最少规划轮数必须在 1–50 之间");
       return;
     }
     if (!Number.isInteger(cov) || cov < 0 || cov > 100) {
-      toast.error("覆盖率阈值必须在 0–100 之间（0 = 关闭）");
+      setAutoFinishError("覆盖率阈值必须在 0–100 之间（0 = 关闭）");
       return;
     }
     if (!Number.isInteger(max) || max < 0 || max > 500) {
-      toast.error("最大规划轮数必须在 0–500 之间（0 = 不限）");
+      setAutoFinishError("最大规划轮数必须在 0–500 之间（0 = 不限）");
       return;
     }
+    setAutoFinishError("");
     setSavingAutoFinish(true);
     api
       .setSettings({
@@ -212,9 +220,10 @@ export default function SystemSettingsPage() {
   const saveIntentBudget = () => {
     const tokens = Number(intentBudgetTokens);
     if (!Number.isInteger(tokens) || tokens < 500000 || tokens > 20000000) {
-      toast.error("意图 token 预算必须在 500000–20000000 之间");
+      setIntentBudgetError("意图 token 预算必须在 500000–20000000 之间");
       return;
     }
+    setIntentBudgetError("");
     setSavingIntentBudget(true);
     api
       .setSettings({ intent_budget_enabled: intentBudgetEnabled, intent_budget_tokens: tokens })
@@ -231,17 +240,18 @@ export default function SystemSettingsPage() {
     const to = Number(compactionTimeout);
     const m = Number(compactionMembers);
     if (!Number.isInteger(t) || t < 0) {
-      toast.error("输出预算必须是不小于 0 的整数（0 = 默认）");
+      setCompactionError("输出预算必须是不小于 0 的整数（0 = 默认）");
       return;
     }
     if (!Number.isInteger(to) || to < 0) {
-      toast.error("超时必须是不小于 0 的整数秒（0 = 默认）");
+      setCompactionError("超时必须是不小于 0 的整数秒（0 = 默认）");
       return;
     }
     if (!Number.isInteger(m) || m < 0) {
-      toast.error("单块节点数必须是不小于 0 的整数（0 = 默认）");
+      setCompactionError("单块节点数必须是不小于 0 的整数（0 = 默认）");
       return;
     }
+    setCompactionError("");
     setSavingCompaction(true);
     api
       .setSettings({
@@ -522,949 +532,943 @@ export default function SystemSettingsPage() {
  的 key 输入是条件渲染）。grid 会按最高的一张撑满整行、在旁边留下大片空白，
  多列则自动按内容高度平衡填充。卡片间距靠 mb 而非 gap——多列布局下
  column-gap 只管列间距，行间距要由子元素自己给。 */}
-      <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
-        <UpdateCard />
+      {!loaded ? (
+        <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
+          <Skeleton className="mb-4 h-44 break-inside-avoid md:mb-6" />
+          <Skeleton className="mb-4 h-24 break-inside-avoid md:mb-6" />
+          <Skeleton className="mb-4 h-32 break-inside-avoid md:mb-6" />
+          <Skeleton className="mb-4 h-24 break-inside-avoid md:mb-6" />
+          <Skeleton className="mb-4 h-40 break-inside-avoid md:mb-6" />
+        </div>
+      ) : (
+        <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
+          <UpdateCard />
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <RadioTowerIcon className="size-4" />
-              流量捕获
-            </CardTitle>
-            <CardDescription>
-              开启后，所有 Agent 的 HTTP 流量经记录代理全量落库，并向 Agent 注入 traffic_search / traffic_get
-              工具与代理配置（提示词含代理说明）。
-              <br />
-              关闭（默认）时不记录任何流量：Agent
-              <b>不会</b>拿到代理配置与流量工具，提示词也<b>不含</b>代理相关内容。切换后会即时重建 Agent 生效。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between gap-4">
-            <Label
-              htmlFor="traffic-capture"
-              className={cn(
-                "font-normal text-sm",
-                trafficCapture && !trafficProxyAlive ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
-              {trafficState}
-            </Label>
-            <Switch
-              id="traffic-capture"
-              checked={trafficCapture}
-              disabled={!loaded || saving}
-              onCheckedChange={toggleTraffic}
-            />
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <RadioTowerIcon className="size-4" />
-              Agent 自动绑定流量
-            </CardTitle>
-            <CardDescription id="agent-traffic-binding-description">
-              默认关闭。开启后，漏洞入库时触发的报告 Agent 会核对已有 HTTP 请求/响应，关联对应流量后再编写报告。
-              <b>查阅数据包及额外的工具调用会增加 Token 消耗。</b>
-              <br />
-              TCP、未抓包或没有匹配流量时仍可正常上报。此开关不影响流量捕获、人工绑定及已保存证据的查看。 对下一轮 Agent
-              生效；关闭后会立即拒绝新的自动绑定。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between gap-4">
-            <Label htmlFor="agent-traffic-binding" className="font-normal text-muted-foreground text-sm">
-              {agentTrafficBinding ? "已开启 · 会增加 Token 消耗" : "已关闭 · 可继续人工绑定"}
-            </Label>
-            <Switch
-              id="agent-traffic-binding"
-              aria-describedby="agent-traffic-binding-description"
-              checked={agentTrafficBinding}
-              disabled={!loaded || saving}
-              onCheckedChange={toggleAgentTrafficBinding}
-            />
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <RadioTowerIcon className="size-4" />
-              全局代理
-            </CardTitle>
-            <CardDescription>
-              所有 Agent 的<b>目标流量</b>经此代理出网（隐藏源 IP / 走跳板）。支持 <b>http / https / socks5</b>，可带{" "}
-              <code>user:pass</code> 认证。留空=直连。
-              <br />
-              开启<b>流量捕获</b>时，它作为记录代理的<b>上游</b>（流量仍全量落库，再经此代理出网）；关闭捕获时，直接注入
-              Agent 的 bash / WebFetch 出网。与网络搜索代理、LLM 代理相互独立。
-              <br />
-              <b>提示</b>：socks5 在<b>关闭捕获</b>时依赖各命令行工具对 <code>ALL_PROXY</code> 的支持（curl
-              可用，部分工具可能忽略）； 若主要用 socks5，建议开启流量捕获——此路径由 MITM
-              亲自拨号，工具无感知、稳定生效。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            <Label htmlFor="global-proxy" className="font-normal text-muted-foreground text-sm">
-              代理地址
-            </Label>
-            <div className="flex items-center gap-2">
-              <Input
-                id="global-proxy"
-                autoComplete="off"
-                placeholder="socks5://user:pass@host:1080 或 http://host:port（留空=直连）"
-                value={globalProxyInput}
-                disabled={!loaded || savingGlobalProxy}
-                onChange={(e) => setGlobalProxyInput(e.target.value)}
-              />
-              <Button type="button" onClick={saveGlobalProxy} disabled={!loaded || savingGlobalProxy}>
-                保存
-              </Button>
-            </div>
-            <p className="text-muted-foreground text-xs">
-              {globalProxyInput.trim() ? "已配置 · 所有目标流量经此代理出网" : "未配置 · 目标流量直连出网"}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <ShieldAlertIcon className="size-4" />
-              操作约束注入
-            </CardTitle>
-            <CardDescription>
-              开启后，把每个任务的<b>操作约束</b>（在任务总览「操作约束」里维护的 allow/deny 条目）拼进对应 Agent
-              的系统提示，用来框定探索边界（如「仅测当前端口」「禁止爆破」）。
-              <br />
-              可分别控制注入到 <b>规划者（planner）</b>与 <b>执行者（worker）</b>
-              ；默认都开。切换即时生效（下一轮读取），无需重建 Agent。关闭后该 Agent 不再看到约束。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-4">
-              <Label htmlFor="inject-planner" className="font-normal text-muted-foreground text-sm">
-                注入规划者（planner）{injectPlanner ? " · 已开启" : " · 已关闭"}
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <RadioTowerIcon className="size-4" />
+                流量捕获
+              </CardTitle>
+              <CardDescription>
+                开启后 Agent 的 HTTP 流量经记录代理全量落库并注入流量工具；关闭时不记录。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-4">
+              <Label
+                htmlFor="traffic-capture"
+                className={cn(
+                  "font-normal text-sm",
+                  trafficCapture && !trafficProxyAlive ? "text-destructive" : "text-muted-foreground",
+                )}
+              >
+                {trafficState}
               </Label>
               <Switch
-                id="inject-planner"
-                checked={injectPlanner}
-                disabled={!loaded}
-                onCheckedChange={toggleInjectPlanner}
-              />
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <Label htmlFor="inject-worker" className="font-normal text-muted-foreground text-sm">
-                注入执行者（worker）{injectWorker ? " · 已开启" : " · 已关闭"}
-              </Label>
-              <Switch
-                id="inject-worker"
-                checked={injectWorker}
-                disabled={!loaded}
-                onCheckedChange={toggleInjectWorker}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <FlaskConicalIcon className="size-4" />
-              实验功能
-            </CardTitle>
-            <CardDescription>
-              尚在验证中的机制，默认关闭。可能改变 Agent 行为或影响稳定性，请在了解影响后启用。
-              <br />
-              <b>noa 上下文压缩</b>：由模型主动压缩长对话历史（norma v0.4.0）。开启后平台接入的四类 Agent（
-              <b>规划者 / 执行者 / 主 Agent / 对话</b>）改用 noa 接管上下文，取代内置压缩，
-              压缩原文会归档到任务工作目录下便于回溯。切换即时生效（对之后启动的运行生效），无需重建 Agent；
-              关闭后立即恢复内置压缩。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between gap-4">
-            <Label htmlFor="noa-compaction" className="font-normal text-muted-foreground text-sm">
-              noa 上下文压缩{noaCompaction ? " · 已开启" : " · 已关闭"}
-            </Label>
-            <Switch
-              id="noa-compaction"
-              checked={noaCompaction}
-              disabled={!loaded}
-              onCheckedChange={toggleNoaCompaction}
-            />
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <SearchIcon className="size-4" />
-              网络搜索
-            </CardTitle>
-            <CardDescription>
-              这是网络搜索的<b>总开关 + 来源配置</b>。开启后，才能在<b>每个 Agent 的配置</b>里单独选择是否启用
-              <b>web_search</b>（仅返回标题/链接/摘要，不抓取正文；抓取由 WebFetch 负责）。网络搜索<b>不走</b>
-              记录代理，独立于流量捕获。
-              <br />
-              来源可选 <b>DuckDuckGo（ddgs）</b>（无需 Key）、<b>Brave（免费版）</b>（需填写 Brave API Key）、{" "}
-              <b>Tavily</b>（需填写 Tavily API Key）或 <b>DeepSeek</b>（复用当前 LLM 配置）。总开关关闭时，各 Agent
-              的网络搜索开关不可用。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-4">
-              <Label htmlFor="web-search" className="font-normal text-muted-foreground text-sm">
-                {webSearch ? "总开关已开启 · 可在各 Agent 配置里单独启用" : "已关闭 · 各 Agent 无法启用网络搜索"}
-              </Label>
-              <Switch
-                id="web-search"
-                checked={webSearch}
+                id="traffic-capture"
+                checked={trafficCapture}
                 disabled={!loaded || saving}
-                onCheckedChange={(v) => {
-                  setWebSearch(v); // optimistic
-                  saveWebSearch({ web_search_enabled: v });
-                }}
+                onCheckedChange={toggleTraffic}
               />
-            </div>
+            </CardContent>
+          </Card>
 
-            {webSearch && (
-              <div className="flex items-center justify-between gap-4">
-                <Label className="font-normal text-muted-foreground text-sm">搜索来源</Label>
-                <Select
-                  value={backend}
-                  disabled={!loaded || saving}
-                  onValueChange={(v) => {
-                    setBackend(v); // optimistic
-                    saveWebSearch({ web_search_backend: v });
-                  }}
-                >
-                  <SelectTrigger className="w-48 shrink-0">
-                    <SelectValue placeholder="选择来源" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ddgs">DuckDuckGo（ddgs · 免费无 Key）</SelectItem>
-                    <SelectItem value="brave-free">Brave（免费版 · 需 Key）</SelectItem>
-                    <SelectItem value="tavily">Tavily（需 Key）</SelectItem>
-                    <SelectItem value="deepseek">DeepSeek（官方）</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <RadioTowerIcon className="size-4" />
+                Agent 自动绑定流量
+              </CardTitle>
+              <CardDescription id="agent-traffic-binding-description">
+                开启后漏洞报告 Agent 自动关联已有 HTTP 流量，会增加 Token 消耗。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-4">
+              <Label htmlFor="agent-traffic-binding" className="font-normal text-muted-foreground text-sm">
+                {agentTrafficBinding ? "已开启 · 会增加 Token 消耗" : "已关闭 · 可继续人工绑定"}
+              </Label>
+              <Switch
+                id="agent-traffic-binding"
+                aria-describedby="agent-traffic-binding-description"
+                checked={agentTrafficBinding}
+                disabled={!loaded || saving}
+                onCheckedChange={toggleAgentTrafficBinding}
+              />
+            </CardContent>
+          </Card>
 
-            {webSearch && backend === "deepseek" && (
-              <div className="flex flex-col gap-2 rounded-md border border-border/60 bg-muted/30 p-3">
-                <p className="font-medium text-sm">DeepSeek 官方联网搜索</p>
-                <p className="text-muted-foreground text-xs leading-relaxed">
-                  该来源直接复用<b>当前激活的 LLM 配置</b>。因此它
-                  <b>仅支持 DeepSeek 官方模型</b>，且该配置<b>必须使用 anthropic 协议</b>
-                  ——DeepSeek 的 OpenAI 协议端点不支持服务端搜索。切换 LLM 配置后此来源可能失效。
-                </p>
-                <p className="text-muted-foreground text-xs leading-relaxed">
-                  与其它来源不同，搜索由 <b>DeepSeek 服务端执行</b>：每次搜索会额外消耗一次模型调用（产生 Token
-                  费用），搜索请求<b>不经过上面的出口代理</b>，也<b>不计入流量留痕</b>；返回结果<b>只有标题和链接</b>
-                  （无摘要），需要正文时由 WebFetch 抓取。
-                </p>
-                <p className="text-muted-foreground text-xs leading-relaxed">
-                  是否满足上述条件由你自行确认，系统不做拦截；可用下方「测试搜索」按钮实际跑一次来验证。
-                </p>
-              </div>
-            )}
-
-            {webSearch && backend === "brave-free" && (
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="brave-key" className="font-normal text-muted-foreground text-sm">
-                  Brave Search API Key
-                  {braveKeySet && <span className="ml-2 text-success text-xs">已配置</span>}
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="brave-key"
-                    type="password"
-                    autoComplete="off"
-                    placeholder={braveKeySet ? "已配置（留空则不变）" : "输入 Brave API Key"}
-                    value={braveKeyInput}
-                    disabled={!loaded || savingKey}
-                    onChange={(e) => setBraveKeyInput(e.target.value)}
-                  />
-                  <Button
-                    type="button"
-                    onClick={saveBraveKey}
-                    disabled={!loaded || savingKey || braveKeyInput.trim() === ""}
-                  >
-                    保存
-                  </Button>
-                </div>
-                {braveNeedsKey && (
-                  <p className="text-warning text-xs">
-                    已选择 Brave 但尚未配置 Key —— 在保存 Key 之前，搜索工具不会启用。
-                  </p>
-                )}
-                <p className="text-muted-foreground text-xs">
-                  免费版额度约 2,000 次/月。前往 https://brave.com/search/api/ 获取 Key。
-                </p>
-              </div>
-            )}
-
-            {webSearch && backend === "tavily" && (
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="tavily-key" className="font-normal text-muted-foreground text-sm">
-                  Tavily Search API Key
-                  {tavilyKeySet && <span className="ml-2 text-success text-xs">已配置</span>}
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="tavily-key"
-                    type="password"
-                    autoComplete="off"
-                    placeholder={tavilyKeySet ? "已配置（留空则不变）" : "输入 Tavily API Key（tvly-…）"}
-                    value={tavilyKeyInput}
-                    disabled={!loaded || savingTavilyKey}
-                    onChange={(e) => setTavilyKeyInput(e.target.value)}
-                  />
-                  <Button
-                    type="button"
-                    onClick={saveTavilyKey}
-                    disabled={!loaded || savingTavilyKey || tavilyKeyInput.trim() === ""}
-                  >
-                    保存
-                  </Button>
-                </div>
-                {webSearch && backend === "tavily" && !tavilyKeySet && (
-                  <p className="text-warning text-xs">
-                    已选择 Tavily 但尚未配置 Key —— 在保存 Key 之前，搜索工具不会启用。
-                  </p>
-                )}
-                <p className="text-muted-foreground text-xs">前往 https://tavily.com 注册并获取 API Key。</p>
-              </div>
-            )}
-
-            {webSearch && (
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="ws-proxy" className="font-normal text-muted-foreground text-sm">
-                  出口代理（可选）
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="ws-proxy"
-                    autoComplete="off"
-                    placeholder="http://host:port 或 socks5://host:port（留空=直连）"
-                    value={proxyInput}
-                    disabled={!loaded || savingProxy}
-                    onChange={(e) => setProxyInput(e.target.value)}
-                  />
-                  <Button type="button" onClick={saveProxy} disabled={!loaded || savingProxy}>
-                    保存
-                  </Button>
-                </div>
-                <p className="text-muted-foreground text-xs">
-                  独立出口代理，仅用于访问搜索端点（VPN/SOCKS 等）。与记录流量的 MITM 代理无关；网络不通时经此代理访问。
-                </p>
-              </div>
-            )}
-
-            {webSearch && (
-              <div className="flex items-center justify-between gap-4 border-t pt-4">
-                <p className="text-muted-foreground text-xs">
-                  用当前配置（来源 + 代理 + Key）实际搜索一次「test」，验证是否可用。
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={runTest}
-                  disabled={!loaded || testing}
-                  className="shrink-0"
-                >
-                  {testing ? "测试中…" : "测试搜索"}
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <RadioTowerIcon className="size-4" />
+                全局代理
+              </CardTitle>
+              <CardDescription>
+                所有 Agent 的目标流量经此代理出网，支持 http / https / socks5，留空直连。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              <Label htmlFor="global-proxy" className="font-normal text-muted-foreground text-sm">
+                代理地址
+              </Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="global-proxy"
+                  autoComplete="off"
+                  placeholder="socks5://user:pass@host:1080 或 http://host:port（留空=直连）"
+                  value={globalProxyInput}
+                  disabled={!loaded || savingGlobalProxy}
+                  onChange={(e) => setGlobalProxyInput(e.target.value)}
+                />
+                <Button type="button" onClick={saveGlobalProxy} disabled={!loaded || savingGlobalProxy}>
+                  保存
                 </Button>
               </div>
-            )}
-          </CardContent>
-        </Card>
+              <p className="text-muted-foreground text-xs">
+                {globalProxyInput.trim() ? "已配置 · 所有目标流量经此代理出网" : "未配置 · 目标流量直连出网"}
+              </p>
+            </CardContent>
+          </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <RadioTowerIcon className="size-4" />
-              自定义脚本 · Python 解释器
-            </CardTitle>
-            <CardDescription>
-              自定义 <b>script</b> 类型工具用它跑 Python。开机会自动检测（python3 优先）；此处可手填 venv /
-              特定版本的绝对路径，留空则运行时自动检测。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <Input
-                className="font-mono text-sm"
-                placeholder="/usr/bin/python3（留空=自动检测）"
-                value={pyInterp}
-                disabled={!loaded || saving}
-                onChange={(e) => setPyInterp(e.target.value)}
-              />
-              <Button variant="outline" onClick={detectPython} disabled={!loaded || saving}>
-                重新检测
-              </Button>
-              <Button onClick={savePython} disabled={!loaded || saving}>
-                保存
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <CpuIcon className="size-4" />
-              工作并发 · Work Agent 数
-            </CardTitle>
-            <CardDescription>
-              每个任务并发运行的工作 agent 数量（默认 3）。数值越大并发探测越多、消耗也越高。修改后
-              <b>对之后启动的任务生效</b>，正在运行的任务不受影响。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                min={1}
-                className="w-32 font-mono text-sm"
-                placeholder="3"
-                value={workers}
-                disabled={!loaded || savingWorkers}
-                onChange={(e) => setWorkers(e.target.value)}
-              />
-              <Button onClick={saveWorkers} disabled={!loaded || savingWorkers}>
-                保存
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <TimerResetIcon className="size-4" />
-              任务自动收尾
-            </CardTitle>
-            <CardDescription>
-              跑到该结束就结束：<b>连续 N 轮无新增</b>（facts/findings/已测资产都无增长，且没有在跑意图）、
-              <b>覆盖率达标</b>（可关闭）、或达到<b>最大规划轮数</b>时自动收尾。planner 判定目标达成
-              （goal_met）且无在跑意图也会直接结束。收尾统一落 <code>done</code>，原因写入活动流；
-              暂停/排队中的任务不判定。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2">
-              <div className="flex flex-col">
-                <span className="text-sm font-medium">启用自动收尾</span>
-                <span className="text-muted-foreground text-xs">关闭后只能靠任务超时或目标闭环结束</span>
-              </div>
-              <Switch
-                checked={autoFinishEnabled}
-                disabled={!loaded || savingAutoFinish}
-                onCheckedChange={setAutoFinishEnabled}
-              />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex flex-col gap-1 text-sm">
-                <span>连续无新增轮数（2–20）</span>
-                <Input
-                  type="number"
-                  min={2}
-                  max={20}
-                  className="w-40 font-mono text-sm"
-                  value={autoFinishIdle}
-                  disabled={!loaded || savingAutoFinish}
-                  onChange={(e) => setAutoFinishIdle(e.target.value)}
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <ShieldAlertIcon className="size-4" />
+                操作约束注入
+              </CardTitle>
+              <CardDescription>
+                把任务的操作约束拼进对应 Agent 的系统提示，可分别控制规划者与执行者，默认都开。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="inject-planner" className="font-normal text-muted-foreground text-sm">
+                  注入规划者（planner）{injectPlanner ? " · 已开启" : " · 已关闭"}
+                </Label>
+                <Switch
+                  id="inject-planner"
+                  checked={injectPlanner}
+                  disabled={!loaded}
+                  onCheckedChange={toggleInjectPlanner}
                 />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>最少规划轮数（1–50）</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="inject-worker" className="font-normal text-muted-foreground text-sm">
+                  注入执行者（worker）{injectWorker ? " · 已开启" : " · 已关闭"}
+                </Label>
+                <Switch
+                  id="inject-worker"
+                  checked={injectWorker}
+                  disabled={!loaded}
+                  onCheckedChange={toggleInjectWorker}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <FlaskConicalIcon className="size-4" />
+                实验功能
+              </CardTitle>
+              <CardDescription>尚在验证中的机制，默认关闭；切换对之后启动的运行生效。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-4">
+              <Label htmlFor="noa-compaction" className="font-normal text-muted-foreground text-sm">
+                noa 上下文压缩{noaCompaction ? " · 已开启" : " · 已关闭"}
+              </Label>
+              <Switch
+                id="noa-compaction"
+                checked={noaCompaction}
+                disabled={!loaded}
+                onCheckedChange={toggleNoaCompaction}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <SearchIcon className="size-4" />
+                网络搜索
+              </CardTitle>
+              <CardDescription>总开关 + 来源配置；开启后可在各 Agent 配置里单独启用 web_search。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="web-search" className="font-normal text-muted-foreground text-sm">
+                  {webSearch ? "总开关已开启 · 可在各 Agent 配置里单独启用" : "已关闭 · 各 Agent 无法启用网络搜索"}
+                </Label>
+                <Switch
+                  id="web-search"
+                  checked={webSearch}
+                  disabled={!loaded || saving}
+                  onCheckedChange={(v) => {
+                    setWebSearch(v); // optimistic
+                    saveWebSearch({ web_search_enabled: v });
+                  }}
+                />
+              </div>
+
+              {webSearch && (
+                <div className="flex items-center justify-between gap-4">
+                  <Label className="font-normal text-muted-foreground text-sm">搜索来源</Label>
+                  <Select
+                    value={backend}
+                    disabled={!loaded || saving}
+                    onValueChange={(v) => {
+                      setBackend(v); // optimistic
+                      saveWebSearch({ web_search_backend: v });
+                    }}
+                  >
+                    <SelectTrigger className="w-48 shrink-0">
+                      <SelectValue placeholder="选择来源" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ddgs">DuckDuckGo（ddgs · 免费无 Key）</SelectItem>
+                      <SelectItem value="brave-free">Brave（免费版 · 需 Key）</SelectItem>
+                      <SelectItem value="tavily">Tavily（需 Key）</SelectItem>
+                      <SelectItem value="deepseek">DeepSeek（官方）</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {webSearch && backend === "deepseek" && (
+                <div className="flex flex-col gap-2 bg-muted/30 p-3">
+                  <p className="font-medium text-sm">DeepSeek 官方联网搜索</p>
+                  <p className="text-muted-foreground text-xs leading-relaxed">
+                    复用当前激活的 LLM 配置（须为 DeepSeek 官方模型 + anthropic 协议），服务端执行、按次消耗
+                    Token，结果仅含标题与链接。
+                  </p>
+                </div>
+              )}
+
+              {webSearch && backend === "brave-free" && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="brave-key" className="font-normal text-muted-foreground text-sm">
+                    Brave Search API Key
+                    {braveKeySet && <span className="ml-2 text-success text-xs">已配置</span>}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="brave-key"
+                      type="password"
+                      autoComplete="off"
+                      placeholder={braveKeySet ? "已配置（留空则不变）" : "输入 Brave API Key"}
+                      value={braveKeyInput}
+                      disabled={!loaded || savingKey}
+                      onChange={(e) => setBraveKeyInput(e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      onClick={saveBraveKey}
+                      disabled={!loaded || savingKey || braveKeyInput.trim() === ""}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                  {braveNeedsKey && (
+                    <p className="text-warning text-xs">
+                      已选择 Brave 但尚未配置 Key —— 在保存 Key 之前，搜索工具不会启用。
+                    </p>
+                  )}
+                  <p className="text-muted-foreground text-xs">
+                    免费版额度约 2,000 次/月。前往 https://brave.com/search/api/ 获取 Key。
+                  </p>
+                </div>
+              )}
+
+              {webSearch && backend === "tavily" && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="tavily-key" className="font-normal text-muted-foreground text-sm">
+                    Tavily Search API Key
+                    {tavilyKeySet && <span className="ml-2 text-success text-xs">已配置</span>}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="tavily-key"
+                      type="password"
+                      autoComplete="off"
+                      placeholder={tavilyKeySet ? "已配置（留空则不变）" : "输入 Tavily API Key（tvly-…）"}
+                      value={tavilyKeyInput}
+                      disabled={!loaded || savingTavilyKey}
+                      onChange={(e) => setTavilyKeyInput(e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      onClick={saveTavilyKey}
+                      disabled={!loaded || savingTavilyKey || tavilyKeyInput.trim() === ""}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                  {webSearch && backend === "tavily" && !tavilyKeySet && (
+                    <p className="text-warning text-xs">
+                      已选择 Tavily 但尚未配置 Key —— 在保存 Key 之前，搜索工具不会启用。
+                    </p>
+                  )}
+                  <p className="text-muted-foreground text-xs">前往 https://tavily.com 注册并获取 API Key。</p>
+                </div>
+              )}
+
+              {webSearch && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="ws-proxy" className="font-normal text-muted-foreground text-sm">
+                    出口代理（可选）
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="ws-proxy"
+                      autoComplete="off"
+                      placeholder="http://host:port 或 socks5://host:port（留空=直连）"
+                      value={proxyInput}
+                      disabled={!loaded || savingProxy}
+                      onChange={(e) => setProxyInput(e.target.value)}
+                    />
+                    <Button type="button" onClick={saveProxy} disabled={!loaded || savingProxy}>
+                      保存
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    独立出口代理，仅用于访问搜索端点（VPN/SOCKS 等）。与记录流量的 MITM
+                    代理无关；网络不通时经此代理访问。
+                  </p>
+                </div>
+              )}
+
+              {webSearch && (
+                <div className="flex items-center justify-between gap-4 border-t pt-4">
+                  <p className="text-muted-foreground text-xs">
+                    用当前配置（来源 + 代理 + Key）实际搜索一次「test」，验证是否可用。
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={runTest}
+                    disabled={!loaded || testing}
+                    className="shrink-0"
+                  >
+                    {testing ? "测试中…" : "测试搜索"}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <RadioTowerIcon className="size-4" />
+                自定义脚本 · Python 解释器
+              </CardTitle>
+              <CardDescription>自定义 script 类型工具用它跑 Python，留空自动检测。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <Input
+                  className="font-mono text-sm"
+                  placeholder="/usr/bin/python3（留空=自动检测）"
+                  value={pyInterp}
+                  disabled={!loaded || saving}
+                  onChange={(e) => setPyInterp(e.target.value)}
+                />
+                <Button variant="outline" onClick={detectPython} disabled={!loaded || saving}>
+                  重新检测
+                </Button>
+                <Button onClick={savePython} disabled={!loaded || saving}>
+                  保存
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <CpuIcon className="size-4" />
+                工作并发 · Work Agent 数
+              </CardTitle>
+              <CardDescription>每个任务并发运行的工作 agent 数，对之后启动的任务生效。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
                 <Input
                   type="number"
                   min={1}
-                  max={50}
-                  className="w-40 font-mono text-sm"
-                  value={autoFinishMin}
-                  disabled={!loaded || savingAutoFinish}
-                  onChange={(e) => setAutoFinishMin(e.target.value)}
+                  className="w-32 font-mono text-sm"
+                  placeholder="3"
+                  value={workers}
+                  disabled={!loaded || savingWorkers}
+                  onChange={(e) => {
+                    setWorkers(e.target.value);
+                    setWorkersError("");
+                  }}
                 />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>覆盖率阈值 %（0 = 关闭）</span>
-                <Input
-                  type="number"
-                  min={0}
-                  max={100}
-                  className="w-40 font-mono text-sm"
-                  value={autoFinishCoverage}
-                  disabled={!loaded || savingAutoFinish}
-                  onChange={(e) => setAutoFinishCoverage(e.target.value)}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>最大规划轮数（0 = 不限）</span>
-                <Input
-                  type="number"
-                  min={0}
-                  max={500}
-                  className="w-40 font-mono text-sm"
-                  value={autoFinishMax}
-                  disabled={!loaded || savingAutoFinish}
-                  onChange={(e) => setAutoFinishMax(e.target.value)}
-                />
-              </label>
-            </div>
-            <div>
-              <Button onClick={saveAutoFinish} disabled={!loaded || savingAutoFinish}>
-                {savingAutoFinish ? "保存中…" : "保存"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <GaugeIcon className="size-4" />
-              意图级软预算与重复调用拦截
-            </CardTitle>
-            <CardDescription>
-              单条意图累计 token 到预算后，系统向运行中的 worker 注入一条<b>收尾提醒</b>：
-              停止扩大探索、把已有结论写回后结束（软提醒，不杀进程；任务超时与自动收尾仍是最终兜底）。 默认 300 万——任务
-              5 实测单意图均值 ≈300 万，超出的意图通常是空转。
-              <br />
-              重复调用拦截随此开关联动：同一工具+完全相同入参连续 3 次会被拦下并回喂纠正提示 （同一串最多拦 2
-              次，之后放行兜底，不会卡死）。修改后<b>对之后启动的意图生效</b>。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2">
-              <div className="flex flex-col">
-                <span className="text-sm font-medium">启用意图预算提醒</span>
-                <span className="text-muted-foreground text-xs">关闭后不注入提醒，也不做重复调用拦截</span>
+                <Button onClick={saveWorkers} disabled={!loaded || savingWorkers}>
+                  保存
+                </Button>
               </div>
-              <Switch
-                checked={intentBudgetEnabled}
-                disabled={!loaded || savingIntentBudget}
-                onCheckedChange={setIntentBudgetEnabled}
-              />
-            </div>
-            <label className="flex flex-col gap-1 text-sm">
-              <span>单意图 token 预算（500000–20000000）</span>
-              <Input
-                type="number"
-                min={500000}
-                max={20000000}
-                step={100000}
-                className="w-48 font-mono text-sm"
-                value={intentBudgetTokens}
-                disabled={!loaded || savingIntentBudget}
-                onChange={(e) => setIntentBudgetTokens(e.target.value)}
-              />
-            </label>
-            <div>
-              <Button onClick={saveIntentBudget} disabled={!loaded || savingIntentBudget}>
-                {savingIntentBudget ? "保存中…" : "保存"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              {workersError && <p className="text-destructive text-xs">{workersError}</p>}
+            </CardContent>
+          </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <CpuIcon className="size-4" />
-              上下文压缩参数
-            </CardTitle>
-            <CardDescription>
-              冷节点压缩（把已完成的探索结论压成摘要）是<b>后台</b>跑的，不阻塞 agent 干活，
-              等久一点只影响摘要晚点落地。
-              <br />
-              <b>输出预算</b>是「思考 + 正文」共用的额度：思考型模型（强制 adaptive thinking
-              的那些）的思考长度随这个额度线性膨胀，额度给小了它会一直想、正文一个字都吐不出来 —— 实测 1500 / 2048 /
-              4096 / 8192 全部得到空正文。默认 65536。
-              <br />
-              <b>单块节点数上限</b>决定一次请求里塞多少个节点：实测 9 个节点 3 块里仍有 1 块失败， 6
-              个节点能稳定收尾。所以超大连通块必须切分。默认 6。
-              <br />
-              两项填 0 即使用默认值。修改后<b>对之后启动的任务生效</b>。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Label htmlFor="compaction-tokens" className="w-40 text-sm">
-                输出预算 (token)
-              </Label>
-              <Input
-                id="compaction-tokens"
-                type="number"
-                min={0}
-                step={1024}
-                className="w-40 font-mono text-sm"
-                placeholder="0 = 默认 65536"
-                value={compactionTokens}
-                disabled={!loaded || savingCompaction}
-                onChange={(e) => setCompactionTokens(e.target.value)}
-              />
-              <Label htmlFor="compaction-timeout" className="w-40 text-sm">
-                单次超时 (秒)
-              </Label>
-              <Input
-                id="compaction-timeout"
-                type="number"
-                min={0}
-                step={60}
-                className="w-40 font-mono text-sm"
-                placeholder="0 = 默认 1200"
-                value={compactionTimeout}
-                disabled={!loaded || savingCompaction}
-                onChange={(e) => setCompactionTimeout(e.target.value)}
-              />
-              <Label htmlFor="compaction-members" className="w-40 text-sm">
-                单块节点数上限
-              </Label>
-              <Input
-                id="compaction-members"
-                type="number"
-                min={0}
-                className="w-40 font-mono text-sm"
-                placeholder="0 = 默认 6"
-                value={compactionMembers}
-                disabled={!loaded || savingCompaction}
-                onChange={(e) => setCompactionMembers(e.target.value)}
-              />
-              <Button onClick={saveCompaction} disabled={!loaded || savingCompaction}>
-                保存
-              </Button>
-            </div>
-            {/* B10:压缩器模型。规划器跑贵模型时，把机械的冷节点压缩钉在便宜模型上省钱;
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <TimerResetIcon className="size-4" />
+                任务自动收尾
+              </CardTitle>
+              <CardDescription>连续无新增、覆盖率达标或达到最大轮数时自动收尾，原因写入活动流。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col">
+                  <Label htmlFor="auto-finish-enabled" className="text-sm">
+                    启用自动收尾
+                  </Label>
+                  <span className="text-muted-foreground text-xs">关闭后只能靠任务超时或目标闭环结束</span>
+                </div>
+                <Switch
+                  id="auto-finish-enabled"
+                  checked={autoFinishEnabled}
+                  disabled={!loaded || savingAutoFinish}
+                  onCheckedChange={setAutoFinishEnabled}
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col gap-1 text-sm">
+                  <span>连续无新增轮数（2–20）</span>
+                  <Input
+                    type="number"
+                    min={2}
+                    max={20}
+                    className="w-40 font-mono text-sm"
+                    value={autoFinishIdle}
+                    disabled={!loaded || savingAutoFinish}
+                    onChange={(e) => {
+                      setAutoFinishIdle(e.target.value);
+                      setAutoFinishError("");
+                    }}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span>最少规划轮数（1–50）</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={50}
+                    className="w-40 font-mono text-sm"
+                    value={autoFinishMin}
+                    disabled={!loaded || savingAutoFinish}
+                    onChange={(e) => {
+                      setAutoFinishMin(e.target.value);
+                      setAutoFinishError("");
+                    }}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span>覆盖率阈值 %（0 = 关闭）</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    className="w-40 font-mono text-sm"
+                    value={autoFinishCoverage}
+                    disabled={!loaded || savingAutoFinish}
+                    onChange={(e) => {
+                      setAutoFinishCoverage(e.target.value);
+                      setAutoFinishError("");
+                    }}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span>最大规划轮数（0 = 不限）</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={500}
+                    className="w-40 font-mono text-sm"
+                    value={autoFinishMax}
+                    disabled={!loaded || savingAutoFinish}
+                    onChange={(e) => {
+                      setAutoFinishMax(e.target.value);
+                      setAutoFinishError("");
+                    }}
+                  />
+                </label>
+              </div>
+              {autoFinishError && <p className="text-destructive text-xs">{autoFinishError}</p>}
+              <div>
+                <Button onClick={saveAutoFinish} disabled={!loaded || savingAutoFinish}>
+                  {savingAutoFinish ? "保存中…" : "保存"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <GaugeIcon className="size-4" />
+                意图级软预算与重复调用拦截
+              </CardTitle>
+              <CardDescription>单条意图累计 token 到预算后注入收尾提醒，重复调用拦截随此开关联动。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col">
+                  <Label htmlFor="intent-budget-enabled" className="text-sm">
+                    启用意图预算提醒
+                  </Label>
+                  <span className="text-muted-foreground text-xs">关闭后不注入提醒，也不做重复调用拦截</span>
+                </div>
+                <Switch
+                  id="intent-budget-enabled"
+                  checked={intentBudgetEnabled}
+                  disabled={!loaded || savingIntentBudget}
+                  onCheckedChange={setIntentBudgetEnabled}
+                />
+              </div>
+              <label className="flex flex-col gap-1 text-sm">
+                <span>单意图 token 预算（500000–20000000）</span>
+                <Input
+                  type="number"
+                  min={500000}
+                  max={20000000}
+                  step={100000}
+                  className="w-48 font-mono text-sm"
+                  value={intentBudgetTokens}
+                  disabled={!loaded || savingIntentBudget}
+                  onChange={(e) => {
+                    setIntentBudgetTokens(e.target.value);
+                    setIntentBudgetError("");
+                  }}
+                />
+              </label>
+              {intentBudgetError && <p className="text-destructive text-xs">{intentBudgetError}</p>}
+              <div>
+                <Button onClick={saveIntentBudget} disabled={!loaded || savingIntentBudget}>
+                  {savingIntentBudget ? "保存中…" : "保存"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <CpuIcon className="size-4" />
+                上下文压缩参数
+              </CardTitle>
+              <CardDescription>
+                冷节点压缩的输出预算、单次超时与单块节点数，填 0 用默认值，对之后启动的任务生效。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Label htmlFor="compaction-tokens" className="w-40 text-sm">
+                  输出预算 (token)
+                </Label>
+                <Input
+                  id="compaction-tokens"
+                  type="number"
+                  min={0}
+                  step={1024}
+                  className="w-40 font-mono text-sm"
+                  placeholder="0 = 默认 65536"
+                  value={compactionTokens}
+                  disabled={!loaded || savingCompaction}
+                  onChange={(e) => {
+                    setCompactionTokens(e.target.value);
+                    setCompactionError("");
+                  }}
+                />
+                <Label htmlFor="compaction-timeout" className="w-40 text-sm">
+                  单次超时 (秒)
+                </Label>
+                <Input
+                  id="compaction-timeout"
+                  type="number"
+                  min={0}
+                  step={60}
+                  className="w-40 font-mono text-sm"
+                  placeholder="0 = 默认 1200"
+                  value={compactionTimeout}
+                  disabled={!loaded || savingCompaction}
+                  onChange={(e) => {
+                    setCompactionTimeout(e.target.value);
+                    setCompactionError("");
+                  }}
+                />
+                <Label htmlFor="compaction-members" className="w-40 text-sm">
+                  单块节点数上限
+                </Label>
+                <Input
+                  id="compaction-members"
+                  type="number"
+                  min={0}
+                  className="w-40 font-mono text-sm"
+                  placeholder="0 = 默认 6"
+                  value={compactionMembers}
+                  disabled={!loaded || savingCompaction}
+                  onChange={(e) => {
+                    setCompactionMembers(e.target.value);
+                    setCompactionError("");
+                  }}
+                />
+                <Button onClick={saveCompaction} disabled={!loaded || savingCompaction}>
+                  保存
+                </Button>
+              </div>
+              {compactionError && <p className="text-destructive text-xs">{compactionError}</p>}
+              {/* B10:压缩器模型。规划器跑贵模型时，把机械的冷节点压缩钉在便宜模型上省钱;
  一次一发的设计让压缩对速度远比对话敏感，低价高速模型反而是更搭的选型。 */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Label htmlFor="compactor-profile" className="w-40 text-sm">
-                压缩器模型
+              <div className="flex flex-wrap items-center gap-2">
+                <Label htmlFor="compactor-profile" className="w-40 text-sm">
+                  压缩器模型
+                </Label>
+                <Select value={compactorProfile} onValueChange={saveCompactorProfile}>
+                  <SelectTrigger id="compactor-profile" className="w-72">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">跟随规划器（默认）</SelectItem>
+                    {llmProfileOpts.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-muted-foreground text-xs">
+                  冷节点压缩是后台的一次性调用，适合钉在低价模型上省钱。钉住的配置被删/无 Key
+                  时自动落回跟随规划器；额度耗尽按绑定语义直接失败（换配置或改回「跟随规划器」）。
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <MessageSquareIcon className="size-4" />
+                IM 机器人
+              </CardTitle>
+              <CardDescription>
+                在飞书 / 钉钉 / Telegram / 企业微信里直接对话与执行指令，保存即重起对应平台收发循环。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col divide-y">
+              <div className="flex items-center gap-3 pb-4">
+                <Label htmlFor="im-agent" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                  对话 Agent
+                </Label>
+                <Input
+                  id="im-agent"
+                  value={imAgent}
+                  onChange={(e) => setImAgent(e.target.value)}
+                  placeholder="auto"
+                  className="h-8 w-40 font-mono"
+                />
+                <span className="text-muted-foreground text-xs">IM 新会话使用的 agent key，随下方任一保存生效</span>
+              </div>
+
+              <div className="flex flex-col gap-3 py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="im-feishu-on" className="text-sm font-normal text-muted-foreground">
+                    飞书{imFeishuOn ? " · 已开启" : " · 已关闭"}
+                  </Label>
+                  <Switch
+                    id="im-feishu-on"
+                    checked={imFeishuOn}
+                    disabled={!loaded || savingIM !== ""}
+                    onCheckedChange={setImFeishuOn}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="im-feishu-appid"
+                      className="w-24 shrink-0 text-sm font-normal text-muted-foreground"
+                    >
+                      App ID
+                    </Label>
+                    <Input
+                      id="im-feishu-appid"
+                      value={imFeishuAppID}
+                      onChange={(e) => setImFeishuAppID(e.target.value)}
+                      placeholder="cli_xxx"
+                      className="h-8 font-mono"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="im-feishu-secret"
+                      className="w-24 shrink-0 text-sm font-normal text-muted-foreground"
+                    >
+                      App Secret
+                    </Label>
+                    <Input
+                      id="im-feishu-secret"
+                      type="password"
+                      autoComplete="off"
+                      value={imFeishuSecret}
+                      onChange={(e) => setImFeishuSecret(e.target.value)}
+                      placeholder={imFeishuSecretSet ? "已配置（留空则不变）" : ""}
+                      className="h-8"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!loaded || savingIM !== ""}
+                    onClick={() => void saveIM("feishu")}
+                  >
+                    保存飞书
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="im-dingtalk-on" className="text-sm font-normal text-muted-foreground">
+                    钉钉{imDingtalkOn ? " · 已开启" : " · 已关闭"}
+                  </Label>
+                  <Switch
+                    id="im-dingtalk-on"
+                    checked={imDingtalkOn}
+                    disabled={!loaded || savingIM !== ""}
+                    onCheckedChange={setImDingtalkOn}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-ding-id" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      Client ID
+                    </Label>
+                    <Input
+                      id="im-ding-id"
+                      value={imDingtalkID}
+                      onChange={(e) => setImDingtalkID(e.target.value)}
+                      placeholder="AppKey"
+                      className="h-8 font-mono"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-ding-secret" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      Client Secret
+                    </Label>
+                    <Input
+                      id="im-ding-secret"
+                      type="password"
+                      autoComplete="off"
+                      value={imDingtalkSecret}
+                      onChange={(e) => setImDingtalkSecret(e.target.value)}
+                      placeholder={imDingtalkSecretSet ? "已配置（留空则不变）" : ""}
+                      className="h-8"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!loaded || savingIM !== ""}
+                    onClick={() => void saveIM("dingtalk")}
+                  >
+                    保存钉钉
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="im-telegram-on" className="text-sm font-normal text-muted-foreground">
+                    Telegram{imTelegramOn ? " · 已开启" : " · 已关闭"}
+                  </Label>
+                  <Switch
+                    id="im-telegram-on"
+                    checked={imTelegramOn}
+                    disabled={!loaded || savingIM !== ""}
+                    onCheckedChange={setImTelegramOn}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-tg-token" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      Bot Token
+                    </Label>
+                    <Input
+                      id="im-tg-token"
+                      type="password"
+                      autoComplete="off"
+                      value={imTelegramToken}
+                      onChange={(e) => setImTelegramToken(e.target.value)}
+                      placeholder={imTelegramTokenSet ? "已配置（留空则不变）" : "123456:ABC-DEF…"}
+                      className="h-8 font-mono"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-tg-proxy" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      出口代理
+                    </Label>
+                    <Input
+                      id="im-tg-proxy"
+                      value={imTelegramProxy}
+                      onChange={(e) => setImTelegramProxy(e.target.value)}
+                      placeholder="http://127.0.0.1:7897（空=直连）"
+                      className="h-8 font-mono"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!loaded || savingIM !== ""}
+                    onClick={() => void saveIM("telegram")}
+                  >
+                    保存 Telegram
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 pt-4">
+                <div className="flex items-center justify-between gap-4">
+                  <Label htmlFor="im-wecom-on" className="text-sm font-normal text-muted-foreground">
+                    企业微信{imWecomOn ? " · 已开启" : " · 已关闭"}
+                  </Label>
+                  <Switch
+                    id="im-wecom-on"
+                    checked={imWecomOn}
+                    disabled={!loaded || savingIM !== ""}
+                    onCheckedChange={setImWecomOn}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-wecom-corp" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      Corp ID
+                    </Label>
+                    <Input
+                      id="im-wecom-corp"
+                      value={imWecomCorpID}
+                      onChange={(e) => setImWecomCorpID(e.target.value)}
+                      className="h-8 font-mono"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-wecom-agent" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      AgentID
+                    </Label>
+                    <Input
+                      id="im-wecom-agent"
+                      value={imWecomAgentID}
+                      onChange={(e) => setImWecomAgentID(e.target.value)}
+                      placeholder="1000002"
+                      className="h-8 font-mono"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label
+                      htmlFor="im-wecom-secret"
+                      className="w-24 shrink-0 text-sm font-normal text-muted-foreground"
+                    >
+                      应用 Secret
+                    </Label>
+                    <Input
+                      id="im-wecom-secret"
+                      type="password"
+                      autoComplete="off"
+                      value={imWecomSecret}
+                      onChange={(e) => setImWecomSecret(e.target.value)}
+                      placeholder={imWecomSecretSet ? "已配置（留空则不变）" : ""}
+                      className="h-8"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-wecom-token" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      回调 Token
+                    </Label>
+                    <Input
+                      id="im-wecom-token"
+                      type="password"
+                      autoComplete="off"
+                      value={imWecomCallbackToken}
+                      onChange={(e) => setImWecomCallbackToken(e.target.value)}
+                      placeholder={imWecomCallbackTokenSet ? "已配置（留空则不变）" : ""}
+                      className="h-8"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="im-wecom-aes" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
+                      EncodingAESKey
+                    </Label>
+                    <Input
+                      id="im-wecom-aes"
+                      type="password"
+                      autoComplete="off"
+                      value={imWecomAESKey}
+                      onChange={(e) => setImWecomAESKey(e.target.value)}
+                      placeholder={imWecomAESKeySet ? "已配置（留空则不变）" : "43 位"}
+                      className="h-8"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Label className="w-24 shrink-0 text-sm font-normal text-muted-foreground">回调地址</Label>
+                  <code className="text-muted-foreground min-w-0 truncate font-mono text-xs">
+                    {imWecomBaseURLSet
+                      ? imWecomCallbackURL
+                      : "先在「漏洞推送」里设置回链地址（notify_public_base_url）"}
+                  </code>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!loaded || savingIM !== ""}
+                    onClick={() => void saveIM("wecom")}
+                  >
+                    保存企业微信
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <KeyboardIcon className="size-4" />
+                会话输入框发送键位
+              </CardTitle>
+              <CardDescription>对话页与任务详情的会话输入框共用，选择后立即生效。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-4">
+              <Label htmlFor="chat-send-mode" className="font-normal text-muted-foreground text-sm">
+                发送方式
               </Label>
-              <Select value={compactorProfile} onValueChange={saveCompactorProfile}>
-                <SelectTrigger id="compactor-profile" className="w-72">
+              <Select value={sendMode} onValueChange={(v) => setChatSendMode(v as ChatSendMode)}>
+                <SelectTrigger id="chat-send-mode" className="w-72">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">跟随规划器（默认）</SelectItem>
-                  {llmProfileOpts.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
+                  {CHAT_SEND_MODE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <span className="text-muted-foreground text-xs">
-                冷节点压缩是后台的一次性调用，适合钉在低价模型上省钱。钉住的配置被删/无 Key
-                时自动落回跟随规划器；额度耗尽按绑定语义直接失败（换配置或改回「跟随规划器」）。
-              </span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <MessageSquareIcon className="size-4" />
-              IM 机器人
-            </CardTitle>
-            <CardDescription>
-              在飞书 / 钉钉 / Telegram / 企业微信里直接对话与执行 <code>/bond</code> <code>/new</code>{" "}
-              指令。前三家走出站长连接无需公网地址；企业微信回调地址需公网可达。保存即重起对应平台的收发循环。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col divide-y">
-            <div className="flex items-center gap-3 pb-4">
-              <Label htmlFor="im-agent" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                对话 Agent
-              </Label>
-              <Input
-                id="im-agent"
-                value={imAgent}
-                onChange={(e) => setImAgent(e.target.value)}
-                placeholder="auto"
-                className="h-8 w-40 font-mono"
-              />
-              <span className="text-muted-foreground text-xs">IM 新会话使用的 agent key，随下方任一保存生效</span>
-            </div>
-
-            <div className="flex flex-col gap-3 py-4">
-              <div className="flex items-center justify-between gap-4">
-                <Label className="text-sm font-normal text-muted-foreground">
-                  飞书{imFeishuOn ? " · 已开启" : " · 已关闭"}
-                </Label>
-                <Switch checked={imFeishuOn} disabled={!loaded || savingIM !== ""} onCheckedChange={setImFeishuOn} />
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-feishu-appid" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    App ID
-                  </Label>
-                  <Input
-                    id="im-feishu-appid"
-                    value={imFeishuAppID}
-                    onChange={(e) => setImFeishuAppID(e.target.value)}
-                    placeholder="cli_xxx"
-                    className="h-8 font-mono"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-feishu-secret" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    App Secret
-                  </Label>
-                  <Input
-                    id="im-feishu-secret"
-                    type="password"
-                    autoComplete="off"
-                    value={imFeishuSecret}
-                    onChange={(e) => setImFeishuSecret(e.target.value)}
-                    placeholder={imFeishuSecretSet ? "已配置（留空则不变）" : ""}
-                    className="h-8"
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!loaded || savingIM !== ""}
-                  onClick={() => void saveIM("feishu")}
-                >
-                  保存飞书
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-3 py-4">
-              <div className="flex items-center justify-between gap-4">
-                <Label className="text-sm font-normal text-muted-foreground">
-                  钉钉{imDingtalkOn ? " · 已开启" : " · 已关闭"}
-                </Label>
-                <Switch
-                  checked={imDingtalkOn}
-                  disabled={!loaded || savingIM !== ""}
-                  onCheckedChange={setImDingtalkOn}
-                />
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-ding-id" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    Client ID
-                  </Label>
-                  <Input
-                    id="im-ding-id"
-                    value={imDingtalkID}
-                    onChange={(e) => setImDingtalkID(e.target.value)}
-                    placeholder="AppKey"
-                    className="h-8 font-mono"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-ding-secret" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    Client Secret
-                  </Label>
-                  <Input
-                    id="im-ding-secret"
-                    type="password"
-                    autoComplete="off"
-                    value={imDingtalkSecret}
-                    onChange={(e) => setImDingtalkSecret(e.target.value)}
-                    placeholder={imDingtalkSecretSet ? "已配置（留空则不变）" : ""}
-                    className="h-8"
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!loaded || savingIM !== ""}
-                  onClick={() => void saveIM("dingtalk")}
-                >
-                  保存钉钉
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-3 py-4">
-              <div className="flex items-center justify-between gap-4">
-                <Label className="text-sm font-normal text-muted-foreground">
-                  Telegram{imTelegramOn ? " · 已开启" : " · 已关闭"}
-                </Label>
-                <Switch
-                  checked={imTelegramOn}
-                  disabled={!loaded || savingIM !== ""}
-                  onCheckedChange={setImTelegramOn}
-                />
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-tg-token" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    Bot Token
-                  </Label>
-                  <Input
-                    id="im-tg-token"
-                    type="password"
-                    autoComplete="off"
-                    value={imTelegramToken}
-                    onChange={(e) => setImTelegramToken(e.target.value)}
-                    placeholder={imTelegramTokenSet ? "已配置（留空则不变）" : "123456:ABC-DEF…"}
-                    className="h-8 font-mono"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-tg-proxy" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    出口代理
-                  </Label>
-                  <Input
-                    id="im-tg-proxy"
-                    value={imTelegramProxy}
-                    onChange={(e) => setImTelegramProxy(e.target.value)}
-                    placeholder="http://127.0.0.1:7897（空=直连）"
-                    className="h-8 font-mono"
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!loaded || savingIM !== ""}
-                  onClick={() => void saveIM("telegram")}
-                >
-                  保存 Telegram
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-3 pt-4">
-              <div className="flex items-center justify-between gap-4">
-                <Label className="text-sm font-normal text-muted-foreground">
-                  企业微信{imWecomOn ? " · 已开启" : " · 已关闭"}
-                </Label>
-                <Switch checked={imWecomOn} disabled={!loaded || savingIM !== ""} onCheckedChange={setImWecomOn} />
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-wecom-corp" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    Corp ID
-                  </Label>
-                  <Input
-                    id="im-wecom-corp"
-                    value={imWecomCorpID}
-                    onChange={(e) => setImWecomCorpID(e.target.value)}
-                    className="h-8 font-mono"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-wecom-agent" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    AgentID
-                  </Label>
-                  <Input
-                    id="im-wecom-agent"
-                    value={imWecomAgentID}
-                    onChange={(e) => setImWecomAgentID(e.target.value)}
-                    placeholder="1000002"
-                    className="h-8 font-mono"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-wecom-secret" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    应用 Secret
-                  </Label>
-                  <Input
-                    id="im-wecom-secret"
-                    type="password"
-                    autoComplete="off"
-                    value={imWecomSecret}
-                    onChange={(e) => setImWecomSecret(e.target.value)}
-                    placeholder={imWecomSecretSet ? "已配置（留空则不变）" : ""}
-                    className="h-8"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-wecom-token" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    回调 Token
-                  </Label>
-                  <Input
-                    id="im-wecom-token"
-                    type="password"
-                    autoComplete="off"
-                    value={imWecomCallbackToken}
-                    onChange={(e) => setImWecomCallbackToken(e.target.value)}
-                    placeholder={imWecomCallbackTokenSet ? "已配置（留空则不变）" : ""}
-                    className="h-8"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="im-wecom-aes" className="w-24 shrink-0 text-sm font-normal text-muted-foreground">
-                    EncodingAESKey
-                  </Label>
-                  <Input
-                    id="im-wecom-aes"
-                    type="password"
-                    autoComplete="off"
-                    value={imWecomAESKey}
-                    onChange={(e) => setImWecomAESKey(e.target.value)}
-                    placeholder={imWecomAESKeySet ? "已配置（留空则不变）" : "43 位"}
-                    className="h-8"
-                  />
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Label className="w-24 shrink-0 text-sm font-normal text-muted-foreground">回调地址</Label>
-                <code className="text-muted-foreground min-w-0 truncate font-mono text-xs">
-                  {imWecomBaseURLSet ? imWecomCallbackURL : "先在「漏洞推送」里设置回链地址（notify_public_base_url）"}
-                </code>
-              </div>
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!loaded || savingIM !== ""}
-                  onClick={() => void saveIM("wecom")}
-                >
-                  保存企业微信
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-4 break-inside-avoid md:mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <KeyboardIcon className="size-4" />
-              会话输入框发送键位
-            </CardTitle>
-            <CardDescription>
-              对话页与任务详情的主 Agent 会话输入框共用此设置，选择后立即生效、无需保存。
-              <br />
-              该偏好<b>只存在本浏览器</b>，不随账号同步，换浏览器或清理站点数据后需重新设置。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between gap-4">
-            <Label htmlFor="chat-send-mode" className="font-normal text-muted-foreground text-sm">
-              发送方式
-            </Label>
-            <Select value={sendMode} onValueChange={(v) => setChatSendMode(v as ChatSendMode)}>
-              <SelectTrigger id="chat-send-mode" className="w-72">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CHAT_SEND_MODE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-      </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

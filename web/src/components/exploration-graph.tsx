@@ -24,6 +24,7 @@ import "@xyflow/react/dist/style.css";
 
 import { Bug, Compass, Flag, FlaskConical, Layers, Lightbulb, type LucideIcon, Target } from "lucide-react";
 
+import { CopyButton } from "@/components/copy-button";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -49,8 +50,8 @@ export const relColor: Record<string, string> = {
 type TypeMeta = {
   label: string;
   icon: LucideIcon;
+  // DOM 徽标/图例用 chart-1..5 底章惯例（§5.1 分类色）；hex 仅供 MiniMap/画布字面渲染（§5.1 例外）。
   iconBg: string;
-  chip: string;
   hex: string;
 };
 
@@ -58,57 +59,49 @@ const typeMeta: Record<ExploreKind, TypeMeta> = {
   task: {
     label: "根任务",
     icon: Flag,
-    iconBg: "bg-slate-500",
-    chip: "bg-slate-500/15 text-slate-600 dark:text-slate-300",
+    iconBg: "bg-chart-1/15 text-chart-1",
     hex: "#64748b",
   },
   begin: {
     label: "起点",
     icon: Flag,
-    iconBg: "bg-slate-500",
-    chip: "bg-slate-500/15 text-slate-600 dark:text-slate-300",
+    iconBg: "bg-chart-1/15 text-chart-1",
     hex: "#64748b",
   },
   goal: {
     label: "目标",
     icon: Target,
-    iconBg: "bg-emerald-500",
-    chip: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+    iconBg: "bg-chart-2/15 text-chart-2",
     hex: "#10b981",
   },
   hint: {
     label: "提示",
     icon: Lightbulb,
-    iconBg: "bg-violet-500",
-    chip: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
+    iconBg: "bg-chart-1/15 text-chart-1",
     hex: "#8b5cf6",
   },
   intent: {
     label: "意图",
     icon: Compass,
-    iconBg: "bg-blue-500",
-    chip: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+    iconBg: "bg-chart-3/15 text-chart-3",
     hex: "#3b82f6",
   },
   fact: {
     label: "事实",
     icon: FlaskConical,
-    iconBg: "bg-amber-500",
-    chip: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+    iconBg: "bg-chart-4/15 text-chart-4",
     hex: "#f59e0b",
   },
   finding: {
     label: "漏洞",
     icon: Bug,
-    iconBg: "bg-rose-500",
-    chip: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
+    iconBg: "bg-chart-5/15 text-chart-5",
     hex: "#f43f5e",
   },
   digest: {
     label: "压缩",
     icon: Layers,
-    iconBg: "bg-teal-500",
-    chip: "bg-teal-500/15 text-teal-600 dark:text-teal-400",
+    iconBg: "bg-chart-2/15 text-chart-2",
     hex: "#14b8a6",
   },
 };
@@ -333,32 +326,25 @@ function ExploreNode({ data, selected }: NodeProps<ExploreRFNode>) {
     <div
       className={cn(
         "w-[240px] cursor-pointer rounded-2xl border-2 transition-colors",
-        selected ? "border-blue-500" : isLive ? "border-blue-400/70" : "border-transparent",
+        selected ? "border-ring" : isLive ? "border-primary/50" : "border-transparent",
       )}
     >
-      <div className="group relative rounded-[14px] border border-black/[0.06] bg-white shadow-sm transition-shadow hover:shadow-lg dark:border-white/10 dark:bg-neutral-900">
+      <div className="group relative rounded-[14px] border border-border bg-card shadow-sm transition-shadow hover:shadow-lg">
         <Handle
           type="target"
           position={Position.Left}
-          className="!size-2 !border-2 !border-neutral-300 !bg-white dark:!border-neutral-600 dark:!bg-neutral-800 opacity-0 transition-opacity group-hover:opacity-100"
+          className="!size-2 !border-2 !border-border !bg-card opacity-0 transition-opacity group-hover:opacity-100"
         />
         <div className="flex items-center gap-2 px-3 pt-3 pb-1.5">
           <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-lg shadow-sm", meta.iconBg)}>
-            <Icon className="size-3.5 text-white" />
+            <Icon className="size-3.5" />
           </span>
-          <span className="grow truncate font-semibold text-[13px] text-neutral-700 dark:text-neutral-100">
-            {meta.label}
-          </span>
-          {isLive && (
-            <span className="relative flex size-2 shrink-0">
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-blue-400 opacity-70" />
-              <span className="relative inline-flex size-2 rounded-full bg-blue-500" />
-            </span>
-          )}
+          <span className="grow truncate font-semibold text-foreground text-sm">{meta.label}</span>
+          {isLive && <span className="size-2 shrink-0 animate-pulse rounded-full bg-info" />}
           {showPriority && (
             <span
               className={cn(
-                "shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[10px] tabular-nums",
+                "shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-xs tabular-nums",
                 toneClasses[prioTone(n.priority)],
               )}
             >
@@ -366,7 +352,7 @@ function ExploreNode({ data, selected }: NodeProps<ExploreRFNode>) {
             </span>
           )}
         </div>
-        <div className="line-clamp-3 px-3 pb-2 text-[13px] text-neutral-500 leading-snug dark:text-neutral-400">
+        <div className="line-clamp-3 px-3 pb-2 text-muted-foreground text-sm leading-snug">
           {nodeSummary(n) || meta.label}
         </div>
         <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
@@ -379,18 +365,18 @@ function ExploreNode({ data, selected }: NodeProps<ExploreRFNode>) {
               domain={n.type === "goal" ? "goal" : "intent"}
               value={n.state}
               dot
-              className="px-1.5 py-0 text-[10px]"
+              className="px-1.5 py-0 text-xs"
               title={n.blocked_reason}
             />
           ) : (
-            <span className="text-[10px] text-neutral-400 dark:text-neutral-500">{meta.label}</span>
+            <span className="text-muted-foreground text-xs">{meta.label}</span>
           )}
-          <span className="shrink-0 font-mono text-[10px] text-neutral-400 dark:text-neutral-500">#{n.id}</span>
+          <span className="shrink-0 font-mono text-muted-foreground text-xs">#{n.id}</span>
         </div>
         <Handle
           type="source"
           position={Position.Right}
-          className="!size-2 !border-2 !border-neutral-300 !bg-white dark:!border-neutral-600 dark:!bg-neutral-800 opacity-0 transition-opacity group-hover:opacity-100"
+          className="!size-2 !border-2 !border-border !bg-card opacity-0 transition-opacity group-hover:opacity-100"
         />
       </div>
     </div>
@@ -419,19 +405,11 @@ function NodeDetailSheet({
   onSelect: (n: TaskNode) => void;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [copied, setCopied] = React.useState(false);
   const meta = node ? (typeMeta[viewKind(node)] ?? typeMeta.intent) : null;
   const Icon = meta?.icon;
   const raw = node ? JSON.stringify(node, null, 2) : "";
   const memberIds = node ? digestMemberIds(node) : [];
   const members = memberIds.map((id) => nodesById.get(id)).filter((m): m is TaskNode => !!m);
-
-  const copy = () => {
-    void navigator.clipboard?.writeText(raw).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
-  };
 
   return (
     <Sheet open={node !== null} onOpenChange={onOpenChange}>
@@ -443,7 +421,7 @@ function NodeDetailSheet({
                 <span
                   className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-sm", meta.iconBg)}
                 >
-                  <Icon className="size-4 text-white" />
+                  <Icon className="size-4" />
                 </span>
                 <div className="min-w-0">
                   <SheetTitle className="leading-tight">{meta.label}</SheetTitle>
@@ -468,7 +446,7 @@ function NodeDetailSheet({
                         domain={node.type === "goal" ? "goal" : "intent"}
                         value={node.state}
                         dot
-                        className="px-1.5 py-0 text-[10px]"
+                        className="px-1.5 py-0 text-xs"
                       />
                     ) : (
                       <span className="font-mono text-xs">{node.state}</span>
@@ -524,13 +502,13 @@ function NodeDetailSheet({
                                   mMeta.iconBg,
                                 )}
                               >
-                                <MIcon className="size-3 text-white" />
+                                <MIcon className="size-3" />
                               </span>
                               <span className="min-w-0 flex-1">
                                 <span className="line-clamp-2 text-foreground text-xs leading-snug">
                                   {nodeSummary(m) || mMeta.label}
                                 </span>
-                                <span className="block font-mono text-[10px] text-muted-foreground">
+                                <span className="block font-mono text-muted-foreground text-xs">
                                   {mMeta.label} · #{m.id}
                                 </span>
                               </span>
@@ -538,7 +516,7 @@ function NodeDetailSheet({
                           );
                         })}
                         {members.length < memberIds.length && (
-                          <span className="text-[10px] text-muted-foreground">
+                          <span className="text-muted-foreground text-xs">
                             另有 {memberIds.length - members.length} 个成员节点未随当前图加载
                           </span>
                         )}
@@ -550,13 +528,7 @@ function NodeDetailSheet({
                 <section className="border-t pt-3">
                   <div className="mb-1.5 flex items-center justify-between">
                     <h4 className="font-medium text-muted-foreground text-xs">原始数据</h4>
-                    <button
-                      type="button"
-                      onClick={copy}
-                      className="text-muted-foreground text-xs transition-colors hover:text-foreground"
-                    >
-                      {copied ? "已复制" : "复制"}
-                    </button>
+                    <CopyButton text={raw} size="xs" variant="ghost" />
                   </div>
                   <pre className="max-w-full overflow-hidden whitespace-pre-wrap break-all rounded-md border bg-muted/50 p-3 font-mono text-foreground text-xs leading-relaxed">
                     {raw}
@@ -644,14 +616,9 @@ function ExplorationGraphInner({
         proOptions={{ hideAttribution: true }}
         onlyRenderVisibleElements
         minZoom={0.1}
-        className="!bg-[#f0f2f7] dark:!bg-neutral-950"
+        className="!bg-background"
       >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={16}
-          size={1}
-          className="text-neutral-400/50 dark:text-neutral-700/60"
-        />
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1} className="text-muted-foreground/40" />
         <Controls
           showInteractive={false}
           className="!rounded-lg !border !shadow-sm [&>button]:!border-border [&>button]:!bg-card [&>button:hover]:!bg-accent [&_svg]:!fill-foreground"

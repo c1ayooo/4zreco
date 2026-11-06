@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -350,16 +351,25 @@ function TaskDetailInner() {
   }
 
   if (!task) {
+    if (!loaded) {
+      // 首帧加载：骨架对齐详情页头部与内容块高度，替代「加载中…」纯文本占位。
+      return (
+        <div className="flex flex-1 flex-col gap-3 p-4 lg:p-6" aria-hidden="true">
+          <Skeleton className="h-8 w-72" />
+          <Skeleton className="h-4 w-full max-w-md" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="mt-2 h-96 w-full" />
+        </div>
+      );
+    }
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center">
-        <p className="text-muted-foreground">{loaded ? `任务 ${id} 已被删除、归档或不存在` : "加载中…"}</p>
-        {loaded && (
-          <Button asChild variant="outline">
-            <Link href="/function/tasks">
-              <ArrowLeftIcon /> 返回任务列表
-            </Link>
-          </Button>
-        )}
+        <p className="text-muted-foreground">任务 {id} 已被删除、归档或不存在</p>
+        <Button asChild variant="outline">
+          <Link href="/function/tasks">
+            <ArrowLeftIcon /> 返回任务列表
+          </Link>
+        </Button>
       </div>
     );
   }
@@ -402,7 +412,7 @@ function TaskDetailInner() {
       <header className="sticky top-0 z-10 flex flex-col gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:px-6">
         <div className="flex items-center gap-2">
           <SidebarTrigger className="-ml-1" />
-          <Button asChild variant="ghost" size="icon" className="size-7">
+          <Button asChild variant="ghost" size="icon" className="size-7" aria-label="返回任务列表">
             <Link href="/function/tasks">
               <ArrowLeftIcon />
             </Link>
@@ -417,7 +427,7 @@ function TaskDetailInner() {
             <Badge
               asChild
               variant="secondary"
-              className="hidden shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal sm:inline-flex"
+              className="hidden shrink-0 gap-1 px-1.5 py-0 font-normal text-xs sm:inline-flex"
             >
               <Link href="/function/projects" title={`归属项目：${projectOfTask.name}`}>
                 <FolderKanbanIcon className="size-3" />
@@ -466,9 +476,12 @@ function TaskDetailInner() {
               <TabsTrigger key={t.value} value={t.value}>
                 {t.label}
                 {t.value === "intercept" && interceptPendingCount > 0 && (
-                  <span className="ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-warning px-1 font-semibold text-[10px] text-white leading-none">
+                  <Badge
+                    variant="outline"
+                    className="ml-1.5 h-4 min-w-4 rounded-full px-1 font-semibold text-warning text-xs tabular-nums leading-none"
+                  >
                     {interceptPendingCount > 99 ? "99+" : interceptPendingCount}
-                  </span>
+                  </Badge>
                 )}
               </TabsTrigger>
             ))}

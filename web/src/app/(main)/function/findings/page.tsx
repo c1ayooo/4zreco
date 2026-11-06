@@ -30,10 +30,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -127,6 +129,33 @@ const EMPTY_STATS: FindingStats = {
   vulnclasses: [],
   tasks: [],
 };
+
+// 块级加载一律骨架行块,行高对齐真实内容(表格:表头 + 行;资产树:过滤框 + 行)。
+function TableSkeleton() {
+  return (
+    <div className="flex flex-col gap-3 px-4 py-2">
+      <Skeleton className="h-8 w-full" />
+      <Skeleton className="h-12 w-full" />
+      <Skeleton className="h-12 w-full" />
+      <Skeleton className="h-12 w-full" />
+      <Skeleton className="h-12 w-full" />
+      <Skeleton className="h-12 w-full" />
+    </div>
+  );
+}
+
+function TreeSkeleton() {
+  return (
+    <div className="flex flex-col gap-2">
+      <Skeleton className="h-9 w-full" />
+      <Skeleton className="h-7 w-full" />
+      <Skeleton className="h-7 w-full" />
+      <Skeleton className="h-7 w-full" />
+      <Skeleton className="h-7 w-full" />
+      <Skeleton className="h-7 w-full" />
+    </div>
+  );
+}
 
 export default function FindingsPage() {
   const [view, setView] = React.useState<FindingView>("flat");
@@ -638,6 +667,19 @@ export default function FindingsPage() {
   const [edit, setEdit] = React.useState<FindingEdit | null>(null);
   const [saving, setSaving] = React.useState(false);
 
+  // loadReport 按稳定行键拉取一份发现的详细报告进缓存;失败落 error 态,
+  // 展开区里的「重试」复用同一入口。
+  const loadReport = React.useCallback((f: Finding) => {
+    if (!f.finding_id) return;
+    const key = findingRowKey(f);
+    const fid = f.finding_id;
+    setReports((r) => ({ ...r, [key]: { status: "loading", text: "" } }));
+    api
+      .getFinding(fid)
+      .then((full) => setReports((r) => ({ ...r, [key]: { status: "done", text: full.report ?? "" } })))
+      .catch(() => setReports((r) => ({ ...r, [key]: { status: "error", text: "" } })));
+  }, []);
+
   // toggle 展开/收起一行;新展开时初始化编辑缓冲,并(尚未取过时)按 finding_id 拉一次报告缓存。
   const toggleRow = React.useCallback(
     (f: Finding) => {
@@ -650,14 +692,9 @@ export default function FindingsPage() {
       }
       setEdit({ name: f.name ?? "", vulnclass: f.vulnclass, severity: f.severity });
       if (!f.finding_id || reports[key]) return;
-      const fid = f.finding_id;
-      setReports((r) => ({ ...r, [key]: { status: "loading", text: "" } }));
-      api
-        .getFinding(fid)
-        .then((full) => setReports((r) => ({ ...r, [key]: { status: "done", text: full.report ?? "" } })))
-        .catch(() => setReports((r) => ({ ...r, [key]: { status: "error", text: "" } })));
+      loadReport(f);
     },
-    [expanded, reports],
+    [expanded, loadReport, reports],
   );
 
   // saveEdit 保存当前展开行的名称/类别/严重等级,回写本地列表并刷新统计(类别下拉/严重计数可能变)。
@@ -784,6 +821,7 @@ export default function FindingsPage() {
     activeRetests,
     onDeepen: openDeepen,
     onDelete: deleteFinding,
+    onRetryReport: loadReport,
   };
 
   // 平铺视图与资产视图右侧是同一张表 + 同一份分页,只是筛选条件不同。
@@ -791,9 +829,7 @@ export default function FindingsPage() {
     <Card className="gap-0 py-0">
       <CardContent className="px-0">
         {flat.loading && !flat.loaded ? (
-          <div className="flex min-h-36 items-center justify-center">
-            <Spinner />
-          </div>
+          <TableSkeleton />
         ) : (
           <>
             <FindingsTable items={flat.items} selectAllLabel="选择当前页全部" {...rowProps} />
@@ -945,7 +981,7 @@ export default function FindingsPage() {
               <span className="text-muted-foreground text-xs tabular-nums">已选 {selectedIds.size} 条</span>
             )}
             <Button size="sm" variant="outline" onClick={openExport}>
-              <DownloadIcon /> 导出
+              <DownloadIcon data-icon="inline-start" /> 导出
             </Button>
           </div>
         </div>
@@ -957,9 +993,7 @@ export default function FindingsPage() {
             <Card className="gap-0 py-3 lg:sticky lg:top-4">
               <CardContent className="flex flex-col px-3">
                 {assetTree.loading && !assetTree.loaded ? (
-                  <div className="flex min-h-36 items-center justify-center">
-                    <Spinner />
-                  </div>
+                  <TreeSkeleton />
                 ) : (
                   <AssetTree
                     nodes={assetTree.nodes}
@@ -1079,9 +1113,7 @@ export default function FindingsPage() {
                   {groupOpen && (
                     <CardContent className="px-0">
                       {state.loading && !state.loaded ? (
-                        <div className="flex min-h-36 items-center justify-center">
-                          <Spinner />
-                        </div>
+                        <TableSkeleton />
                       ) : (
                         <>
                           <FindingsTable items={state.items} selectAllLabel="选择本组当前页全部" {...rowProps} />
@@ -1100,9 +1132,15 @@ export default function FindingsPage() {
               );
             })}
             {groups.length === 0 && (
-              <Card>
-                <CardContent className="py-12 text-center text-muted-foreground text-sm">没有匹配的发现。</CardContent>
-              </Card>
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <ShieldAlertIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>没有匹配的发现</EmptyTitle>
+                  <EmptyDescription>调整严重等级、状态、类型或检索词后重试。</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
             )}
             <TablePagination
               page={page}
@@ -1196,7 +1234,7 @@ export default function FindingsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>导出发现</DialogTitle>
-            <DialogDescription>选择导出范围与格式,生成后浏览器会自动下载。</DialogDescription>
+            <DialogDescription>选择导出范围与格式，生成后浏览器会自动下载。</DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-5 py-1">
@@ -1227,7 +1265,7 @@ export default function FindingsPage() {
                   <RadioGroupItem id="export-format-md-single" value="md-single" /> Markdown 汇总报告（单个 .md 文件）
                 </label>
                 <label htmlFor="export-format-md-zip" className="flex items-center gap-2 text-sm">
-                  <RadioGroupItem id="export-format-md-zip" value="md-zip" /> Markdown 分文件（一漏洞一 .md,打包 .zip）
+                  <RadioGroupItem id="export-format-md-zip" value="md-zip" /> Markdown 分文件（一漏洞一 .md，打包 .zip）
                 </label>
                 <label htmlFor="export-format-csv" className="flex items-center gap-2 text-sm">
                   <RadioGroupItem id="export-format-csv" value="csv" /> CSV 表格（.csv）
@@ -1244,7 +1282,7 @@ export default function FindingsPage() {
               取消
             </Button>
             <Button onClick={doExport} disabled={exporting || (exportScope === "selected" && selectedIds.size === 0)}>
-              <DownloadIcon /> {exporting ? "导出中…" : "导出"}
+              <DownloadIcon data-icon="inline-start" /> {exporting ? "导出中…" : "导出"}
             </Button>
           </DialogFooter>
         </DialogContent>

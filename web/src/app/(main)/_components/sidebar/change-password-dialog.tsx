@@ -27,6 +27,7 @@ export function ChangePasswordDialog({
   const [oldPassword, setOldPassword] = React.useState("");
   const [newPassword, setNewPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
+  const [validationError, setValidationError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
   // reset fields whenever the dialog closes
@@ -35,19 +36,21 @@ export function ChangePasswordDialog({
       setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      setValidationError("");
     }
   }, [open]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!oldPassword || !newPassword) {
-      toast.error("请填写当前密码和新密码");
+      setValidationError("请填写当前密码和新密码");
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast.error("两次输入的新密码不一致");
+      setValidationError("两次输入的新密码不一致");
       return;
     }
+    setValidationError("");
     setSaving(true);
     api
       .changePassword(oldPassword, newPassword)
@@ -66,7 +69,7 @@ export function ChangePasswordDialog({
           <DialogHeader>
             <DialogTitle>修改密码</DialogTitle>
             <DialogDescription>
-              用户名固定为 <b>4ZRECO</b>。需先输入当前密码验证；修改后已签发的登录 token 仍有效直至过期。
+              用户名固定为 4ZRECO。需先输入当前密码验证；修改后已签发的登录 token 仍有效直至过期。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3 py-4">
@@ -104,6 +107,7 @@ export function ChangePasswordDialog({
               />
             </div>
           </div>
+          {validationError ? <p className="text-destructive text-sm">{validationError}</p> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               取消

@@ -29,11 +29,13 @@ import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import type {
   AssetInterceptKind,
@@ -445,7 +447,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       {/* 原始任务描述与目标(创建时填写的),置顶便于随时回看。 */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <TargetIcon className="size-4 text-primary" /> 任务描述与目标
           </CardTitle>
         </CardHeader>
@@ -468,7 +470,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
  删除仅通知规划者（不复活）。目标 = 最终可交付/可核验的结果，不是攻击步骤或侦察动作。 */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <ListChecksIcon className="size-4 text-primary" /> 目标管理
             <span className="font-normal text-muted-foreground text-xs">
               （最终可核验的目标，共 {goals.length} 条；新增/修改会通知规划者并复活任务）
@@ -508,7 +510,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             <div className="flex flex-col gap-1.5">
               {goals.map((g) =>
                 editingGoalId === g.id ? (
-                  <div key={g.id} className="flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5">
+                  <div key={g.id} className="flex flex-wrap items-center gap-2 rounded-md px-2.5 py-1.5">
                     <Input
                       className="h-7 min-w-56 flex-1 text-sm"
                       value={editText}
@@ -551,7 +553,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                     </Button>
                   </div>
                 ) : (
-                  <div key={g.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
+                  <div key={g.id} className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm">
                     <StatusBadge domain="goal" value={g.state} />
                     <span className="min-w-0 flex-1 break-words">{g.text}</span>
                     {g.vulnclass && (
@@ -591,7 +593,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
  下一轮规划自然读到。 */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <ShieldAlertIcon className="size-4 text-warning" /> 操作约束
             <span className="font-normal text-muted-foreground text-xs">
               （框定 planner/worker 的探索边界，共 {constraints.length} 条；改动下一轮规划生效）
@@ -635,7 +637,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             <div className="flex flex-col gap-1.5">
               {constraints.map((c) =>
                 editingConId === c.id ? (
-                  <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5">
+                  <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-md px-2.5 py-1.5">
                     <Select value={editConKind} onValueChange={(v) => setEditConKind(v as TaskConstraint["kind"])}>
                       <SelectTrigger size="sm">
                         <SelectValue />
@@ -676,7 +678,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                     </Button>
                   </div>
                 ) : (
-                  <div key={c.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
+                  <div key={c.id} className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm">
                     <span
                       className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
                         c.kind === "allow" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
@@ -718,7 +720,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       {coverage?.enabled && coverage.scope_rows > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
+            <CardTitle className="flex items-center gap-2 text-sm">
               <TargetIcon className="size-4 text-success" /> 资产测试覆盖度
               <span className="font-normal text-muted-foreground text-xs">（粗估，仅供参考）</span>
             </CardTitle>
@@ -751,7 +753,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       {/* LLM Token 用量：按模型分组，数据来自 llm_records（需开启 LLM 录制）。 */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <CoinsIcon className="size-4 text-warning" /> LLM Token 用量
             <span className="font-normal text-muted-foreground text-xs">
               （按模型统计{tokenTotals.calls > 0 ? `，共 ${tokenTotals.calls} 次调用` : ""}）
@@ -783,35 +785,35 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 </span>
               </div>
               {/* 按模型明细表 */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-muted-foreground text-xs">
-                      <th className="py-1.5 pr-3 font-medium">模型</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">调用</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">输入</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">输出</th>
-                      <th className="py-1.5 pr-3 text-right font-medium">缓存读</th>
-                      <th className="py-1.5 text-right font-medium">命中率</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              <div className="overflow-x-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>模型</TableHead>
+                      <TableHead className="text-right">调用</TableHead>
+                      <TableHead className="text-right">输入</TableHead>
+                      <TableHead className="text-right">输出</TableHead>
+                      <TableHead className="text-right">缓存读</TableHead>
+                      <TableHead className="text-right">命中率</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {modelTokens.map((m) => (
-                      <tr key={m.model} className="border-b last:border-0">
-                        <td className="max-w-[16rem] truncate py-1.5 pr-3 font-mono text-xs" title={m.model}>
+                      <TableRow key={m.model}>
+                        <TableCell className="max-w-[16rem] truncate font-mono text-xs" title={m.model}>
                           {m.model}
-                        </td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{m.calls}</td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.input_tokens)}</td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.output_tokens)}</td>
-                        <td className="py-1.5 pr-3 text-right tabular-nums">{fmtTokens(m.cache_read_tokens)}</td>
-                        <td className="py-1.5 text-right text-success tabular-nums">
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{m.calls}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtTokens(m.input_tokens)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtTokens(m.output_tokens)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtTokens(m.cache_read_tokens)}</TableCell>
+                        <TableCell className="text-right text-success tabular-nums">
                           {cacheHitRate(m.cache_read_tokens, m.input_tokens)}
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             </>
           ) : (
@@ -822,7 +824,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       {/* 测试范围：覆盖度分母 + 授权边界，可手动增删。 */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <ShieldCheckIcon className="size-4 text-success" /> 测试范围
             <span className="font-normal text-muted-foreground text-xs">
               （覆盖度分母 + 授权边界，共 {scope.length} 条）
@@ -880,7 +882,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           {scope.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               {scope.map((row) => (
-                <div key={row.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
+                <div key={row.id} className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm">
                   <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
                     {SCOPE_KIND_LABELS[row.kind]}
                   </span>
@@ -909,7 +911,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       {/* Heartbeat */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <ActivityIcon className="size-4 text-info" /> 心跳
           </CardTitle>
         </CardHeader>
@@ -988,7 +990,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             </div>
             <div>
               <div className="font-semibold text-2xl tabular-nums">{open.length}</div>
-              <div className="text-muted-foreground text-xs">frontier 待领</div>
+              <div className="text-muted-foreground text-xs">待领取意图</div>
             </div>
             <div>
               <div className="font-semibold text-2xl text-destructive tabular-nums">{blocked.length}</div>
@@ -1057,7 +1059,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <StatCard label="待领意图" value={open.length} icon={ShieldCheckIcon} sub="frontier 开放" />
+        <StatCard label="待领意图" value={open.length} icon={ShieldCheckIcon} sub="开放领取" />
         <StatCard label="确认发现" value={taskFindings.length} icon={BugIcon} sub="本任务" />
         <StatCard label="意图总数" value={intents.length} icon={AlertTriangleIcon} sub="本任务全部意图" />
       </div>
@@ -1182,7 +1184,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
+        <CardTitle className="flex items-center gap-2 text-sm">
           <ShieldCheckIcon className="size-4 text-info" /> 任务级资产拦截 / 允许
           <span className="font-normal text-muted-foreground text-xs">
             （仅本任务生效，不进全局；先拦截后允许，共 {rules.length} 条）
@@ -1240,7 +1242,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
           <div className="flex flex-col gap-1.5">
             {rules.map((r) =>
               editId === r.id ? (
-                <div key={r.id} className="flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5">
+                <div key={r.id} className="flex flex-wrap items-center gap-2 rounded-md px-2.5 py-1.5">
                   <Select value={editAction} onValueChange={(v) => setEditAction(v as "block" | "allow")}>
                     <SelectTrigger size="sm">
                       <SelectValue />
@@ -1300,7 +1302,7 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
                   </Button>
                 </div>
               ) : (
-                <div key={r.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
+                <div key={r.id} className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm">
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
                       r.action === "allow" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
@@ -1378,7 +1380,7 @@ function TaskAuthCard({ taskId }: { taskId: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
+        <CardTitle className="flex items-center gap-2 text-sm">
           <KeyRoundIcon className="size-4 text-primary" /> 目标登录凭据
           <Button size="sm" variant="outline" className="ml-auto" disabled={busy} onClick={() => void check()}>
             {busy ? "验证中…" : "测试登录"}
@@ -1542,7 +1544,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <ImageIcon className="size-4 text-primary" /> 证据附件（{list.length}）
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <Button size="sm" variant="ghost" disabled={scanning} onClick={() => void scan()}>
@@ -1627,7 +1629,7 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                       title={a.note || a.name}
                     >
                       {broken[a.id] ? (
-                        <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground">
+                        <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-center text-xs text-muted-foreground">
                           <ImageOffIcon className="size-5" />
                           无法预览
                           <span className="line-clamp-2 break-all">{a.name}</span>
@@ -1639,23 +1641,22 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                           alt={a.note || a.name}
                           loading="lazy"
                           onError={() => setBroken((b) => ({ ...b, [a.id]: true }))}
-                          className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                          className="h-full w-full object-cover"
                         />
                       )}
-                      <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-[10px] text-white">
+                      <span className="pointer-events-none absolute inset-x-0 bottom-0 line-clamp-1 bg-black/55 px-1.5 py-0.5 text-xs text-white">
                         {a.finding_id ? `#${a.finding_id} · ` : ""}
                         {a.note || a.name}
                       </span>
                     </button>
-                    <label className="absolute top-1.5 left-1.5 z-10 flex size-5 cursor-pointer items-center justify-center rounded bg-black/55">
-                      <input
-                        type="checkbox"
+                    <span className="absolute top-1.5 left-1.5 z-10 flex size-5 items-center justify-center rounded bg-black/55">
+                      <Checkbox
                         aria-label={`选择 ${a.name}`}
-                        className="size-3.5 accent-primary"
+                        className="size-3.5"
                         checked={selected.includes(a.id)}
-                        onChange={() => toggleSelected(a.id)}
+                        onCheckedChange={() => toggleSelected(a.id)}
                       />
-                    </label>
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1689,16 +1690,16 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                             src={previewUrl(a.id, 1)}
                             alt={a.note || a.name}
                             loading="lazy"
-                            className="h-full w-full object-cover object-top transition-transform duration-200 group-hover:scale-105"
+                            className="h-full w-full object-cover object-top"
                           />
                         ) : (
-                          <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-3 text-center text-[11px] text-muted-foreground">
+                          <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-3 text-center text-xs text-muted-foreground">
                             <BugIcon className="size-5" />
                             {stateText}
                             {a.preview_error ? <span className="line-clamp-2 break-all">{a.preview_error}</span> : null}
                           </span>
                         )}
-                        <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                        <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-0.5 text-xs text-white">
                           {docLabel(a)}
                           {ready ? ` · ${a.preview_pages} 页` : ""}
                           {a.finding_id ? ` · #${a.finding_id}` : ""}
@@ -1706,20 +1707,19 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                           {a.name}
                         </span>
                       </button>
-                      <label className="absolute top-1.5 left-1.5 z-10 flex size-5 cursor-pointer items-center justify-center rounded bg-black/55">
-                        <input
-                          type="checkbox"
+                      <span className="absolute top-1.5 left-1.5 z-10 flex size-5 items-center justify-center rounded bg-black/55">
+                        <Checkbox
                           aria-label={`选择 ${a.name}`}
-                          className="size-3.5 accent-primary"
+                          className="size-3.5"
                           checked={selected.includes(a.id)}
-                          onChange={() => toggleSelected(a.id)}
+                          onCheckedChange={() => toggleSelected(a.id)}
                         />
-                      </label>
+                      </span>
                       {!ready && a.preview_state !== "pending" && (
                         <Button
                           size="sm"
                           variant="secondary"
-                          className="absolute right-1.5 bottom-7 z-10 h-6 px-2 text-[11px]"
+                          className="absolute right-1.5 bottom-7 z-10 h-6 px-2 text-xs"
                           onClick={() => void regeneratePreview(a)}
                         >
                           {a.preview_state === "failed" ? "重试" : "生成预览"}
@@ -1734,12 +1734,11 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
               <div className="flex flex-col divide-y rounded border">
                 {files.map((a) => (
                   <div key={a.id} className="flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       aria-label={`选择 ${a.name}`}
-                      className="size-3.5 shrink-0 accent-primary"
+                      className="shrink-0"
                       checked={selected.includes(a.id)}
-                      onChange={() => toggleSelected(a.id)}
+                      onCheckedChange={() => toggleSelected(a.id)}
                     />
                     <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
                       {a.kind}

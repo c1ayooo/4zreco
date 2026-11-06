@@ -15,6 +15,16 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -56,6 +66,7 @@ export default function WorkspacePage() {
   const [edit, setEdit] = React.useState<EditState | null>(null);
   const [mkdirOpen, setMkdirOpen] = React.useState(false);
   const [mkdirName, setMkdirName] = React.useState("");
+  const [deleteTarget, setDeleteTarget] = React.useState<WorkspaceEntry | null>(null);
   const uploadRef = React.useRef<HTMLInputElement>(null);
 
   const load = React.useCallback((p: string) => {
@@ -108,13 +119,14 @@ export default function WorkspacePage() {
       });
   };
 
-  const del = (e: WorkspaceEntry) => {
-    if (!window.confirm(`确认删除 ${e.dir ? "目录" : "文件"} “${e.name}”？${e.dir ? "（含其下所有内容）" : ""}`))
-      return;
+  const del = (e: WorkspaceEntry) => setDeleteTarget(e);
+
+  const handleDelete = (e: WorkspaceEntry) => {
     api
       .workspaceDelete(e.path)
       .then(() => {
         toast.success("已删除");
+        setDeleteTarget(null);
         load(path);
       })
       .catch((err) => toast.error(`删除失败：${(err as Error).message}`));
@@ -334,6 +346,33 @@ export default function WorkspacePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 删除确认 */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              删除{deleteTarget?.dir ? "目录" : "文件"}「{deleteTarget?.name}」？
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget?.dir
+                ? "目录及其下所有内容将一并删除，此操作不可撤销。"
+                : "删除后文件将无法恢复，此操作不可撤销。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteTarget) void handleDelete(deleteTarget);
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

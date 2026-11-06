@@ -29,6 +29,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -169,9 +170,15 @@ function SkillsOverview({
 
   if (skills.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-muted-foreground text-sm">暂无 Skill，点击左侧「新建」或「上传压缩包」开始</p>
-      </div>
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <FolderIcon />
+          </EmptyMedia>
+          <EmptyTitle>暂无 Skill</EmptyTitle>
+          <EmptyDescription>点击左侧「新建」或「上传压缩包」开始</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 
@@ -205,7 +212,7 @@ function SkillsOverview({
           <div key={s.label} className="rounded-lg border p-3">
             <p className="font-semibold text-2xl tabular-nums">{s.value}</p>
             <p className="font-medium text-xs">{s.label}</p>
-            {s.hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{s.hint}</p>}
+            {s.hint && <p className="mt-0.5 text-muted-foreground text-xs">{s.hint}</p>}
           </div>
         ))}
       </div>
@@ -262,9 +269,7 @@ function SkillsOverview({
                   <span className="min-w-0 flex-1 truncate font-mono text-xs" title={s.name}>
                     {s.name}
                   </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-                    {fmtTime(s.last_used)}
-                  </span>
+                  <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{fmtTime(s.last_used)}</span>
                 </button>
               ))}
             </div>
@@ -332,6 +337,8 @@ export default function SkillsPage() {
   const [mcpOptions, setMcpOptions] = React.useState<MCPServer[]>([]);
   const [creatingSkill, setCreatingSkill] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
+  // 必填校验就近显示在字段下（toast 只留给请求失败）。
+  const [newErr, setNewErr] = React.useState<"name" | "desc" | "">("");
   const uploadRef = React.useRef<HTMLInputElement>(null);
 
   // skill detail — MCP edit state (optimistic, rolls back on error)
@@ -340,6 +347,9 @@ export default function SkillsPage() {
   // delete confirmation
   const [pendingDelete, setPendingDelete] = React.useState<PendingDelete>(null);
   const [deleting, setDeleting] = React.useState(false);
+
+  // 上传同名覆盖确认（AlertDialog，替代原生 confirm 弹窗）
+  const [overwriteAsk, setOverwriteAsk] = React.useState<{ file: File; msg: string } | null>(null);
 
   // 调用统计：列表页的次数/最近调用随 api.skills() 一起回来；选中某个 skill 时再拉它的
   // 最近调用明细。missing = 被点名但不存在的 skill（想用但没有）。
@@ -390,10 +400,7 @@ export default function SkillsPage() {
       const msg = (e as Error).message;
       // offer overwrite when the skill already exists
       if (!overwrite && msg.includes("已存在")) {
-        if (window.confirm(`${msg}\n\n是否覆盖同名 Skill？`)) {
-          await uploadZip(file, true);
-          return;
-        }
+        setOverwriteAsk({ file, msg });
       } else {
         toast.error(`上传失败：${msg}`);
       }
@@ -608,11 +615,11 @@ export default function SkillsPage() {
 
   async function createNewSkill() {
     if (!newName.trim()) {
-      toast.error("请填写 name");
+      setNewErr("name");
       return;
     }
     if (!newDesc.trim()) {
-      toast.error("description 为必填项");
+      setNewErr("desc");
       return;
     }
     setCreatingSkill(true);
@@ -678,9 +685,9 @@ export default function SkillsPage() {
 
   // ── Recursive tree renderer ───────────────────────────────────────────────
   function renderTree(nodes: TreeNode[], skill: string, depth: number): React.ReactNode {
-    // depth+1: the skill root sits at 8px (px-2); its children indent one step
-    // further in so the tree reads as nested under the skill folder.
-    const baseIndent = 8 + (depth + 1) * 14;
+    // depth+1: children of the skill root indent one 12px step per depth level
+    // (kept on the 4px spacing scale).
+    const baseIndent = 12 + (depth + 1) * 12;
     return nodes.map((node) => {
       if (node.type === "dir") {
         const key = `${skill}:${node.path}`;
@@ -690,17 +697,23 @@ export default function SkillsPage() {
             <div
               className="group relative flex cursor-pointer select-none items-center gap-1 rounded py-0.5 pr-1 text-sm hover:bg-muted"
               style={{ paddingLeft: baseIndent }}
-              onClick={() => toggleExpanded(key)}
             >
-              <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
-              {open ? (
-                <FolderOpenIcon className="size-3.5 shrink-0 text-warning" />
-              ) : (
-                <FolderIcon className="size-3.5 shrink-0 text-warning" />
-              )}
-              <span className="min-w-0 flex-1 truncate" title={node.path}>
-                {node.name}
-              </span>
+              <button
+                type="button"
+                aria-expanded={open}
+                className="flex min-w-0 flex-1 items-center gap-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => toggleExpanded(key)}
+              >
+                <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+                {open ? (
+                  <FolderOpenIcon className="size-3.5 shrink-0 text-warning" />
+                ) : (
+                  <FolderIcon className="size-3.5 shrink-0 text-warning" />
+                )}
+                <span className="min-w-0 flex-1 truncate" title={node.path}>
+                  {node.name}
+                </span>
+              </button>
               {/* Absolute so a long name can never push the actions out of view */}
               <span className="absolute inset-y-0 right-1 hidden items-center gap-0.5 rounded bg-muted pl-1 group-hover:flex">
                 <Button
@@ -744,7 +757,7 @@ export default function SkillsPage() {
             {open && (
               <>
                 {renderTree(node.children, skill, depth + 1)}
-                {creating?.skill === skill && creating.inDir === node.path && inlineInputJSX(baseIndent + 14)}
+                {creating?.skill === skill && creating.inDir === node.path && inlineInputJSX(baseIndent + 12)}
               </>
             )}
           </div>
@@ -761,12 +774,18 @@ export default function SkillsPage() {
             isSelected ? "bg-accent text-accent-foreground" : "hover:bg-muted",
           )}
           style={{ paddingLeft: baseIndent + 16 }}
-          onClick={() => setSelected({ skill, path: node.path })}
         >
-          <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate font-mono text-xs" title={node.path}>
-            {node.name}
-          </span>
+          <button
+            type="button"
+            aria-current={isSelected || undefined}
+            className="flex min-w-0 flex-1 items-center gap-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setSelected({ skill, path: node.path })}
+          >
+            <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={node.path}>
+              {node.name}
+            </span>
+          </button>
           <span
             className={cn(
               "absolute inset-y-0 right-1 hidden items-center rounded pl-1 group-hover:flex",
@@ -829,9 +848,17 @@ export default function SkillsPage() {
       </div>
       <div className="flex flex-1 flex-col overflow-hidden lg:flex-row">
         {/* ── 左侧文件树 ── */}
-        <div className="flex w-full shrink-0 flex-col border-b lg:w-64 lg:border-b-0 lg:border-r">
+        <div className="flex w-full shrink-0 flex-col border-b lg:w-64 lg:border-r lg:border-b-0">
           <div className="flex flex-col gap-2 border-b p-2">
-            <Button size="sm" variant="outline" className="w-full" onClick={() => setNewOpen(true)}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                setNewErr("");
+                setNewOpen(true);
+              }}
+            >
               <PlusIcon className="size-3.5" />
               新建 Skill
             </Button>
@@ -871,30 +898,36 @@ export default function SkillsPage() {
                         "group relative flex cursor-pointer select-none items-center gap-1 rounded px-2 py-1 text-sm",
                         isSkillSelected ? "bg-accent text-accent-foreground" : "hover:bg-muted",
                       )}
-                      onClick={() => {
-                        toggleExpanded(s.name);
-                        setSelected({ skill: s.name, path: null });
-                      }}
                     >
-                      <ChevronRightIcon
-                        className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")}
-                      />
-                      {isOpen ? (
-                        <FolderOpenIcon className="size-3.5 shrink-0 text-info" />
-                      ) : (
-                        <FolderIcon className="size-3.5 shrink-0 text-info" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate font-semibold" title={s.name}>
-                        {s.name}
-                      </span>
-                      {s.calls > 0 && (
-                        <span
-                          className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground tabular-nums"
-                          title={`被调用 ${s.calls} 次 · 最近 ${fmtTime(s.last_used)}`}
-                        >
-                          {s.calls}
+                      <button
+                        type="button"
+                        aria-expanded={isOpen}
+                        className="flex min-w-0 flex-1 items-center gap-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => {
+                          toggleExpanded(s.name);
+                          setSelected({ skill: s.name, path: null });
+                        }}
+                      >
+                        <ChevronRightIcon
+                          className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")}
+                        />
+                        {isOpen ? (
+                          <FolderOpenIcon className="size-3.5 shrink-0 text-info" />
+                        ) : (
+                          <FolderIcon className="size-3.5 shrink-0 text-info" />
+                        )}
+                        <span className="min-w-0 flex-1 truncate font-semibold" title={s.name}>
+                          {s.name}
                         </span>
-                      )}
+                        {s.calls > 0 && (
+                          <span
+                            className="shrink-0 rounded bg-muted px-1 text-muted-foreground text-xs tabular-nums"
+                            title={`被调用 ${s.calls} 次 · 最近 ${fmtTime(s.last_used)}`}
+                          >
+                            {s.calls}
+                          </span>
+                        )}
+                      </button>
                       <span
                         className={cn(
                           "absolute inset-y-0 right-1 hidden items-center gap-0.5 rounded pl-1 group-hover:flex",
@@ -944,7 +977,7 @@ export default function SkillsPage() {
                     {isOpen && (
                       <>
                         {renderTree(tree, s.name, 0)}
-                        {creating?.skill === s.name && creating.inDir === "" && inlineInputJSX(22)}
+                        {creating?.skill === s.name && creating.inDir === "" && inlineInputJSX(24)}
                       </>
                     )}
                   </div>
@@ -1172,6 +1205,36 @@ export default function SkillsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* ── 上传同名覆盖确认 ── */}
+      <AlertDialog
+        open={!!overwriteAsk}
+        onOpenChange={(o) => {
+          if (!o) setOverwriteAsk(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>覆盖同名 Skill？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {overwriteAsk?.msg}。覆盖将替换该 Skill 的全部文件，此操作不可撤销
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const ask = overwriteAsk;
+                setOverwriteAsk(null);
+                if (ask) void uploadZip(ask.file, true);
+              }}
+            >
+              覆盖
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* ── 新建 Skill 对话框 ── */}
       <Sheet open={newOpen} onOpenChange={setNewOpen}>
         <SheetContent side="right" className="flex w-full flex-col gap-0 data-[side=right]:sm:max-w-xl">
@@ -1184,7 +1247,7 @@ export default function SkillsPage() {
               <TabsTrigger value="mcp">
                 关联 MCP
                 {newMcps.length > 0 && (
-                  <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground leading-none">
+                  <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-primary-foreground text-xs leading-none">
                     {newMcps.length}
                   </span>
                 )}
@@ -1192,7 +1255,7 @@ export default function SkillsPage() {
               <TabsTrigger value="visibility">
                 可见性
                 {newVisibility.length > 0 && (
-                  <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground leading-none">
+                  <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-primary-foreground text-xs leading-none">
                     {newVisibility.length}
                   </span>
                 )}
@@ -1212,9 +1275,16 @@ export default function SkillsPage() {
                   id="sk-name"
                   placeholder="sqli-deepdive"
                   value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+                  onChange={(e) => {
+                    setNewName(e.target.value);
+                    if (newErr === "name") setNewErr("");
+                  }}
                 />
-                <p className="text-muted-foreground text-xs">小写字母 / 数字 / 连字符，1–64 字符</p>
+                {newErr === "name" ? (
+                  <p className="text-destructive text-xs">名称不能为空</p>
+                ) : (
+                  <p className="text-muted-foreground text-xs">小写字母 / 数字 / 连字符，1–64 字符</p>
+                )}
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="sk-desc">
@@ -1226,8 +1296,12 @@ export default function SkillsPage() {
                   className="resize-none"
                   placeholder="这个 skill 做什么、何时使用。"
                   value={newDesc}
-                  onChange={(e) => setNewDesc(e.target.value)}
+                  onChange={(e) => {
+                    setNewDesc(e.target.value);
+                    if (newErr === "desc") setNewErr("");
+                  }}
                 />
+                {newErr === "desc" && <p className="text-destructive text-xs">描述不能为空</p>}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1.5">

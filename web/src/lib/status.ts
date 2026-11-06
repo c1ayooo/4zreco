@@ -1,29 +1,32 @@
 // Centralised status → color/label semantics, reused across the whole app.
 // Spec §8.3: 意图 / 覆盖 / 任务 / 严重度 each have a consistent color set.
+// Tone 名是对外 API（消费者按名取类串），保持不变；色面一律走语义令牌：
+// blue→info、green→success、amber→warning、red/rose→destructive、violet→primary、
+// slate→muted 系，底章沿用 bg-*/15 text-* 惯例。
 
 export type Tone = "neutral" | "blue" | "green" | "amber" | "red" | "rose" | "violet" | "slate";
 
 export const toneClasses: Record<Tone, string> = {
   neutral: "bg-muted text-muted-foreground border-transparent",
-  blue: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/20",
-  green: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-  amber: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20",
-  red: "bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/20",
+  blue: "bg-info/15 text-info border-info/20",
+  green: "bg-success/15 text-success border-success/20",
+  amber: "bg-warning/15 text-warning border-warning/20",
+  red: "bg-destructive/15 text-destructive border-destructive/20",
   // rose 用作「严重」——实心高强调,视觉上明显高于「高危」的软红描边。
-  rose: "bg-rose-600 text-white border-rose-600 dark:bg-rose-600 dark:text-white",
-  violet: "bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/20",
-  slate: "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/20",
+  rose: "bg-destructive text-white border-destructive",
+  violet: "bg-primary/15 text-primary border-primary/20",
+  slate: "bg-muted-foreground/15 text-muted-foreground border-transparent",
 };
 
 export const toneDot: Record<Tone, string> = {
   neutral: "bg-muted-foreground",
-  blue: "bg-blue-500",
-  green: "bg-emerald-500",
-  amber: "bg-amber-500",
-  red: "bg-red-500",
+  blue: "bg-info",
+  green: "bg-success",
+  amber: "bg-warning",
+  red: "bg-destructive",
   rose: "bg-white",
-  violet: "bg-violet-500",
-  slate: "bg-slate-500",
+  violet: "bg-primary",
+  slate: "bg-muted-foreground",
 };
 
 interface StatusMeta {

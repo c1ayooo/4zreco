@@ -193,23 +193,23 @@ export default function ProjectsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="font-semibold text-2xl tracking-tight">项目</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => void router.push("/function/tasks?create=1")}
-              title="跳转到任务页并打开创建面板（默认挂当前项目）"
-            >
-              <ListTodoIcon className="size-4" /> 新建任务
-            </Button>
-            <Button onClick={openCreate}>
-              <PlusIcon className="size-4" /> 新建项目
-            </Button>
-          </div>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="font-semibold text-2xl tracking-tight">项目</h1>
         </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => void router.push("/function/tasks?create=1")}
+            title="跳转到任务页并打开创建面板（默认挂当前项目）"
+          >
+            <ListTodoIcon className="size-4" /> 新建任务
+          </Button>
+          <Button onClick={openCreate}>
+            <PlusIcon className="size-4" /> 新建项目
+          </Button>
+        </div>
+      </div>
 
       {!loaded ? (
         <div className="text-muted-foreground py-16 text-center text-sm">加载中…</div>

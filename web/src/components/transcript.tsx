@@ -27,17 +27,23 @@ import { api } from "@/lib/api";
 import type { Activity, InterceptPending } from "@/lib/types";
 
 // ---- per-agent lane color (planner + work#1/#2/#3 …) ---------------------------
-const workerColors = ["bg-sky-600", "bg-violet-600", "bg-teal-600", "bg-pink-600", "bg-orange-600"];
+// §5.1 分类色：lane 身份色走 chart-1..5 底章惯例（bg-chart-N/15 text-chart-N）。
+const workerColors = [
+  "bg-chart-1/15 text-chart-1",
+  "bg-chart-2/15 text-chart-2",
+  "bg-chart-3/15 text-chart-3",
+  "bg-chart-4/15 text-chart-4",
+  "bg-chart-5/15 text-chart-5",
+];
 function workerColor(name: string): string {
-  if (name === "planner") return "bg-amber-600"; // the intent generator, distinct
-  if (name === "mainagent") return "bg-primary";
+  if (name === "planner") return "bg-chart-4/15 text-chart-4"; // the intent generator, distinct（对齐 dashboard planner 色）
+  if (name === "mainagent") return "bg-primary/15 text-primary";
   const m = /#(\d+)/.exec(name);
   const i = m ? (parseInt(m[1], 10) - 1) % workerColors.length : 0;
   return workerColors[Math.max(0, i)];
 }
 
-const chip = (worker: string) =>
-  `mt-0.5 shrink-0 rounded px-1 text-[9px] font-medium text-white ${workerColor(worker)}`;
+const chip = (worker: string) => `mt-0.5 shrink-0 rounded px-1 text-xs font-medium ${workerColor(worker)}`;
 
 // useInView latches true when the ref'd element first comes within `rootMargin` of
 // the enclosing scroll viewport. Blocks that always show their full body (user
@@ -134,7 +140,7 @@ function ActivityTime({ ts }: { ts: string }) {
     <time
       dateTime={date.toISOString()}
       title={date.toLocaleString("zh-CN")}
-      className="text-[10px] text-muted-foreground tabular-nums"
+      className="text-xs text-muted-foreground tabular-nums"
       suppressHydrationWarning
     >
       {date.toLocaleString("zh-CN", {
@@ -263,16 +269,14 @@ function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: n
     : null;
 
   return (
-    <div className="my-2 rounded-lg border border-amber-400/50 bg-amber-50/40 p-3 text-xs dark:bg-amber-950/15">
+    <div className="my-2 rounded-lg border border-warning/50 bg-warning/15 p-3 text-xs">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
-          <ShieldAlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <ShieldAlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <div className="min-w-0 space-y-0.5">
             <div className="flex items-center gap-1.5 font-medium">
-              <span className="text-amber-700 dark:text-amber-400">审批请求</span>
-              <code className="rounded bg-amber-100 px-1 font-mono text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
-                {toolName}
-              </code>
+              <span className="text-warning">审批请求</span>
+              <code className="rounded bg-warning/15 px-1 font-mono text-warning">{toolName}</code>
               {pendingId && <span className="text-muted-foreground">#{pendingId}</span>}
             </div>
             {inputStr && <p className="truncate font-mono text-muted-foreground">{inputStr}</p>}
@@ -284,12 +288,12 @@ function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: n
         ) : decided ? (
           <span
             className={
-              "shrink-0 rounded px-2 py-0.5 font-medium text-[11px]" +
+              "shrink-0 rounded px-2 py-0.5 font-medium text-xs" +
               (decided === "allowed"
-                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
+                ? " bg-success/15 text-success"
                 : decided === "timeout"
-                  ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                  : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400")
+                  ? " bg-muted text-muted-foreground"
+                  : " bg-destructive/15 text-destructive")
             }
           >
             {decided === "allowed" ? "已允许" : decided === "timeout" ? "已超时" : "已拒绝"}
@@ -380,17 +384,11 @@ function ToolBlock({
   const ToolIcon = toolName === "Bash" ? Terminal : Wrench;
   const running = !result;
   const ok = !!result && !result.is_error;
-  const statusTone = running
-    ? "text-muted-foreground"
-    : ok
-      ? "text-emerald-600 dark:text-emerald-400"
-      : "text-red-600 dark:text-red-400";
+  const statusTone = running ? "text-muted-foreground" : ok ? "text-success" : "text-destructive";
   const rawCmd = use?.summary.startsWith(toolName)
     ? use.summary.slice(toolName.length).trimStart()
     : (use?.summary ?? "");
   const cmd = toolInputText(toolName, rawCmd);
-  // status only — the full result lives behind the expand (【输出】), not previewed inline
-  const statusText = running ? "执行中…" : ok ? "✓" : "✕ 失败";
 
   // key over the seqs we'd load; changes when the result (or command) arrives.
   const detailKey = `${use?.seq ?? ""}:${result?.seq ?? ""}`;
@@ -399,7 +397,7 @@ function ToolBlock({
     let live = true;
     const segs: { label: string; seq: number }[] = [];
     if (use) segs.push({ label: "命令", seq: use.seq });
-    if (result) segs.push({ label: `输出${result.is_error ? " ✕" : " ✓"}`, seq: result.seq });
+    if (result) segs.push({ label: result.is_error ? "输出（失败）" : "输出", seq: result.seq });
     void Promise.all(
       segs.map((x) =>
         getDetail(x.seq)
@@ -476,14 +474,25 @@ function ToolBlock({
         <span className="mt-0.5 text-muted-foreground">
           {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         </span>
-        <ToolIcon className={`mt-0.5 size-3.5 shrink-0 ${running ? "text-sky-600 dark:text-sky-400" : statusTone}`} />
+        <ToolIcon className={`mt-0.5 size-3.5 shrink-0 ${running ? "text-info" : statusTone}`} />
         {showWorker && <span className={chip(group.worker)}>{group.worker}</span>}
-        <span className="shrink-0 font-medium text-sky-600 dark:text-sky-400">{toolName}</span>
+        <span className="shrink-0 font-medium text-info">{toolName}</span>
         {cmd && <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{cmd}</span>}
-        <span className={`ml-auto shrink-0 font-medium ${statusTone}`}>{statusText}</span>
+        <span className={`ml-auto inline-flex shrink-0 items-center gap-0.5 font-medium ${statusTone}`}>
+          {running ? (
+            "执行中…"
+          ) : ok ? (
+            <CheckIcon className="size-3" />
+          ) : (
+            <>
+              <XIcon className="size-3" />
+              失败
+            </>
+          )}
+        </span>
       </button>
       {open && (
-        <pre className="mb-1 ml-7 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
+        <pre className="mb-1 ml-7 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-xs leading-relaxed">
           {detail ?? "加载中…"}
         </pre>
       )}
@@ -512,7 +521,7 @@ function MessageBlock({
   const isError = group.steps.some((s) => s.is_error);
   const body = (speak.length ? speak : group.steps).map((s) => s.summary).join("  ") || "…";
   const Icon = isError ? Flag : MessageSquare;
-  const tone = isError ? "text-red-600 dark:text-red-400" : "text-foreground";
+  const tone = isError ? "text-destructive" : "text-foreground";
 
   const detailKey = group.steps.map((s) => s.seq).join(",");
   React.useEffect(() => {
@@ -548,11 +557,11 @@ function MessageBlock({
         {showWorker && <span className={chip(group.worker)}>{group.worker}</span>}
         <span className={`min-w-0 flex-1 truncate ${tone}`}>
           {body}
-          {hasThinking && <span className="ml-1 text-[10px] text-muted-foreground">· 含推理</span>}
+          {hasThinking && <span className="ml-1 text-xs text-muted-foreground">· 含推理</span>}
         </span>
       </button>
       {open && (
-        <pre className="mb-1 ml-7 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed">
+        <pre className="mb-1 ml-7 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-xs leading-relaxed">
           {detail ?? "加载中…"}
         </pre>
       )}
@@ -678,7 +687,7 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
       <div
         className={
           "min-w-0 flex-1 break-words rounded-lg bg-muted px-3 py-2" +
-          (step.is_error ? "text-red-600 text-sm dark:text-red-400" : "")
+          (step.is_error ? " text-destructive text-sm" : "")
         }
       >
         {step.is_error ? (
@@ -720,7 +729,7 @@ function ExecView({
     <div className="flex flex-col">
       {groupSteps(activity, !!chat).map((g) =>
         g.type === "round" ? (
-          <div key={`r${g.key}`} className="my-2 flex items-center gap-2 font-medium text-[10px] text-muted-foreground">
+          <div key={`r${g.key}`} className="my-2 flex items-center gap-2 font-medium text-xs text-muted-foreground">
             <span className="h-px flex-1 bg-border" />
             {g.label}
             <span className="h-px flex-1 bg-border" />
@@ -791,11 +800,7 @@ export function Transcript({
       <ExecView activity={activity} taskId={taskId} chat={chat} fetchDetail={fetchDetail} focusedSeq={focusedSeq} />
       {live && (
         <div className="flex items-center gap-2 pt-1 pl-2 text-muted-foreground text-xs">
-          <span className="flex gap-1">
-            <span className="size-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.3s]" />
-            <span className="size-1.5 animate-bounce rounded-full bg-blue-500 [animation-delay:-0.15s]" />
-            <span className="size-1.5 animate-bounce rounded-full bg-blue-500" />
-          </span>
+          <span className="size-1.5 animate-pulse rounded-full bg-info" />
           实时流式中…
         </div>
       )}

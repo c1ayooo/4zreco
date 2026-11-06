@@ -137,7 +137,7 @@ function groupByAgent(conversations: Conversation[], agentByKey: Map<string, Age
 // console — shown while a turn is streaming.
 function LiveBadge() {
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 font-medium text-[10px] text-info">
+    <span className="inline-flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 font-medium text-info text-xs">
       <span className="size-1 animate-pulse rounded-full bg-info" />
       实时
     </span>
@@ -206,6 +206,7 @@ function Composer({
                   className="ml-0.5 text-muted-foreground hover:text-foreground"
                   onClick={() => onRemoveAttachment(a.path)}
                   title="移除"
+                  aria-label="移除附件"
                 >
                   <XIcon className="size-3" />
                 </button>
@@ -237,6 +238,7 @@ function Composer({
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || uploading}
               title="上传文件"
+              aria-label="上传文件"
             >
               {uploading ? <Loader2Icon className="size-4 animate-spin" /> : <PaperclipIcon className="size-4" />}
             </Button>
@@ -316,7 +318,7 @@ function LLMProfileRow({
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-64 p-1">
-          <p className="px-2 py-1 font-medium text-[11px] text-muted-foreground">选择 LLM 配置</p>
+          <p className="px-2 py-1 font-medium text-muted-foreground text-xs">选择 LLM 配置</p>
           {/* default option */}
           <button
             type="button"
@@ -331,7 +333,7 @@ function LLMProfileRow({
           >
             <span className="text-sm">默认{activeDefault ? `（${activeDefault.name}）` : ""}</span>
             {activeDefault && (
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-muted-foreground text-xs">
                 {activeDefault.format} · {activeDefault.model}
               </span>
             )}
@@ -350,7 +352,7 @@ function LLMProfileRow({
               )}
             >
               <span className="text-sm">{p.name}</span>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-muted-foreground text-xs">
                 {p.format} · {p.model}
               </span>
             </button>
@@ -416,7 +418,7 @@ function TaskRow({ taskId, onChange }: { taskId: number | null; onChange: (taskI
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72 p-1">
-          <p className="text-muted-foreground px-2 py-1 text-[11px] font-medium">
+          <p className="text-muted-foreground px-2 py-1 text-xs font-medium">
             关联任务（会话项目将自动对齐到任务所属项目）
           </p>
           <button
@@ -449,14 +451,14 @@ function TaskRow({ taskId, onChange }: { taskId: number | null; onChange: (taskI
                   )}
                 >
                   <span className="truncate text-sm">{t.name || t.description || `任务 #${t.id}`}</span>
-                  <span className="text-muted-foreground truncate text-[11px]">
+                  <span className="text-muted-foreground truncate text-xs">
                     #{t.id} · {statusLabel(t)}
                     {projName ? ` · ${projName}` : ""}
                   </span>
                 </button>
               );
             })}
-            {tasks.length === 0 && <p className="text-muted-foreground px-2 py-1.5 text-[11px]">还没有任务</p>}
+            {tasks.length === 0 && <p className="text-muted-foreground px-2 py-1.5 text-xs">还没有任务</p>}
           </div>
         </PopoverContent>
       </Popover>
@@ -550,7 +552,7 @@ function DraftChat({
                 <Bot className="size-3.5" />
                 {a.name}
                 {!a.builtin && (
-                  <Badge variant="outline" className="px-1 py-0 text-[9px]">
+                  <Badge variant="outline" className="px-1 py-0 text-xs">
                     自定义
                   </Badge>
                 )}
@@ -930,7 +932,7 @@ function ChatView({
         <span className="min-w-0 max-w-48 truncate font-medium text-sm">{agent?.name ?? conv.agent_key}</span>
         <span className="hidden shrink-0 font-mono text-muted-foreground text-xs sm:inline">{conv.agent_key}</span>
         {agent && !agent.builtin && (
-          <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
+          <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-xs">
             自定义
           </Badge>
         )}
@@ -970,7 +972,7 @@ function ChatView({
           ) : (
             <>
               {hasMore && (
-                <div className="pb-2 text-center text-[11px] text-muted-foreground/70">向上滚动加载更早的消息…</div>
+                <div className="pb-2 text-center text-muted-foreground/70 text-xs">向上滚动加载更早的消息…</div>
               )}
               <Transcript
                 activity={messages}
@@ -1111,7 +1113,7 @@ const ConversationItem = React.memo(function ConversationItem({
               </Badge>
             ) : null}
           </div>
-          <div className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+          <div className="flex min-w-0 items-center gap-1 text-muted-foreground text-xs">
             {showAgent && (
               <>
                 <Bot className="size-3 shrink-0" />
@@ -1170,7 +1172,9 @@ const ConversationItem = React.memo(function ConversationItem({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={() => onDelete(conv.id)}>删除</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={() => onDelete(conv.id)}>
+              删除
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1198,7 +1202,7 @@ function AgentGroupHeader({
       aria-expanded={!collapsed}
       title={collapsed ? `展开「${group.name}」` : `收起「${group.name}」`}
       className={cn(
-        "sticky top-0 z-10 flex min-w-0 items-center gap-1.5 rounded-md bg-card px-1.5 py-1 text-left font-medium text-[11px] transition-colors hover:bg-accent/50",
+        "sticky top-0 z-10 flex min-w-0 items-center gap-1.5 rounded-md bg-card px-1.5 py-1 text-left font-medium text-xs transition-colors hover:bg-accent/50",
         collapsed && hasActive ? "text-foreground" : "text-muted-foreground",
       )}
     >

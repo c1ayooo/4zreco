@@ -29,9 +29,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
@@ -49,29 +51,29 @@ function AgentGridCard({ agent, onOpen, onDeleted }: { agent: Agent; onOpen: () 
     }
   }
   return (
-    <div className="group relative flex flex-col gap-2 rounded-lg border p-4 transition-colors hover:border-primary/50">
+    <div className="group relative flex flex-col gap-2 rounded-lg bg-muted/40 p-4 transition-colors hover:bg-muted/60">
       <button type="button" onClick={onOpen} className="flex flex-col gap-2 text-left">
         <div className="flex flex-wrap items-center gap-2">
           <Bot className="size-4 text-muted-foreground" />
           <span className="font-medium text-sm">{agent.name}</span>
           <span className="font-mono text-muted-foreground text-xs">{agent.key}</span>
           {agent.builtin ? (
-            <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+            <Badge variant="secondary" className="px-1.5 py-0 text-xs">
               内置
             </Badge>
           ) : (
-            <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+            <Badge variant="outline" className="px-1.5 py-0 text-xs">
               自定义
             </Badge>
           )}
           {!agent.enabled && (
-            <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-destructive">
+            <Badge variant="outline" className="px-1.5 py-0 text-destructive text-xs">
               已停用
             </Badge>
           )}
         </div>
         <p className="line-clamp-2 min-h-8 text-muted-foreground text-xs">{agent.description || "（无描述）"}</p>
-        <div className="flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+        <div className="flex flex-wrap gap-1.5 text-muted-foreground text-xs">
           <span className="rounded border px-1.5 py-0.5">MCP {agent.mcp_count ?? 0}</span>
           <span className="rounded border px-1.5 py-0.5">Skill {agent.skill_count ?? 0}</span>
           <span className="rounded border px-1.5 py-0.5">工具 {agent.tool_count ?? 0}</span>
@@ -83,7 +85,8 @@ function AgentGridCard({ agent, onOpen, onDeleted }: { agent: Agent; onOpen: () 
             <Button
               variant="ghost"
               size="icon-sm"
-              className="absolute top-2 right-2 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+              className="absolute top-2 right-2 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+              aria-label={`删除 Agent「${agent.name}」`}
             >
               <Trash2Icon className="size-3.5" />
             </Button>
@@ -177,6 +180,9 @@ function CreateAgentDialog({ onCreated }: { onCreated: (key: string) => void }) 
           </div>
         </div>
         <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            取消
+          </Button>
           <Button onClick={create} disabled={!canCreate}>
             创建
           </Button>
@@ -188,13 +194,15 @@ function CreateAgentDialog({ onCreated }: { onCreated: (key: string) => void }) 
 
 export default function AgentsPage() {
   const [agents, setAgents] = React.useState<Agent[]>([]);
+  const [loading, setLoading] = React.useState(true);
   const [editKey, setEditKey] = React.useState<string | null>(null);
 
   const reload = React.useCallback(() => {
     api
       .agents()
       .then(setAgents)
-      .catch(() => setAgents([]));
+      .catch(() => setAgents([]))
+      .finally(() => setLoading(false));
   }, []);
   React.useEffect(() => {
     reload();
@@ -222,8 +230,22 @@ export default function AgentsPage() {
           <CardDescription>共 {agents.length} 个</CardDescription>
         </CardHeader>
         <CardContent>
-          {agents.length === 0 ? (
-            <p className="py-6 text-center text-muted-foreground text-sm">（暂无 Agent）</p>
+          {loading ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Skeleton className="h-28 w-full rounded-lg" />
+              <Skeleton className="h-28 w-full rounded-lg" />
+              <Skeleton className="h-28 w-full rounded-lg" />
+            </div>
+          ) : agents.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Bot />
+                </EmptyMedia>
+                <EmptyTitle>暂无 Agent</EmptyTitle>
+                <EmptyDescription>点右上角「新建 Agent」创建自定义助手</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {agents.map((a) => (
@@ -246,7 +268,7 @@ export default function AgentsPage() {
                   {editing.name}
                   <span className="font-mono text-muted-foreground text-xs">{editing.key}</span>
                   {!editing.builtin && (
-                    <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                    <Badge variant="outline" className="px-1.5 py-0 text-xs">
                       自定义
                     </Badge>
                   )}

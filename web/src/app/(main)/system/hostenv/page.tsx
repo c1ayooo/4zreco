@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +26,14 @@ import { api } from "@/lib/api";
 import type { HostenvStatus, HostTool, InstallJob, ProxyCheckResult } from "@/lib/types";
 
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
+
+const JOB_STATE_LABEL: Record<string, string> = {
+  queued: "排队中",
+  running: "安装中",
+  done: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
 
 const KIND_LABEL: Record<HostTool["kind"], string> = {
   apt: "系统源",
@@ -277,7 +286,10 @@ export default function HostEnvPage() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4 p-4 lg:p-6">
+    <div className="flex flex-col gap-4">
+      <div>
+        <h1 className="font-semibold text-2xl tracking-tight">宿主环境</h1>
+      </div>
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <div>
@@ -315,8 +327,8 @@ export default function HostEnvPage() {
           ) : (
             <>
               {/* 装机代理：只作用于安装动作,与目标流量/搜索/LLM 代理无关 */}
-              <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3">
-                <div className="flex items-center justify-between gap-2">
+              <Alert>
+                <AlertTitle className="flex items-center justify-between gap-2">
                   <Label htmlFor="install-proxy" className="text-sm">
                     装机代理
                   </Label>
@@ -331,78 +343,80 @@ export default function HostEnvPage() {
                           : "不可用"}
                       </Badge>
                     )}
-                    <span className="text-muted-foreground text-xs">
+                    <span className="font-normal text-muted-foreground text-xs">
                       {installerReady ? "装东西时走它（apt / GitHub 下载）" : "宿主助手未运行，暂不可用"}
                     </span>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="install-proxy"
-                    autoComplete="off"
-                    className="font-mono text-xs"
-                    placeholder="http://10.0.0.14:7897 或 socks5://host:1080（留空=直连）"
-                    value={proxyInput}
-                    disabled={!loaded || savingProxy}
-                    onChange={(e) => {
-                      setProxyInput(e.target.value);
-                      setProxyCheck(null);
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={testProxy}
-                    disabled={!loaded || testingProxy}
-                  >
-                    {testingProxy ? <Loader2Icon className="animate-spin" /> : <PlugIcon />}
-                    测试
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={saveProxy}
-                    disabled={!loaded || savingProxy}
-                  >
-                    保存
-                  </Button>
-                </div>
-                {proxyCheck && !proxyCheck.ok && (
-                  <p className="text-destructive text-xs">
-                    {proxyCheck.error || "代理不可用"}
-                    {proxyCheck.hint ? ` — ${proxyCheck.hint}` : ""}
+                </AlertTitle>
+                <AlertDescription className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="install-proxy"
+                      autoComplete="off"
+                      className="font-mono text-xs"
+                      placeholder="http://10.0.0.14:7897 或 socks5://host:1080（留空=直连）"
+                      value={proxyInput}
+                      disabled={!loaded || savingProxy}
+                      onChange={(e) => {
+                        setProxyInput(e.target.value);
+                        setProxyCheck(null);
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={testProxy}
+                      disabled={!loaded || testingProxy}
+                    >
+                      {testingProxy ? <Loader2Icon className="animate-spin" /> : <PlugIcon />}
+                      测试
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={saveProxy}
+                      disabled={!loaded || savingProxy}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                  {proxyCheck && !proxyCheck.ok && (
+                    <p className="text-destructive text-xs">
+                      {proxyCheck.error || "代理不可用"}
+                      {proxyCheck.hint ? ` — ${proxyCheck.hint}` : ""}
+                    </p>
+                  )}
+                  {proxyCheck?.ok && proxyCheck.exit_ip && (
+                    <p className="text-xs">
+                      出口 IP: <span className="font-mono">{proxyCheck.exit_ip}</span>
+                    </p>
+                  )}
+                  <p className="text-xs">
+                    国内环境装 nuclei 这类走 GitHub Release 的工具通常需要它；与「全局代理」（Agent
+                    目标流量）互不影响。代理随时可改，改完点「测试」确认通路。
                   </p>
-                )}
-                {proxyCheck?.ok && proxyCheck.exit_ip && (
-                  <p className="text-muted-foreground text-xs">
-                    出口 IP: <span className="font-mono">{proxyCheck.exit_ip}</span>
-                  </p>
-                )}
-                <p className="text-muted-foreground text-xs">
-                  国内环境装 nuclei 这类走 GitHub Release 的工具通常需要它；与「全局代理」（Agent
-                  目标流量）互不影响。代理随时可改，改完点「测试」确认通路——代理会失效， 装工具失败时先来这里看。
-                </p>
-              </div>
+                </AlertDescription>
+              </Alert>
 
               {!installerReady && inv?.installer.reason && (
-                <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
-                  {inv.installer.reason}
-                  {inv.deploy_mode === "docker" && (
-                    <span className="text-muted-foreground">
-                      {" "}
-                      容器镜像里的工具是构建时固化的，需要额外工具请基于官方镜像自建。
-                    </span>
-                  )}
-                </div>
+                <Alert className="border-warning/40 bg-warning/10 text-warning">
+                  <AlertDescription>
+                    {inv.installer.reason}
+                    {inv.deploy_mode === "docker" &&
+                      " 容器镜像里的工具是构建时固化的，需要额外工具请基于官方镜像自建。"}
+                  </AlertDescription>
+                </Alert>
               )}
 
               {installerReady && inv?.installer.upgrade_required && (
-                <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
-                  助手版本较旧，不具备自我换装能力，因此无法随主程序自动升级。 在服务器上重跑一次{" "}
-                  <code className="font-mono">install.sh</code> 完成引导后， 之后每次发版助手都会自动跟随。
-                </div>
+                <Alert className="border-warning/40 bg-warning/10 text-warning">
+                  <AlertDescription className="text-warning">
+                    助手版本较旧，无法随主程序自动升级。在服务器上重跑一次 <code className="font-mono">install.sh</code>{" "}
+                    完成引导后，之后每次发版助手都会自动跟随。
+                  </AlertDescription>
+                </Alert>
               )}
 
               <p className="text-muted-foreground text-sm">
@@ -414,17 +428,17 @@ export default function HostEnvPage() {
                 )}
               </p>
 
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-4">
                 {grouped.map((g) => {
                   const isCollapsed = collapsed.has(g.category);
                   const okCount = g.tools.filter((t) => t.available).length;
                   return (
-                    <div key={g.category} className="rounded-lg border">
-                      <div className="flex w-full items-center gap-2 px-3 py-2">
+                    <div key={g.category} className="flex flex-col gap-2">
+                      <div className="flex w-full items-center gap-2">
                         <button
                           type="button"
                           onClick={() => toggleCat(g.category)}
-                          className="flex flex-1 items-center gap-2 text-left hover:bg-muted/50"
+                          className="flex flex-1 items-center gap-2 text-left"
                         >
                           <ChevronRightIcon
                             className={
@@ -453,61 +467,63 @@ export default function HostEnvPage() {
                         )}
                       </div>
                       {!isCollapsed && (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="w-32">工具</TableHead>
-                              <TableHead>用途</TableHead>
-                              <TableHead className="w-24">状态</TableHead>
-                              <TableHead>安装方式 / 提示</TableHead>
-                              <TableHead className="w-28 text-right">操作</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {g.tools.map((t) => (
-                              <TableRow key={t.id}>
-                                <TableCell className="font-mono text-sm">{t.bin}</TableCell>
-                                <TableCell className="text-muted-foreground text-sm">{t.purpose}</TableCell>
-                                <TableCell>
-                                  {t.available ? <Badge>可用</Badge> : <Badge variant="outline">缺失</Badge>}
-                                </TableCell>
-                                <TableCell className="text-muted-foreground text-xs">
-                                  {t.available ? (
-                                    "—"
-                                  ) : (
-                                    // break-all：缺失项的提示里可能带长 URL（如 msfconsole 的官方文档），
-                                    // 不换行会把表格撑到横向溢出，需要左右拖动才看得到第一列。
-                                    <span className="break-all">
-                                      <span className="mr-1 text-foreground/70">{KIND_LABEL[t.kind]}</span>
-                                      {t.install}
-                                    </span>
-                                  )}
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  {!t.available && t.installable && installerReady && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      disabled={installing}
-                                      onClick={() => install(t)}
-                                    >
-                                      {toolJobState(t.id) && !TERMINAL_STATES.has(toolJobState(t.id)!) ? (
-                                        <Loader2Icon className="animate-spin" />
-                                      ) : (
-                                        <DownloadIcon />
-                                      )}
-                                      {toolJobState(t.id) === "queued"
-                                        ? "排队中"
-                                        : toolJobState(t.id) === "running"
-                                          ? "安装中"
-                                          : "安装"}
-                                    </Button>
-                                  )}
-                                </TableCell>
+                        <div className="rounded-md border">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="w-32">工具</TableHead>
+                                <TableHead>用途</TableHead>
+                                <TableHead className="w-24">状态</TableHead>
+                                <TableHead>安装方式 / 提示</TableHead>
+                                <TableHead className="w-28 text-right">操作</TableHead>
                               </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                            </TableHeader>
+                            <TableBody>
+                              {g.tools.map((t) => (
+                                <TableRow key={t.id}>
+                                  <TableCell className="font-mono text-sm">{t.bin}</TableCell>
+                                  <TableCell className="text-muted-foreground text-sm">{t.purpose}</TableCell>
+                                  <TableCell>
+                                    {t.available ? <Badge>可用</Badge> : <Badge variant="outline">缺失</Badge>}
+                                  </TableCell>
+                                  <TableCell className="text-muted-foreground text-xs">
+                                    {t.available ? (
+                                      "—"
+                                    ) : (
+                                      // break-all：缺失项的提示里可能带长 URL（如 msfconsole 的官方文档），
+                                      // 不换行会把表格撑到横向溢出，需要左右拖动才看得到第一列。
+                                      <span className="break-all">
+                                        <span className="mr-1 text-foreground/70">{KIND_LABEL[t.kind]}</span>
+                                        {t.install}
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    {!t.available && t.installable && installerReady && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={installing}
+                                        onClick={() => install(t)}
+                                      >
+                                        {toolJobState(t.id) && !TERMINAL_STATES.has(toolJobState(t.id)!) ? (
+                                          <Loader2Icon className="animate-spin" />
+                                        ) : (
+                                          <DownloadIcon />
+                                        )}
+                                        {toolJobState(t.id) === "queued"
+                                          ? "排队中"
+                                          : toolJobState(t.id) === "running"
+                                            ? "安装中"
+                                            : "安装"}
+                                      </Button>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )}
                     </div>
                   );
@@ -534,7 +550,6 @@ export default function HostEnvPage() {
                       key={j.tool_id}
                       type="button"
                       onClick={() => setSelectedJobTool(j.tool_id)}
-                      className="focus:outline-none"
                       title={`${j.tool_name} · ${j.state}`}
                     >
                       <Badge
@@ -587,7 +602,7 @@ export default function HostEnvPage() {
                       : "secondary"
                 }
               >
-                {selectedJob.state}
+                {JOB_STATE_LABEL[selectedJob.state] ?? selectedJob.state}
               </Badge>
               {selectedJob.error && <span className="text-destructive">{selectedJob.error}</span>}
             </CardDescription>

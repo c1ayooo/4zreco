@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { ProxyPoolEntry, ProxyPoolRunning } from "@/lib/types";
@@ -172,10 +174,10 @@ export default function ProxyPoolPage() {
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h1 className="text-lg font-semibold">代理池</h1>
+          <h1 className="font-semibold text-2xl tracking-tight">代理池</h1>
           <Badge variant={entries.length > 0 ? "default" : "secondary"}>
             {entries.length > 0 ? `${entries.length} 个上游` : "未启用(直连/全局代理)"}
           </Badge>
@@ -242,9 +244,11 @@ export default function ProxyPoolPage() {
       </div>
 
       {!capturing && (
-        <p className="text-sm text-warning">
-          提示:流量捕获未开启时代理池不生效(worker 流量需经捕获代理 :8788 才走出口轮换)。
-        </p>
+        <Alert className="border-warning/40 bg-warning/10 text-warning">
+          <AlertDescription className="text-warning">
+            流量捕获未开启时代理池不生效（worker 流量需经捕获代理 :8788 才走出口轮换）
+          </AlertDescription>
+        </Alert>
       )}
 
       <Card>
@@ -302,7 +306,7 @@ export default function ProxyPoolPage() {
               />
             </div>
             <Button variant="outline" size="sm" onClick={() => runCheck()} disabled={checking}>
-              <FlaskConicalIcon className={"mr-1 size-4" + (checking ? " animate-pulse" : "")} />
+              <FlaskConicalIcon className={"mr-1 size-4" + (checking ? " animate-spin" : "")} />
               验证全部
             </Button>
             {deadURLs.size > 0 && (
@@ -319,22 +323,22 @@ export default function ProxyPoolPage() {
             </p>
           )}
           {checkRows.length > 0 && (
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
-                    <th className="py-2 pr-4 font-medium">出口</th>
-                    <th className="py-2 pr-4 font-medium">结果</th>
-                    <th className="py-2 pr-4 font-medium">耗时</th>
-                    <th className="py-2 pr-4 font-medium">出口 IP</th>
-                    <th className="py-2 pr-4 font-medium">错误</th>
-                  </tr>
-                </thead>
-                <tbody>
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>出口</TableHead>
+                    <TableHead>结果</TableHead>
+                    <TableHead className="hidden sm:table-cell">耗时</TableHead>
+                    <TableHead className="hidden md:table-cell">出口 IP</TableHead>
+                    <TableHead className="hidden lg:table-cell">错误</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {checkRows.map((r) => (
-                    <tr key={r.url} className="border-b last:border-0">
-                      <td className="py-2 pr-4 font-mono text-xs">{r.url}</td>
-                      <td className="py-2 pr-4">
+                    <TableRow key={r.url}>
+                      <TableCell className="font-mono text-xs">{r.url}</TableCell>
+                      <TableCell>
                         {r.ok ? (
                           <span className="inline-flex items-center gap-1 text-success">
                             <CheckCircle2Icon className="size-4" /> 可用
@@ -344,14 +348,14 @@ export default function ProxyPoolPage() {
                             <XCircleIcon className="size-4" /> 不可用
                           </span>
                         )}
-                      </td>
-                      <td className="py-2 pr-4 tabular-nums">{r.latency_ms} ms</td>
-                      <td className="py-2 pr-4 font-mono text-xs">{r.exit_ip ?? "—"}</td>
-                      <td className="py-2 pr-4 text-destructive text-xs">{r.error ?? "—"}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell className="hidden tabular-nums sm:table-cell">{r.latency_ms} ms</TableCell>
+                      <TableCell className="hidden font-mono text-xs md:table-cell">{r.exit_ip ?? "—"}</TableCell>
+                      <TableCell className="hidden text-destructive text-xs lg:table-cell">{r.error ?? "—"}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
         </CardContent>
@@ -402,7 +406,11 @@ export default function ProxyPoolPage() {
                     onChange={(ev) => update(i, { weight: Math.max(1, Number(ev.target.value) || 1) })}
                   />
                 </div>
-                <Switch checked={e.enabled} onCheckedChange={(v) => update(i, { enabled: v })} />
+                <Switch
+                  checked={e.enabled}
+                  aria-label={`启用 ${e.name || e.url || `条目 ${i + 1}`}`}
+                  onCheckedChange={(v) => update(i, { enabled: v })}
+                />
                 {dead && (
                   <Badge variant="destructive" title={live?.last_fail}>
                     <AlertTriangleIcon className="mr-1 size-3" />
@@ -415,7 +423,12 @@ export default function ProxyPoolPage() {
                     可用
                   </Badge>
                 )}
-                <Button variant="ghost" size="icon" onClick={() => setEntries((p) => p.filter((_, j) => j !== i))}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`删除 ${e.name || e.url || `条目 ${i + 1}`}`}
+                  onClick={() => setEntries((p) => p.filter((_, j) => j !== i))}
+                >
                   <Trash2Icon className="size-4" />
                 </Button>
               </div>

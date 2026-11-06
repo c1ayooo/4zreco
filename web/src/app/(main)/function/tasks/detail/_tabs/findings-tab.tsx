@@ -13,6 +13,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import { statusMeta } from "@/lib/status";
@@ -58,6 +59,8 @@ function Row({
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-controls={`finding-row-${f.id}-detail`}
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
         >
           <ChevronRightIcon
@@ -93,7 +96,7 @@ function Row({
         )}
         {f.finding_id && !f.inherited ? (
           <Select value={f.status} onValueChange={(v) => onStatus(f, v as FindingStatus)}>
-            <SelectTrigger size="sm" className="h-7 w-28 shrink-0 border-none px-1 shadow-none focus-visible:ring-0">
+            <SelectTrigger size="sm" className="h-7 w-28 shrink-0 border-none px-1 shadow-none">
               <StatusBadge domain="finding" value={f.status} dot />
             </SelectTrigger>
             <SelectContent position="popper" align="end">
@@ -128,7 +131,7 @@ function Row({
         )}
       </div>
       {open && (
-        <div className="bg-muted/30 px-4 pb-4 pl-11">
+        <div id={`finding-row-${f.id}-detail`} className="bg-muted/30 px-4 pb-4 pl-11">
           {f.finding_id ? (
             <>
               {/* 报文查看器直接放进内联展开（用户反馈：以前要跳到发现详情页才能看，
@@ -164,6 +167,7 @@ function Row({
 
 export function FindingsTab({ taskId }: { taskId: string }) {
   const [findings, setFindings] = React.useState<Finding[]>([]);
+  const [loaded, setLoaded] = React.useState(false);
   const [sortPreference, setSortPreference] = useStoredSortPreference(
     FINDING_SORT_PREFERENCE_KEY,
     FINDING_SORT_FIELDS,
@@ -177,7 +181,10 @@ export function FindingsTab({ taskId }: { taskId: string }) {
       api
         .findings(taskId)
         .then((fs) => {
-          if (active) setFindings(fs);
+          if (active) {
+            setFindings(fs);
+            setLoaded(true);
+          }
         })
         .catch(() => {
           // Keep the last successful snapshot during transient refresh failures.
@@ -264,9 +271,17 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             )}
           </button>
         </div>
-        {ownItems.map((f) => (
-          <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />
-        ))}
+        {!loaded ? (
+          <div className="flex flex-col">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="border-b px-4 py-3 last:border-b-0">
+                <Skeleton className="h-6 w-full" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          ownItems.map((f) => <Row key={f.id} f={f} contextTaskId={taskId} onStatus={onStatus} />)
+        )}
         {/* 继承来的发现（来自别的任务）折叠成独立分组，默认收起。 */}
         {inheritedGroups.map((group) => {
           const expanded = expandedInherited[group.sourceTaskId] ?? false;
@@ -292,7 +307,7 @@ export function FindingsTab({ taskId }: { taskId: string }) {
             </div>
           );
         })}
-        {ownItems.length === 0 && inheritedGroups.length === 0 && (
+        {loaded && ownItems.length === 0 && inheritedGroups.length === 0 && (
           <p className="px-4 py-8 text-center text-muted-foreground text-sm">本任务及直接关联任务暂无确认发现。</p>
         )}
       </CardContent>

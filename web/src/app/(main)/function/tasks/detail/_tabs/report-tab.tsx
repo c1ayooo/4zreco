@@ -6,26 +6,35 @@ import { CheckIcon, CopyIcon, FileDownIcon, FileTextIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Markdown } from "@/components/markdown";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { copyText } from "@/lib/utils";
 
 export function ReportTab({ taskId }: { taskId: string }) {
   const [report, setReport] = React.useState<string>("");
   const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
   const [copied, setCopied] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt invalidates the report fetch without changing taskId.
   React.useEffect(() => {
     let active = true;
     setLoading(true);
+    setError("");
     api
       .report(taskId)
       .then((text) => {
         if (active) setReport(text);
       })
-      .catch(() => {
-        if (active) setReport("");
+      .catch((e) => {
+        if (!active) return;
+        setReport("");
+        setError((e as Error).message || "加载失败");
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -33,7 +42,7 @@ export function ReportTab({ taskId }: { taskId: string }) {
     return () => {
       active = false;
     };
-  }, [taskId]);
+  }, [taskId, attempt]);
 
   async function copy() {
     if (!report) return;
@@ -50,23 +59,42 @@ export function ReportTab({ taskId }: { taskId: string }) {
   let content: React.ReactNode;
   if (loading) {
     content = (
-      <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed py-16 text-muted-foreground text-sm">
-        <FileTextIcon className="size-8 opacity-40" />
-        加载中…
+      <div className="flex flex-col gap-3 bg-muted/20 p-4">
+        {["w-11/12", "w-full", "w-5/6", "w-10/12", "w-2/3"].map((w) => (
+          <Skeleton key={w} className={`h-4 ${w}`} />
+        ))}
       </div>
+    );
+  } else if (error) {
+    content = (
+      <Alert variant="destructive">
+        <AlertDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>报告加载失败：{error}</span>
+            <Button variant="outline" size="sm" onClick={() => setAttempt((v) => v + 1)}>
+              重试
+            </Button>
+          </div>
+        </AlertDescription>
+      </Alert>
     );
   } else if (report) {
     content = (
-      <div className="max-h-[60vh] overflow-auto rounded-md border bg-muted/20 p-4">
+      <div className="max-h-[60vh] overflow-auto bg-muted/20 p-4">
         <Markdown text={report} />
       </div>
     );
   } else {
     content = (
-      <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed py-16 text-muted-foreground text-sm">
-        <FileTextIcon className="size-8 opacity-40" />
-        暂无报告
-      </div>
+      <Empty className="py-16">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <FileTextIcon />
+          </EmptyMedia>
+          <EmptyTitle>暂无报告</EmptyTitle>
+          <EmptyDescription>任务产生可归档结果后，报告会生成在这里。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 

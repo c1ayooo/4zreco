@@ -230,7 +230,7 @@ function statusIcon(status: SessionStatus) {
     case "blocked": // 出错
       return <CircleXIcon className="size-3.5 text-destructive" />;
     case "exhausted": // 步数耗尽(撞 max_turns)
-      return <ZapOffIcon className="size-3.5 text-chart-4500" />;
+      return <ZapOffIcon className="size-3.5 text-destructive" />;
     case "deleted": // 用户假删除
       return <CircleSlashIcon className="size-3.5 text-muted-foreground" />;
   }
@@ -438,7 +438,7 @@ function SessionItem({
       >
         {icon ?? <span className="size-3.5 shrink-0" />}
         {s.intent_id && (
-          <span className="shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
+          <span className="shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-xs text-muted-foreground tabular-nums">
             #{s.intent_id}
           </span>
         )}
@@ -459,12 +459,12 @@ function SessionItem({
         )}
         {hasPending && <ShieldAlertIcon className="size-3.5 shrink-0 text-warning" />}
         {!active && unread ? (
-          <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-info/15 px-1 font-medium text-[10px] text-info tabular-nums">
+          <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-info/15 px-1 font-medium text-xs text-info tabular-nums">
             {unread > 99 ? "99+" : unread}
           </span>
         ) : null}
         {s.live && (
-          <span className="inline-flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 font-medium text-[10px] text-info">
+          <span className="inline-flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 font-medium text-xs text-info">
             <span className="size-1 animate-pulse rounded-full bg-info" />
             实时
           </span>
@@ -1696,7 +1696,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                       · {activeDisplayTitle}
                     </span>
                     {hiddenUnread > 0 && (
-                      <span className="inline-flex min-w-4 shrink-0 items-center justify-center rounded-full bg-info/15 px-1 font-medium text-[10px] text-info tabular-nums lg:hidden">
+                      <span className="inline-flex min-w-4 shrink-0 items-center justify-center rounded-full bg-info/15 px-1 font-medium text-xs text-info tabular-nums lg:hidden">
                         {hiddenUnread > 99 ? "99+" : hiddenUnread}
                       </span>
                     )}
@@ -1705,10 +1705,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
               </button>
               {!MOCK && (
                 <span
-                  className={cn(
-                    "inline-flex items-center gap-1 text-[10px]",
-                    sseLive ? "text-success" : "text-warning",
-                  )}
+                  className={cn("inline-flex items-center gap-1 text-xs", sseLive ? "text-success" : "text-warning")}
                   title={sseLive ? "实时连接正常" : "实时连接中断，正在自动重连（历史仍可见）"}
                 >
                   {sseLive ? (
@@ -1786,7 +1783,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                           disabled={creatingMain}
                           title="新建主 Agent 会话（清空上下文，任务状态保留）"
                           aria-label="新建主 Agent 会话"
-                          className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent/60 hover:text-foreground disabled:opacity-50"
+                          className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground disabled:opacity-50"
                         >
                           {creatingMain ? (
                             <Loader2Icon className="size-3.5 animate-spin" />
@@ -1853,7 +1850,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                                   [group.sourceTaskId]: !expanded,
                                 }))
                               }
-                              className="flex items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                              className="flex items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                               aria-expanded={expanded}
                             >
                               <ChevronDownIcon
@@ -1920,7 +1917,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                   <Tooltip>
                     <TooltipTrigger asChild>{titleEl}</TooltipTrigger>
                     <TooltipContent side="bottom" align="start" className="max-h-80 max-w-sm overflow-auto p-0">
-                      <pre className="p-2 text-[10px] leading-relaxed">{JSON.stringify(meta.json, null, 2)}</pre>
+                      <pre className="p-2 text-xs leading-relaxed">{JSON.stringify(meta.json, null, 2)}</pre>
                     </TooltipContent>
                   </Tooltip>
                 ) : (
@@ -1955,13 +1952,13 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                 <Badge variant="outline">来源任务 #{active.source_task_id} · 只读历史</Badge>
               )}
               {active.live && (
-                <span className="inline-flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 font-medium text-[10px] text-info">
+                <span className="inline-flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 font-medium text-xs text-info">
                   <span className="size-1 animate-pulse rounded-full bg-info" />
                   实时
                 </span>
               )}
               {activeState?.hasMore && (
-                <span className="text-[10px] text-muted-foreground" title="向上滚动加载更早历史">
+                <span className="text-xs text-muted-foreground" title="向上滚动加载更早历史">
                   ↑ 更早历史
                 </span>
               )}
@@ -2201,7 +2198,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                   <InputGroupAddon align="block-end">
                     <span
                       className={cn(
-                        "px-1 text-[10px] text-muted-foreground tabular-nums",
+                        "px-1 text-xs text-muted-foreground tabular-nums",
                         workerMessageCharCount(workerMessage) > MAX_WORKER_MESSAGE_CHARS && "text-destructive",
                       )}
                     >

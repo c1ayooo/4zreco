@@ -16,12 +16,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import type { VulnIntelStatus } from "@/lib/types";
 
@@ -166,11 +168,11 @@ export default function VulnintelPage() {
   const cfg = status?.config;
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <ShieldAlertIcon className="size-5" />
-          <h1 className="text-lg font-semibold">漏洞情报</h1>
+          <h1 className="font-semibold text-2xl tracking-tight">漏洞情报</h1>
           {status && (
             <Badge variant={status.enabled ? "default" : "secondary"}>{status.enabled ? "同步开启" : "同步关闭"}</Badge>
           )}
@@ -183,11 +185,11 @@ export default function VulnintelPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={probe} disabled={probing}>
-            <PlugZapIcon className={"mr-1 size-4" + (probing ? " animate-pulse" : "")} />
+            <PlugZapIcon className={"mr-1 size-4" + (probing ? " animate-spin" : "")} />
             测试连通性
           </Button>
           {status?.sync_running && (
-            <Button variant="outline" size="sm" className="text-destructive" onClick={cancelSync} disabled={cancelling}>
+            <Button variant="destructive" size="sm" onClick={cancelSync} disabled={cancelling}>
               <SquareIcon className="mr-1 size-4" />
               {cancelling ? "中断中…" : "中断同步"}
             </Button>
@@ -203,7 +205,11 @@ export default function VulnintelPage() {
         </div>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       {status && (
         <>
@@ -215,7 +221,7 @@ export default function VulnintelPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-2xl font-semibold tabular-nums">{status.counts.cves.toLocaleString()}</p>
+                <p className="font-mono text-2xl font-semibold tabular-nums">{status.counts.cves.toLocaleString()}</p>
               </CardContent>
             </Card>
             <Card>
@@ -223,7 +229,7 @@ export default function VulnintelPage() {
                 <CardTitle className="text-sm font-medium text-muted-foreground">KEV 在野利用</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-2xl font-semibold tabular-nums text-destructive">
+                <p className="font-mono text-2xl font-semibold tabular-nums text-destructive">
                   {status.counts.kev.toLocaleString()}
                 </p>
               </CardContent>
@@ -233,7 +239,7 @@ export default function VulnintelPage() {
                 <CardTitle className="text-sm font-medium text-muted-foreground">PoC 仓库</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-2xl font-semibold tabular-nums">{status.counts.pocs.toLocaleString()}</p>
+                <p className="font-mono text-2xl font-semibold tabular-nums">{status.counts.pocs.toLocaleString()}</p>
               </CardContent>
             </Card>
           </div>
@@ -341,30 +347,32 @@ export default function VulnintelPage() {
               <CardTitle className="text-sm font-medium">同步状态</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-muted-foreground">
-                      <th className="py-2 pr-4 font-medium">数据源</th>
-                      <th className="py-2 pr-4 font-medium">最近同步</th>
-                      <th className="py-2 pr-4 font-medium">本轮处理</th>
-                      <th className="py-2 pr-4 font-medium">状态</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>数据源</TableHead>
+                      <TableHead className="hidden sm:table-cell">最近同步</TableHead>
+                      <TableHead className="hidden md:table-cell">本轮处理</TableHead>
+                      <TableHead>状态</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {status.sources.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="py-3 text-muted-foreground">
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-muted-foreground">
                           尚未开始同步（首次启动约 90 秒后开始；全量回填需数轮）
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     )}
                     {status.sources.map((s) => (
-                      <tr key={s.source} className="border-b align-top last:border-0">
-                        <td className="py-2 pr-4">{SOURCE_LABEL[s.source] ?? s.source}</td>
-                        <td className="py-2 pr-4 tabular-nums">{fmtTime(s.last_sync_at)}</td>
-                        <td className="py-2 pr-4 tabular-nums">{s.total_synced.toLocaleString()}</td>
-                        <td className="py-2 pr-4">
+                      <TableRow key={s.source} className="align-top">
+                        <TableCell>{SOURCE_LABEL[s.source] ?? s.source}</TableCell>
+                        <TableCell className="hidden tabular-nums sm:table-cell">{fmtTime(s.last_sync_at)}</TableCell>
+                        <TableCell className="hidden tabular-nums md:table-cell">
+                          {s.total_synced.toLocaleString()}
+                        </TableCell>
+                        <TableCell>
                           {s.last_error ? (
                             <div className="space-y-1">
                               <Badge variant="destructive" className="gap-1">
@@ -377,11 +385,11 @@ export default function VulnintelPage() {
                           ) : (
                             <Badge variant="default">正常</Badge>
                           )}
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             </CardContent>
           </Card>
@@ -421,36 +429,36 @@ export default function VulnintelPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">数据源</th>
-                        <th className="py-2 pr-4 font-medium">结果</th>
-                        <th className="py-2 pr-4 font-medium">耗时</th>
-                        <th className="py-2 pr-4 font-medium">说明</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>数据源</TableHead>
+                        <TableHead>结果</TableHead>
+                        <TableHead className="hidden sm:table-cell">耗时</TableHead>
+                        <TableHead className="hidden lg:table-cell">说明</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {probeRows.map((r) => (
-                        <tr key={r.source} className="border-b align-top last:border-0">
-                          <td className="py-2 pr-4">{SOURCE_LABEL[r.source] ?? r.source}</td>
-                          <td className="py-2 pr-4">
+                        <TableRow key={r.source} className="align-top">
+                          <TableCell>{SOURCE_LABEL[r.source] ?? r.source}</TableCell>
+                          <TableCell>
                             {r.ok ? (
                               <Badge variant="default">通 {r.status}</Badge>
                             ) : (
                               <Badge variant="destructive">{r.status ? `HTTP ${r.status}` : "失败"}</Badge>
                             )}
-                          </td>
-                          <td className="py-2 pr-4 tabular-nums">{r.latency_ms} ms</td>
-                          <td className="py-2 pr-4 text-xs">
+                          </TableCell>
+                          <TableCell className="hidden tabular-nums sm:table-cell">{r.latency_ms} ms</TableCell>
+                          <TableCell className="hidden text-xs lg:table-cell">
                             {r.error && <p className="text-destructive">{r.error}</p>}
                             {r.hint && <p className="text-warning">{r.hint}</p>}
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>

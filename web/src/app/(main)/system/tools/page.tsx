@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { PlayIcon, PlusIcon, RotateCcwIcon, SaveIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import { PlayIcon, PlusIcon, RotateCcwIcon, SaveIcon, SearchIcon, Trash2Icon, WrenchIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -30,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { cloneJson } from "@/lib/json";
 import type { Agent, Tool } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 // Traffic tools are host tools gated by the global 流量捕获 switch: bindable, but
 // only usable when capture is on. Keep in sync with traffic.SeedToolMetas.
@@ -249,21 +251,21 @@ function ToolEditor({
               }
             >
               <div className="flex flex-wrap items-center gap-2">
-                {r.parentKey && <span className="font-mono text-[10px] text-muted-foreground">↳</span>}
+                {r.parentKey && <span className="font-mono text-muted-foreground text-xs">↳</span>}
                 <span className="font-mono text-sm">{r.name}</span>
-                <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                <Badge variant="secondary" className="px-1.5 py-0 text-xs">
                   {r.type || "?"}
                 </Badge>
                 {r.required && (
-                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                  <Badge variant="outline" className="px-1.5 py-0 text-xs">
                     必填
                   </Badge>
                 )}
-                {r.parentKey && <span className="text-[10px] text-muted-foreground">items 子字段</span>}
+                {r.parentKey && <span className="text-muted-foreground text-xs">items 子字段</span>}
               </div>
               <div className="grid gap-2">
                 <div className="grid gap-1">
-                  <Label className="text-[11px] text-muted-foreground">描述</Label>
+                  <Label className="text-muted-foreground text-xs">描述</Label>
                   <Input
                     className="text-xs"
                     value={r.description}
@@ -271,7 +273,7 @@ function ToolEditor({
                   />
                 </div>
                 <div className="grid gap-1">
-                  <Label className="text-[11px] text-muted-foreground">默认值</Label>
+                  <Label className="text-muted-foreground text-xs">默认值</Label>
                   <Input
                     className="text-xs"
                     placeholder={r.scalar ? "（空=无默认）" : "仅标量支持"}
@@ -305,32 +307,32 @@ function ToolGridCard({ tool, onClick }: { tool: Tool; onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col gap-2 rounded-lg border p-4 text-left transition-colors hover:border-primary/50 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex flex-col gap-2 rounded-lg bg-muted/40 p-4 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium font-mono text-sm">{tool.key}</span>
         {tool.system ? (
-          <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+          <Badge variant="secondary" className="px-1.5 py-0 text-xs">
             系统
           </Badge>
         ) : (
-          <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+          <Badge variant="outline" className="px-1.5 py-0 text-xs">
             自定义·{tool.kind}
           </Badge>
         )}
         {tool.deferred && (
-          <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+          <Badge variant="outline" className="px-1.5 py-0 text-xs">
             deferred
           </Badge>
         )}
         {!tool.enabled && (
-          <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-destructive">
+          <Badge variant="outline" className="px-1.5 py-0 text-destructive text-xs">
             已停用
           </Badge>
         )}
         <Badge
           variant="secondary"
-          className="ml-auto px-1.5 py-0 text-[10px] tabular-nums"
+          className="ml-auto px-1.5 py-0 text-xs tabular-nums"
           title={`累计调用 ${tool.calls ?? 0} 次`}
         >
           调用 {tool.calls ?? 0}
@@ -338,9 +340,9 @@ function ToolGridCard({ tool, onClick }: { tool: Tool; onClick: () => void }) {
       </div>
       <p className="line-clamp-1 h-4 text-muted-foreground text-xs">{tool.description || "（无描述）"}</p>
       <div className="mt-auto flex flex-wrap gap-1 pt-1">
-        {tool.agents.length === 0 && <span className="text-[10px] text-muted-foreground">（未绑定 Agent）</span>}
+        {tool.agents.length === 0 && <span className="text-muted-foreground text-xs">（未绑定 Agent）</span>}
         {tool.agents.map((a) => (
-          <Badge key={a} variant="outline" className="px-1.5 py-0 text-[10px]">
+          <Badge key={a} variant="outline" className="px-1.5 py-0 text-xs">
             {a}
           </Badge>
         ))}
@@ -429,9 +431,15 @@ export default function ToolsPage() {
             </CardHeader>
             <CardContent>
               {systemTools.length === 0 ? (
-                <p className="py-6 text-center text-muted-foreground text-sm">
-                  {query.trim() ? "没有匹配的系统工具" : "（暂无系统工具，等待后端 seed）"}
-                </p>
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">{query.trim() ? <SearchIcon /> : <WrenchIcon />}</EmptyMedia>
+                    <EmptyTitle>{query.trim() ? "没有匹配的系统工具" : "暂无系统工具"}</EmptyTitle>
+                    <EmptyDescription>
+                      {query.trim() ? "换个关键词再试" : "等待后端 seed 后出现在这里"}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {systemTools.map((t) => (
@@ -462,9 +470,15 @@ export default function ToolsPage() {
             </CardHeader>
             <CardContent>
               {customTools.length === 0 ? (
-                <p className="py-6 text-center text-muted-foreground text-sm">
-                  {query.trim() ? "没有匹配的自定义工具" : "（暂无自定义工具，点击右上角「新建自定义工具」）"}
-                </p>
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">{query.trim() ? <SearchIcon /> : <WrenchIcon />}</EmptyMedia>
+                    <EmptyTitle>{query.trim() ? "没有匹配的自定义工具" : "暂无自定义工具"}</EmptyTitle>
+                    <EmptyDescription>
+                      {query.trim() ? "换个关键词再试" : "点右上角「新建自定义工具」创建"}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {customTools.map((t) => (
@@ -562,12 +576,21 @@ function CustomToolDialog({
   const [testResult, setTestResult] = React.useState<{ output: string; is_error: boolean } | null>(null);
   // 删除二次确认：自定义工具是脚本/命令执行面，删错直接影响依赖它的 Agent。
   const [confirmDel, setConfirmDel] = React.useState(false);
+  // 校验错误就近显示在字段下（toast 只留给请求失败）。
+  const [keyErr, setKeyErr] = React.useState("");
+  const [schemaErr, setSchemaErr] = React.useState("");
+  const [headersErr, setHeadersErr] = React.useState("");
+  const [paramsErr, setParamsErr] = React.useState("");
 
   // (re)load form state when opening.
   React.useEffect(() => {
     if (!edit) return;
     setParamsText("");
     setTestResult(null);
+    setKeyErr("");
+    setSchemaErr("");
+    setHeadersErr("");
+    setParamsErr("");
     if (edit === "new") {
       setKey("");
       setDescription("");
@@ -639,30 +662,32 @@ function CustomToolDialog({
 
   async function save() {
     if (isNew && !/^[a-z][a-z0-9_]*$/.test(key.trim())) {
-      toast.error("key 需小写字母开头，仅含小写字母/数字/下划线");
+      setKeyErr("key 需小写字母开头，仅含小写字母/数字/下划线");
       return;
     }
     let schema: Record<string, unknown> = {};
     if (schemaText.trim()) {
       try {
         schema = JSON.parse(schemaText);
+        setSchemaErr("");
       } catch {
-        toast.error("参数 JSON Schema 格式错误");
+        setSchemaErr("参数 JSON Schema 格式错误");
         return;
       }
     }
     if (kind === "http" && ex.headers.trim()) {
       try {
         JSON.parse(ex.headers);
+        setHeadersErr("");
       } catch {
-        toast.error("headers JSON 格式错误");
+        setHeadersErr("headers JSON 格式错误");
         return;
       }
     }
     if (kind === "http") {
       const props = (schema as { properties?: Record<string, unknown> }).properties;
       if (!props || Object.keys(props).length === 0) {
-        toast.error("http 工具必须提供参数 JSON Schema（含 properties，不能留空）");
+        setSchemaErr("http 工具必须提供参数 JSON Schema（含 properties，不能留空）");
         return;
       }
     }
@@ -707,16 +732,18 @@ function CustomToolDialog({
     if (paramsText.trim()) {
       try {
         params = JSON.parse(paramsText);
+        setParamsErr("");
       } catch {
-        toast.error("测试参数 JSON 格式错误");
+        setParamsErr("测试参数 JSON 格式错误");
         return;
       }
     }
     if (kind === "http" && ex.headers.trim()) {
       try {
         JSON.parse(ex.headers);
+        setHeadersErr("");
       } catch {
-        toast.error("headers JSON 格式错误");
+        setHeadersErr("headers JSON 格式错误");
         return;
       }
     }
@@ -753,8 +780,12 @@ function CustomToolDialog({
               placeholder="如 nmap_scan"
               value={key}
               disabled={!isNew}
-              onChange={(e) => setKey(e.target.value)}
+              onChange={(e) => {
+                setKey(e.target.value);
+                if (keyErr) setKeyErr("");
+              }}
             />
+            {keyErr && <p className="text-destructive text-xs">{keyErr}</p>}
           </div>
           <div className="grid gap-1.5">
             <Label className="text-xs">描述(发给模型)</Label>
@@ -834,8 +865,12 @@ function CustomToolDialog({
                   rows={2}
                   value={ex.headers}
                   placeholder={'{"Authorization": "Bearer {token}"}'}
-                  onChange={(e) => setEx({ ...ex, headers: e.target.value })}
+                  onChange={(e) => {
+                    setEx({ ...ex, headers: e.target.value });
+                    if (headersErr) setHeadersErr("");
+                  }}
                 />
+                {headersErr && <p className="text-destructive text-xs">{headersErr}</p>}
               </div>
               <div className="grid gap-1.5">
                 <Label className="text-xs">Body（可含 {"{param}"}）</Label>
@@ -891,8 +926,12 @@ function CustomToolDialog({
                 rows={4}
                 value={schemaText}
                 placeholder={'{"type":"object","properties":{"target":{"type":"string"}},"required":["target"]}'}
-                onChange={(e) => setSchemaText(e.target.value)}
+                onChange={(e) => {
+                  setSchemaText(e.target.value);
+                  if (schemaErr) setSchemaErr("");
+                }}
               />
+              {schemaErr && <p className="text-destructive text-xs">{schemaErr}</p>}
             </div>
           )}
 
@@ -928,8 +967,12 @@ function CustomToolDialog({
                 rows={2}
                 value={paramsText}
                 placeholder={'示例参数 JSON，如 {"target":"example.com"}'}
-                onChange={(e) => setParamsText(e.target.value)}
+                onChange={(e) => {
+                  setParamsText(e.target.value);
+                  if (paramsErr) setParamsErr("");
+                }}
               />
+              {paramsErr && <p className="text-destructive text-xs">{paramsErr}</p>}
               <div>
                 <Button size="sm" variant="outline" onClick={runTest} disabled={testing}>
                   <PlayIcon /> {testing ? "运行中…" : "测试运行"}
@@ -937,10 +980,10 @@ function CustomToolDialog({
               </div>
               {testResult && (
                 <pre
-                  className={
-                    "max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 font-mono text-xs" +
-                    (testResult.is_error ? "text-destructive" : "")
-                  }
+                  className={cn(
+                    "max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 font-mono text-xs",
+                    testResult.is_error && "text-destructive",
+                  )}
                 >
                   {testResult.output || "（无输出）"}
                 </pre>
@@ -955,7 +998,7 @@ function CustomToolDialog({
             <SaveIcon /> {isNew ? "创建" : "保存"}
           </Button>
           {!isNew && (
-            <Button size="sm" variant="outline" className="text-destructive" onClick={() => setConfirmDel(true)}>
+            <Button size="sm" variant="destructive" onClick={() => setConfirmDel(true)}>
               <Trash2Icon /> 删除
             </Button>
           )}

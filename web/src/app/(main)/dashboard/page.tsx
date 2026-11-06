@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import type {
   Activity,
@@ -45,9 +46,9 @@ import { cn } from "@/lib/utils";
 // ── chart constants ───────────────────────────────────────────────────────────
 
 const dailyTrendConfig = {
-  input: { label: "输入", color: "hsl(217 91% 60%)" },
-  output: { label: "输出", color: "hsl(263 70% 60%)" },
-  cacheRead: { label: "缓存读", color: "hsl(160 60% 45%)" },
+  input: { label: "输入", color: "var(--chart-2)" },
+  output: { label: "输出", color: "var(--chart-1)" },
+  cacheRead: { label: "缓存读", color: "var(--chart-3)" },
 } satisfies ChartConfig;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ function SectionTitle({
         <Icon className="size-3.5 text-muted-foreground" />
         {children}
       </div>
-      {sub && <span className="text-[10px] text-muted-foreground">{sub}</span>}
+      {sub && <span className="text-muted-foreground text-xs">{sub}</span>}
     </div>
   );
 }
@@ -152,6 +153,11 @@ export default function DashboardPage() {
   const [tools, setTools] = React.useState<Tool[]>([]);
   const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
 
+  // 首屏骨架门（§8：首屏未到时 Skeleton 行块，不显示假 0/假空态；轮询刷新不回退骨架）
+  const [tasksReady, setTasksReady] = React.useState(false);
+  const [fastReady, setFastReady] = React.useState(false);
+  const [slowReady, setSlowReady] = React.useState(false);
+
   // The task list is the most expensive dashboard source. Poll it independently
   // so a large history cannot hold back every other dashboard panel.
   React.useEffect(() => {
@@ -164,6 +170,7 @@ export default function DashboardPage() {
       try {
         const tr = await api.tasks();
         if (!alive) return;
+        setTasksReady(true);
         const nextSignature = JSON.stringify(tr.tasks);
         if (nextSignature !== signature) {
           signature = nextSignature;
@@ -211,6 +218,7 @@ export default function DashboardPage() {
         setActivity(activity.items);
         setTokens(tokens.total ?? null);
         setConvTokens(conversationTokens);
+        setFastReady(true);
       } catch {
         // Preserve stale data and retry on the next interval.
       } finally {
@@ -249,6 +257,7 @@ export default function DashboardPage() {
         setTools(toolList);
         setLLMProfiles(profileList);
         setUsageStats(usage);
+        setSlowReady(true);
       } catch {
         /* transient errors */
       }
@@ -343,6 +352,9 @@ export default function DashboardPage() {
   const [tokenTab, setTokenTab] = React.useState<number | null | "all">("all");
   // day range for the daily bar chart
   const [tokenDays, setTokenDays] = React.useState<7 | 30 | 90 | 180 | 365>(30);
+
+  // Token 卡骨架门：旧版数据源在快轮询（tasks/会话），新版在慢轮询（llm_usage）
+  const tokensReady = tokenVersion === "new" ? slowReady : fastReady;
 
   // profile 名 → id，用于把 llm_usage 的 profile_name 映射到现有 profile 分栏。
   const profileIdByName = React.useMemo(() => {
@@ -510,65 +522,97 @@ export default function DashboardPage() {
         {/* 活跃任务 */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
               <TargetIcon className="size-3" /> 活跃任务
             </div>
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-semibold text-2xl tabular-nums">{tasksByStatus.running ?? 0}</span>
-              <span className="text-muted-foreground text-xs">/ {tasks.length}</span>
-            </div>
+            {tasksReady ? (
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono font-semibold text-2xl tabular-nums">{tasksByStatus.running ?? 0}</span>
+                <span className="text-muted-foreground text-xs">/ {tasks.length}</span>
+              </div>
+            ) : (
+              <Skeleton className="h-8 w-16" />
+            )}
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px]">
-            {(tasksByStatus.running ?? 0) > 0 && <span className="text-info">探索 {tasksByStatus.running}</span>}
-            {(tasksByStatus.paused ?? 0) > 0 && <span className="text-warning">暂停 {tasksByStatus.paused}</span>}
-            {(tasksByStatus.done ?? 0) > 0 && <span className="text-success">完成 {tasksByStatus.done}</span>}
-            {tasks.length === 0 && <span className="text-muted-foreground">暂无任务</span>}
+          <CardContent className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-xs">
+            {tasksReady ? (
+              <>
+                {(tasksByStatus.running ?? 0) > 0 && <span className="text-info">探索 {tasksByStatus.running}</span>}
+                {(tasksByStatus.paused ?? 0) > 0 && <span className="text-warning">暂停 {tasksByStatus.paused}</span>}
+                {(tasksByStatus.done ?? 0) > 0 && <span className="text-success">完成 {tasksByStatus.done}</span>}
+                {tasks.length === 0 && <span className="text-muted-foreground">暂无任务</span>}
+              </>
+            ) : (
+              <Skeleton className="h-4 w-full" />
+            )}
           </CardContent>
         </Card>
 
         {/* 确认发现 */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
               <BugIcon className="size-3" /> 确认发现
             </div>
-            <div className="font-semibold text-2xl tabular-nums">{findingStatsData?.total ?? 0}</div>
+            {fastReady ? (
+              <div className="font-mono font-semibold text-2xl tabular-nums">{findingStatsData?.total ?? 0}</div>
+            ) : (
+              <Skeleton className="h-8 w-16" />
+            )}
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-2.5 text-[10px]">
-            <span className="text-destructive">严重 {findingsBySev.critical}</span>
-            <span className="text-destructive">高危 {findingsBySev.high}</span>
-            <span className="text-warning">中危 {findingsBySev.medium}</span>
-            <span className="text-muted-foreground">低危 {findingsBySev.low}</span>
+          <CardContent className="flex flex-wrap gap-2.5 text-xs">
+            {fastReady ? (
+              <>
+                <span className="text-destructive">严重 {findingsBySev.critical}</span>
+                <span className="text-destructive">高危 {findingsBySev.high}</span>
+                <span className="text-warning">中危 {findingsBySev.medium}</span>
+                <span className="text-muted-foreground">低危 {findingsBySev.low}</span>
+              </>
+            ) : (
+              <Skeleton className="h-4 w-full" />
+            )}
           </CardContent>
         </Card>
 
         {/* 资产节点 */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
               <NetworkIcon className="size-3" /> 资产节点
             </div>
-            <div className="font-semibold text-2xl tabular-nums">{totalAssets}</div>
+            {slowReady ? (
+              <div className="font-mono font-semibold text-2xl tabular-nums">{totalAssets}</div>
+            ) : (
+              <Skeleton className="h-8 w-16" />
+            )}
           </CardHeader>
-          <CardContent className="text-[10px] text-muted-foreground">跨任务共享</CardContent>
+          <CardContent className="text-muted-foreground text-xs">跨任务共享</CardContent>
         </Card>
 
         {/* 流量交互 */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
               <ActivityIcon className="size-3" /> 流量交互
             </div>
-            <div className="font-semibold text-2xl tabular-nums">{traffic.length}</div>
-          </CardHeader>
-          <CardContent className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-            {settings?.traffic_capture ? (
-              <>
-                <LiveDot />
-                <span>录制中</span>
-              </>
+            {slowReady ? (
+              <div className="font-mono font-semibold text-2xl tabular-nums">{traffic.length}</div>
             ) : (
-              <span>捕获未开启</span>
+              <Skeleton className="h-8 w-16" />
+            )}
+          </CardHeader>
+          <CardContent className="flex items-center gap-1.5 text-muted-foreground text-xs">
+            {fastReady ? (
+              settings?.traffic_capture ? (
+                <>
+                  <LiveDot />
+                  <span>录制中</span>
+                </>
+              ) : (
+                <span>捕获未开启</span>
+              )
+            ) : (
+              <Skeleton className="h-4 w-14" />
             )}
           </CardContent>
         </Card>
@@ -576,21 +620,436 @@ export default function DashboardPage() {
         {/* LLM 用量 */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
               <ZapIcon className="size-3" /> Token 用量
             </div>
-            <div className="font-semibold text-2xl tabular-nums">
-              {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
-            </div>
+            {tokensReady ? (
+              <div className="font-mono font-semibold text-2xl tabular-nums">
+                {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
+              </div>
+            ) : (
+              <Skeleton className="h-8 w-16" />
+            )}
           </CardHeader>
-          <CardContent className="text-[10px] text-muted-foreground">
-            入 {fmtTokens(displayedTokens.input)}（含缓存 {fmtTokens(displayedTokens.cacheRead)}）· 出{" "}
-            {fmtTokens(displayedTokens.output)}
+          <CardContent className="text-muted-foreground text-xs">
+            {tokensReady ? (
+              <>
+                入 {fmtTokens(displayedTokens.input)}（含缓存 {fmtTokens(displayedTokens.cacheRead)}）· 出{" "}
+                {fmtTokens(displayedTokens.output)}
+              </>
+            ) : (
+              <Skeleton className="h-4 w-full" />
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* ── Row 2: LLM Token 消耗 ── */}
+      {/* ── Row 2: 活动流 | 发现 ── */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {/* 活动流 */}
+        <Card className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-xs">
+              <ActivityIcon className="size-3.5 text-muted-foreground" />
+              活动流
+            </div>
+            <div className="flex items-center gap-2">
+              {fastReady ? (
+                <span className="text-muted-foreground text-xs">
+                  {activity.filter((a) => a.kind !== "usage").length} 条事件
+                </span>
+              ) : (
+                <Skeleton className="h-4 w-14" />
+              )}
+              <Link
+                href="/function/tasks"
+                className="flex items-center gap-0.5 text-muted-foreground text-xs hover:text-foreground"
+              >
+                查看任务 <ArrowUpRightIcon className="size-3" />
+              </Link>
+            </div>
+          </div>
+
+          {fastReady && (
+            <div className="mb-2.5 flex flex-wrap gap-1.5">
+              {(["tool_use", "tool_result", "text", "thinking", "result"] as const).map((kind) => {
+                const count = activity.filter((a) => a.kind === kind).length;
+                if (count === 0) return null;
+                return (
+                  <span key={kind} className="rounded border bg-muted/20 px-1.5 py-0.5 text-muted-foreground text-xs">
+                    {kind} <strong className="text-foreground/70">{count}</strong>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {!fastReady ? (
+            <div className="flex flex-col gap-2">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="divide-y">
+              {recentActivity.length === 0 ? (
+                <div className="py-4 text-center text-muted-foreground text-xs">暂无活动记录</div>
+              ) : (
+                recentActivity.map((a) => (
+                  <div key={a.seq} className="flex gap-2.5 py-2">
+                    <span
+                      className={cn(
+                        "shrink-0 self-start rounded border px-1.5 py-0.5 font-mono text-xs",
+                        workerBg(a.worker),
+                      )}
+                    >
+                      {a.worker}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-xs">{kindLabel(a)}</div>
+                      <div className="mt-0.5 truncate text-muted-foreground text-xs">{a.summary}</div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <Badge variant="outline" className="px-1.5 py-0 text-muted-foreground text-xs">
+                        {a.kind}
+                      </Badge>
+                      <div className="mt-0.5 text-muted-foreground text-xs tabular-nums">{fmtRel(a.ts)}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </Card>
+
+        {/* 发现 */}
+        <Card className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-xs">
+              <BugIcon className="size-3.5 text-muted-foreground" />
+              发现
+            </div>
+            <Link
+              href="/function/findings"
+              className="flex items-center gap-0.5 text-muted-foreground text-xs hover:text-foreground"
+            >
+              全部 <ArrowUpRightIcon className="size-3" />
+            </Link>
+          </div>
+
+          {!fastReady ? (
+            <div className="flex flex-col gap-2">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="divide-y">
+              {recentFindings.length === 0 ? (
+                <div className="py-4 text-center text-muted-foreground text-xs">暂无发现</div>
+              ) : (
+                recentFindings.map((f) => (
+                  <div key={f.id} className="flex items-start gap-2 py-2">
+                    <StatusBadge domain="severity" value={f.severity} className="mt-0.5 shrink-0 px-1.5 py-0 text-xs" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-semibold text-xs">{f.vulnclass}</span>
+                        {f.task_description && (
+                          <span className="truncate text-muted-foreground text-xs">{f.task_description}</span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 line-clamp-2 text-muted-foreground text-xs leading-snug">{f.summary}</div>
+                    </div>
+                    <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{fmtRel(f.ts)}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* ── Row 3: 任务表格 ── */}
+      <Card className="overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <div className="flex items-center gap-1.5 font-semibold text-xs">
+            <ClockIcon className="size-3.5 text-muted-foreground" />
+            任务
+          </div>
+          <div className="flex items-center gap-2">
+            {tasksReady ? (
+              <span className="text-muted-foreground text-xs">{tasks.length} 个任务</span>
+            ) : (
+              <Skeleton className="h-4 w-14" />
+            )}
+            <Link
+              href="/function/tasks"
+              className="flex items-center gap-0.5 text-muted-foreground text-xs hover:text-foreground"
+            >
+              全部 <ArrowUpRightIcon className="size-3" />
+            </Link>
+          </div>
+        </div>
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="border-b">
+              {["任务", "状态", "引擎", "目标进度", "在途", "最近活动"].map((h) => (
+                <th key={h} className="px-4 py-2 text-left font-semibold text-muted-foreground text-xs first:pl-4">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {!tasksReady ? (
+              [0, 1, 2, 3, 4].map((i) => (
+                <tr key={i} className="border-b last:border-0">
+                  <td className="px-4 py-3" colSpan={6}>
+                    <Skeleton className="h-6 w-2/3" />
+                  </td>
+                </tr>
+              ))
+            ) : sortedTasks.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground text-xs">
+                  暂无任务
+                </td>
+              </tr>
+            ) : (
+              sortedTasks.map((t) => {
+                const goalsPct = t.goals_total ? Math.round(((t.goals_met ?? 0) / t.goals_total) * 100) : null;
+                return (
+                  <tr key={t.id} className="border-b transition-colors last:border-0 hover:bg-muted/30">
+                    <td className="max-w-xs px-4 py-3">
+                      <Link href={`/function/tasks/detail?id=${t.id}`} className="group flex flex-col">
+                        <span className="truncate font-medium group-hover:underline">{t.description}</span>
+                        <span className="mt-0.5 truncate font-mono text-muted-foreground text-xs">{t.id}</span>
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge domain="task" value={t.status} dot className="px-1.5 py-0 text-xs" />
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge domain="engine" value={t.engine_mode ?? "idle"} className="px-1.5 py-0 text-xs" />
+                    </td>
+                    <td className="px-4 py-3">
+                      {goalsPct !== null ? (
+                        <div className="flex items-center gap-2">
+                          <Progress value={goalsPct} className="h-1 w-14" />
+                          <span className="text-muted-foreground tabular-nums">
+                            {t.goals_met ?? 0}/{t.goals_total}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">
+                      {(t.in_flight ?? 0) > 0 ? (
+                        <span className="font-semibold">{t.in_flight}</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground tabular-nums">
+                      {fmtRel(t.last_activity_unix ?? t.created_unix)}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </Card>
+
+      {/* ── Row 4: 资产分布 | 流量状态码 | 系统状态 & 待审批 ── */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        {/* 资产分布 */}
+        <Card className="p-4">
+          <SectionTitle icon={NetworkIcon} sub="按类型">
+            资产分布
+          </SectionTitle>
+
+          {!slowReady ? (
+            <div className="flex flex-col gap-2">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-4 w-full" />
+              ))}
+            </div>
+          ) : assetByType.length === 0 ? (
+            <div className="py-6 text-center text-muted-foreground text-xs">暂无资产数据</div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {assetByType.map(([type, count]) => (
+                <div key={type} className="flex items-center gap-2 text-xs">
+                  <span className="w-8 shrink-0 text-right text-muted-foreground text-xs">
+                    {ASSET_TYPE_LABELS[type] ?? type}
+                  </span>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className={cn("h-full rounded-full", ASSET_COLORS[type] ?? "bg-muted-foreground")}
+                      style={{ width: `${(count / assetMax) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-4 text-right tabular-nums">{count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {slowReady && <div className="mt-3 border-t pt-3 text-muted-foreground text-xs">共 {totalAssets} 节点</div>}
+        </Card>
+
+        {/* 流量状态码 */}
+        <Card className="p-4">
+          <SectionTitle icon={ActivityIcon} sub={slowReady ? `${traffic.length} 次请求` : undefined}>
+            流量状态码
+          </SectionTitle>
+
+          {/* bar chart */}
+          {!slowReady ? (
+            <div className="flex flex-col gap-2.5">
+              <Skeleton className="w-full" style={{ height: 52 }} />
+              <Skeleton className="h-4 w-1/3" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+            </div>
+          ) : trafficByCodes.length === 0 ? (
+            <div className="py-6 text-center text-muted-foreground text-xs">暂无流量数据</div>
+          ) : (
+            <>
+              <div className="mb-3 flex items-end gap-2" style={{ height: 52 }}>
+                {trafficByCodes.map(({ code, n }) => (
+                  <div key={code} className="flex flex-1 flex-col items-center gap-1">
+                    <span className="text-muted-foreground text-xs tabular-nums">{n}</span>
+                    <div
+                      className={cn("min-h-1 w-full rounded-sm", statusBg(code), "opacity-80")}
+                      style={{ height: Math.max(4, (n / trafficMax) * 36) }}
+                    />
+                    <span className={cn("font-mono text-xs", statusColor(code))}>{code}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t pt-2.5">
+                <div className="mb-1.5 text-muted-foreground text-xs">最近请求</div>
+                <div className="flex flex-col gap-1.5">
+                  {recentTraffic.map((e) => (
+                    <div key={e.id} className="flex items-center gap-1.5 text-xs">
+                      <span
+                        className={cn(
+                          "shrink-0 rounded border px-1 py-0 font-mono text-xs",
+                          e.method === "GET"
+                            ? "border-success/30 bg-success/10 text-success"
+                            : "border-info/30 bg-info/10 text-info",
+                        )}
+                      >
+                        {e.method}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                        {e.host}
+                        {e.url.replace(/^https?:\/\/[^/]+/, "").substring(0, 30)}
+                      </span>
+                      <span className={cn("shrink-0 font-mono text-xs", statusColor(e.status))}>{e.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </Card>
+
+        {/* 系统状态 & 待审批 */}
+        <Card className="p-4">
+          <SectionTitle icon={ShieldCheckIcon}>系统状态</SectionTitle>
+
+          {!(fastReady && slowReady) ? (
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-8 w-full rounded-lg" />
+              <Skeleton className="h-8 w-full rounded-lg" />
+              <Skeleton className="h-8 w-full rounded-lg" />
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between rounded-lg bg-muted/20 px-3 py-2">
+                <div className="text-muted-foreground text-xs">LLM 配置</div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-xs",
+                    stats?.llm_configured
+                      ? "border-success/30 bg-success/10 text-success"
+                      : "border-destructive/30 bg-destructive/10 text-destructive",
+                  )}
+                >
+                  {stats?.llm_configured ? "已配置" : "未配置"}
+                </Badge>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg bg-muted/20 px-3 py-2">
+                <div className="text-muted-foreground text-xs">流量捕获</div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-xs",
+                    settings?.traffic_capture
+                      ? "border-success/30 bg-success/10 text-success"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {settings?.traffic_capture ? "开启" : "关闭"}
+                </Badge>
+              </div>
+
+              {activeProfile && (
+                <div className="flex items-center justify-between rounded-lg bg-muted/20 px-3 py-2">
+                  <div className="text-muted-foreground text-xs">激活模型</div>
+                  <span className="font-mono text-xs">{activeProfile.model}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* pending approvals */}
+          {pendingCount > 0 && (
+            <div className="mt-3">
+              <div className="mb-1.5 font-medium text-warning text-xs">待审批 ({pendingCount})</div>
+              <div className="flex flex-col gap-1.5">
+                {pending.slice(0, 3).map((p) => (
+                  <Link
+                    key={p.id}
+                    href="/system/intercept/approvals"
+                    className="flex items-center justify-between rounded-lg bg-warning/5 px-2.5 py-2 hover:bg-warning/10"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium text-xs">{p.tool_name}</div>
+                      <div className="text-muted-foreground text-xs">{p.agent_name}</div>
+                    </div>
+                    <ArrowUpRightIcon className="size-3 shrink-0 text-warning" />
+                  </Link>
+                ))}
+                {pendingCount > 3 && (
+                  <Link
+                    href="/system/intercept/approvals"
+                    className="text-center text-muted-foreground text-xs hover:text-foreground"
+                  >
+                    还有 {pendingCount - 3} 条…
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
+
+          {pendingCount === 0 && fastReady && (
+            <div className="mt-3 rounded-lg bg-muted/10 px-3 py-3 text-center text-muted-foreground text-xs">
+              <ShieldCheckIcon className="mx-auto mb-1 size-4 text-success/50" />
+              无待审批拦截
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* ── Row 5: LLM Token 消耗（成本参考，殿后——§2 信息序定稿） ── */}
       <Card className="p-4">
         {/* Header */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -615,7 +1074,7 @@ export default function DashboardPage() {
                       : "旧版：来自 activity 统计（含历史任务），中断消耗不计、无法精确到模型"
                   }
                   className={cn(
-                    "rounded px-2 py-0.5 font-medium text-[9px] transition-colors",
+                    "rounded px-2 py-0.5 font-medium text-xs transition-colors",
                     tokenVersion === v
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground",
@@ -632,7 +1091,7 @@ export default function DashboardPage() {
               type="button"
               onClick={() => setTokenTab("all")}
               className={cn(
-                "rounded-md px-2.5 py-1 font-medium text-[10px] transition-colors",
+                "rounded-md px-2.5 py-1 font-medium text-xs transition-colors",
                 tokenTab === "all"
                   ? "bg-foreground text-background"
                   : "bg-muted/30 text-muted-foreground hover:text-foreground",
@@ -650,7 +1109,7 @@ export default function DashboardPage() {
                   key={p.id}
                   onClick={() => setTokenTab(resolvedKey)}
                   className={cn(
-                    "flex items-center gap-1 rounded-md px-2.5 py-1 font-medium text-[10px] transition-colors",
+                    "flex items-center gap-1 rounded-md px-2.5 py-1 font-medium text-xs transition-colors",
                     tokenTab === resolvedKey
                       ? "bg-foreground text-background"
                       : "bg-muted/30 text-muted-foreground hover:text-foreground",
@@ -661,7 +1120,7 @@ export default function DashboardPage() {
                   {p.is_default && (
                     <span
                       className={cn(
-                        "rounded px-1 py-0 text-[8px]",
+                        "rounded px-1 py-0 text-xs",
                         tokenTab === resolvedKey ? "bg-background/20 text-background" : "bg-success/20 text-success",
                       )}
                     >
@@ -680,77 +1139,97 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-4">
             {/* Total */}
             <div>
-              <div className="text-[10px] text-muted-foreground">合计 (输入+输出)</div>
-              <div className="mt-0.5 font-bold text-3xl tabular-nums tracking-tight">
-                {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
-              </div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">{displayedTokens.taskCount} 个任务</div>
+              <div className="text-muted-foreground text-xs">合计 (输入+输出)</div>
+              {tokensReady ? (
+                <div className="mt-0.5 font-mono font-semibold text-2xl tabular-nums tracking-tight">
+                  {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
+                </div>
+              ) : (
+                <Skeleton className="mt-1 h-8 w-24" />
+              )}
+              {tokensReady ? (
+                <div className="mt-0.5 text-muted-foreground text-xs">{displayedTokens.taskCount} 个任务</div>
+              ) : (
+                <Skeleton className="mt-1 h-4 w-14" />
+              )}
             </div>
 
             {/* Per-type bars */}
-            <div className="space-y-3">
-              {(() => {
-                // input 已含缓存；拆成不重叠三段：未命中输入 + 缓存命中 + 输出 = 总量。
-                const total = displayedTokens.input + displayedTokens.output;
-                return [
-                  {
-                    label: "输入(未命中)",
-                    value: displayedTokens.input - displayedTokens.cacheRead,
-                    barColor: dailyTrendConfig.input.color!,
-                    text: "text-info",
-                  },
-                  {
-                    label: "缓存命中",
-                    value: displayedTokens.cacheRead,
-                    barColor: dailyTrendConfig.cacheRead.color!,
-                    text: "text-success",
-                  },
-                  {
-                    label: "输出",
-                    value: displayedTokens.output,
-                    barColor: dailyTrendConfig.output.color!,
-                    text: "text-chart-4400",
-                  },
-                ].map(({ label, value, barColor, text }) => {
-                  const pct = total > 0 ? (value / total) * 100 : 0;
-                  return (
-                    <div key={label}>
-                      <div className="mb-1 flex items-center justify-between text-[10px]">
-                        <span className="text-muted-foreground">{label}</span>
-                        <span className={cn("font-mono font-semibold tabular-nums", text)}>{fmtTokens(value)}</span>
+            {!tokensReady ? (
+              <div className="space-y-3">
+                {[0, 1, 2].map((i) => (
+                  <div key={i}>
+                    <Skeleton className="mb-1 h-4 w-24" />
+                    <Skeleton className="h-1.5 w-full rounded-full" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {(() => {
+                  // input 已含缓存；拆成不重叠三段：未命中输入 + 缓存命中 + 输出 = 总量。
+                  const total = displayedTokens.input + displayedTokens.output;
+                  return [
+                    {
+                      label: "输入(未命中)",
+                      value: displayedTokens.input - displayedTokens.cacheRead,
+                      barColor: dailyTrendConfig.input.color!,
+                      text: "text-info",
+                    },
+                    {
+                      label: "缓存命中",
+                      value: displayedTokens.cacheRead,
+                      barColor: dailyTrendConfig.cacheRead.color!,
+                      text: "text-success",
+                    },
+                    {
+                      label: "输出",
+                      value: displayedTokens.output,
+                      barColor: dailyTrendConfig.output.color!,
+                      text: "text-chart-1",
+                    },
+                  ].map(({ label, value, barColor, text }) => {
+                    const pct = total > 0 ? (value / total) * 100 : 0;
+                    return (
+                      <div key={label}>
+                        <div className="mb-1 flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">{label}</span>
+                          <span className={cn("font-mono font-semibold tabular-nums", text)}>{fmtTokens(value)}</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: barColor }} />
+                        </div>
                       </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full transition-[width] duration-500"
-                          style={{ width: `${pct}%`, background: barColor }}
-                        />
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
+                    );
+                  });
+                })()}
+              </div>
+            )}
 
             {/* Cache hit rate */}
-            {(() => {
-              // input 已含缓存 → 命中率 = 缓存命中 / 总输入。
-              const denominator = displayedTokens.input;
-              const hitPct = denominator > 0 ? Math.round((displayedTokens.cacheRead / denominator) * 100) : 0;
-              return (
-                <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-[10px]">
-                  <span className="text-muted-foreground">缓存命中率</span>
-                  <span className={cn("font-semibold tabular-nums", hitPct > 50 ? "text-success" : "text-warning")}>
-                    {hitPct}%
-                  </span>
-                </div>
-              );
-            })()}
+            {tokensReady ? (
+              (() => {
+                // input 已含缓存 → 命中率 = 缓存命中 / 总输入。
+                const denominator = displayedTokens.input;
+                const hitPct = denominator > 0 ? Math.round((displayedTokens.cacheRead / denominator) * 100) : 0;
+                return (
+                  <div className="flex items-center justify-between rounded-lg bg-muted/20 px-3 py-2 text-xs">
+                    <span className="text-muted-foreground">缓存命中率</span>
+                    <span className={cn("font-semibold tabular-nums", hitPct > 50 ? "text-success" : "text-warning")}>
+                      {hitPct}%
+                    </span>
+                  </div>
+                );
+              })()
+            ) : (
+              <Skeleton className="h-8 w-full rounded-lg" />
+            )}
           </div>
 
           {/* Right: daily bar chart */}
           <div className="flex min-h-0 flex-col">
             <div className="mb-2 flex items-center justify-between">
-              <div className="flex gap-3 text-[9px] text-muted-foreground">
+              <div className="flex gap-3 text-muted-foreground text-xs">
                 {(["input", "output", "cacheRead"] as const).map((k) => (
                   <span key={k} className="flex items-center gap-1">
                     <span
@@ -776,7 +1255,7 @@ export default function DashboardPage() {
                     key={days}
                     onClick={() => setTokenDays(days)}
                     className={cn(
-                      "rounded px-2.5 py-0.5 font-medium text-[9px] transition-colors",
+                      "rounded px-2.5 py-0.5 font-medium text-xs transition-colors",
                       tokenDays === days
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground",
@@ -788,9 +1267,11 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {dailyTokenData.length === 0 ? (
+            {!tokensReady ? (
+              <Skeleton className="h-[200px] w-full" />
+            ) : dailyTokenData.length === 0 ? (
               <div
-                className="flex flex-1 items-center justify-center rounded-lg border bg-muted/10 text-muted-foreground text-xs"
+                className="flex flex-1 items-center justify-center rounded-lg bg-muted/10 text-muted-foreground text-xs"
                 style={{ minHeight: 180 }}
               >
                 暂无数据
@@ -840,366 +1321,6 @@ export default function DashboardPage() {
           </div>
         </div>
       </Card>
-
-      {/* ── Row 3: 活动流 | 发现 ── */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {/* 活动流 */}
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 font-semibold text-xs">
-              <ActivityIcon className="size-3.5 text-muted-foreground" />
-              活动流
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground">
-                {activity.filter((a) => a.kind !== "usage").length} 条事件
-              </span>
-              <Link
-                href="/function/tasks"
-                className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-              >
-                查看任务 <ArrowUpRightIcon className="size-3" />
-              </Link>
-            </div>
-          </div>
-
-          <div className="mb-2.5 flex flex-wrap gap-1.5">
-            {(["tool_use", "tool_result", "text", "thinking", "result"] as const).map((kind) => {
-              const count = activity.filter((a) => a.kind === kind).length;
-              if (count === 0) return null;
-              return (
-                <span key={kind} className="rounded border bg-muted/20 px-1.5 py-0.5 text-[9px] text-muted-foreground">
-                  {kind} <strong className="text-foreground/70">{count}</strong>
-                </span>
-              );
-            })}
-          </div>
-
-          <div className="divide-y">
-            {recentActivity.length === 0 ? (
-              <div className="py-4 text-center text-muted-foreground text-xs">暂无活动记录</div>
-            ) : (
-              recentActivity.map((a) => (
-                <div key={a.seq} className="flex gap-2.5 py-2">
-                  <span
-                    className={cn(
-                      "shrink-0 self-start rounded border px-1.5 py-0.5 font-mono text-[9px]",
-                      workerBg(a.worker),
-                    )}
-                  >
-                    {a.worker}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-[11px]">{kindLabel(a)}</div>
-                    <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{a.summary}</div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <Badge variant="outline" className="px-1.5 py-0 text-[9px] text-muted-foreground">
-                      {a.kind}
-                    </Badge>
-                    <div className="mt-0.5 text-[9px] text-muted-foreground tabular-nums">{fmtRel(a.ts)}</div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </Card>
-
-        {/* 发现 */}
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 font-semibold text-xs">
-              <BugIcon className="size-3.5 text-muted-foreground" />
-              发现
-            </div>
-            <Link
-              href="/function/findings"
-              className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-            >
-              全部 <ArrowUpRightIcon className="size-3" />
-            </Link>
-          </div>
-
-          <div className="divide-y">
-            {recentFindings.length === 0 ? (
-              <div className="py-4 text-center text-muted-foreground text-xs">暂无发现</div>
-            ) : (
-              recentFindings.map((f) => (
-                <div key={f.id} className="flex items-start gap-2 py-2">
-                  <StatusBadge
-                    domain="severity"
-                    value={f.severity}
-                    className="mt-0.5 shrink-0 px-1.5 py-0 text-[10px]"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-semibold text-[11px]">{f.vulnclass}</span>
-                      {f.task_description && (
-                        <span className="truncate text-[10px] text-muted-foreground">{f.task_description}</span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 line-clamp-2 text-[10px] text-muted-foreground leading-snug">
-                      {f.summary}
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-[9px] text-muted-foreground tabular-nums">{fmtRel(f.ts)}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </Card>
-      </div>
-
-      {/* ── Row 4: 任务表格 ── */}
-      <Card className="overflow-hidden p-0">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <div className="flex items-center gap-1.5 font-semibold text-xs">
-            <ClockIcon className="size-3.5 text-muted-foreground" />
-            任务
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground">{tasks.length} 个任务</span>
-            <Link
-              href="/function/tasks"
-              className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-            >
-              全部 <ArrowUpRightIcon className="size-3" />
-            </Link>
-          </div>
-        </div>
-        <table className="w-full border-collapse text-xs">
-          <thead>
-            <tr className="border-b">
-              {["任务", "状态", "引擎", "目标进度", "在途", "最近活动"].map((h) => (
-                <th key={h} className="px-4 py-2 text-left font-semibold text-xs text-muted-foreground first:pl-4">
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedTasks.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground text-xs">
-                  暂无任务
-                </td>
-              </tr>
-            ) : (
-              sortedTasks.map((t) => {
-                const goalsPct = t.goals_total ? Math.round(((t.goals_met ?? 0) / t.goals_total) * 100) : null;
-                return (
-                  <tr key={t.id} className="border-b transition-colors last:border-0 hover:bg-muted/30">
-                    <td className="max-w-xs px-4 py-3">
-                      <Link href={`/function/tasks/detail?id=${t.id}`} className="group flex flex-col">
-                        <span className="truncate font-medium group-hover:underline">{t.description}</span>
-                        <span className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{t.id}</span>
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge domain="task" value={t.status} dot className="px-1.5 py-0 text-[10px]" />
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge
-                        domain="engine"
-                        value={t.engine_mode ?? "idle"}
-                        className="px-1.5 py-0 text-[10px]"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      {goalsPct !== null ? (
-                        <div className="flex items-center gap-2">
-                          <Progress value={goalsPct} className="h-1 w-14" />
-                          <span className="text-muted-foreground tabular-nums">
-                            {t.goals_met ?? 0}/{t.goals_total}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums">
-                      {(t.in_flight ?? 0) > 0 ? (
-                        <span className="font-semibold">{t.in_flight}</span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground tabular-nums">
-                      {fmtRel(t.last_activity_unix ?? t.created_unix)}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </Card>
-
-      {/* ── Row 5: 资产分布 | 流量状态码 | 拦截 & 待审批 ── */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        {/* 资产分布 */}
-        <Card className="p-4">
-          <SectionTitle icon={NetworkIcon} sub="按类型">
-            资产分布
-          </SectionTitle>
-
-          {assetByType.length === 0 ? (
-            <div className="py-6 text-center text-muted-foreground text-xs">暂无资产数据</div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {assetByType.map(([type, count]) => (
-                <div key={type} className="flex items-center gap-2 text-xs">
-                  <span className="w-8 shrink-0 text-right text-[10px] text-muted-foreground">
-                    {ASSET_TYPE_LABELS[type] ?? type}
-                  </span>
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={cn("h-full rounded-full", ASSET_COLORS[type] ?? "bg-muted-foreground")}
-                      style={{ width: `${(count / assetMax) * 100}%` }}
-                    />
-                  </div>
-                  <span className="w-4 text-right tabular-nums">{count}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="mt-3 border-t pt-3 text-[10px] text-muted-foreground">共 {totalAssets} 节点</div>
-        </Card>
-
-        {/* 流量状态码 */}
-        <Card className="p-4">
-          <SectionTitle icon={ActivityIcon} sub={`${traffic.length} 次请求`}>
-            流量状态码
-          </SectionTitle>
-
-          {/* bar chart */}
-          {trafficByCodes.length === 0 ? (
-            <div className="py-6 text-center text-muted-foreground text-xs">暂无流量数据</div>
-          ) : (
-            <>
-              <div className="mb-3 flex items-end gap-2" style={{ height: 52 }}>
-                {trafficByCodes.map(({ code, n }) => (
-                  <div key={code} className="flex flex-1 flex-col items-center gap-1">
-                    <span className="text-[9px] text-muted-foreground tabular-nums">{n}</span>
-                    <div
-                      className={cn("min-h-1 w-full rounded-sm", statusBg(code), "opacity-80")}
-                      style={{ height: Math.max(4, (n / trafficMax) * 36) }}
-                    />
-                    <span className={cn("font-mono text-[9px]", statusColor(code))}>{code}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="border-t pt-2.5">
-                <div className="mb-1.5 text-[10px] text-muted-foreground">最近请求</div>
-                <div className="flex flex-col gap-1.5">
-                  {recentTraffic.map((e) => (
-                    <div key={e.id} className="flex items-center gap-1.5 text-[10px]">
-                      <span
-                        className={cn(
-                          "shrink-0 rounded border px-1 py-0 font-mono text-[9px]",
-                          e.method === "GET"
-                            ? "border-success/30 bg-success/10 text-success"
-                            : "border-info/30 bg-info/10 text-info",
-                        )}
-                      >
-                        {e.method}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                        {e.host}
-                        {e.url.replace(/^https?:\/\/[^/]+/, "").substring(0, 30)}
-                      </span>
-                      <span className={cn("shrink-0 font-mono text-[9px]", statusColor(e.status))}>{e.status}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-        </Card>
-
-        {/* 系统状态 & 待审批 */}
-        <Card className="p-4">
-          <SectionTitle icon={ShieldCheckIcon}>系统状态</SectionTitle>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
-              <div className="text-[10px] text-muted-foreground">LLM 配置</div>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "text-[10px]",
-                  stats?.llm_configured
-                    ? "border-success/30 bg-success/10 text-success"
-                    : "border-destructive/30 bg-destructive/10 text-destructive",
-                )}
-              >
-                {stats?.llm_configured ? "已配置" : "未配置"}
-              </Badge>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
-              <div className="text-[10px] text-muted-foreground">流量捕获</div>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "text-[10px]",
-                  settings?.traffic_capture
-                    ? "border-chart-4500/30 bg-chart-4500/10 text-chart-4400"
-                    : "text-muted-foreground",
-                )}
-              >
-                {settings?.traffic_capture ? "开启" : "关闭"}
-              </Badge>
-            </div>
-
-            {activeProfile && (
-              <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
-                <div className="text-[10px] text-muted-foreground">激活模型</div>
-                <span className="font-mono text-[10px]">{activeProfile.model}</span>
-              </div>
-            )}
-          </div>
-
-          {/* pending approvals */}
-          {pendingCount > 0 && (
-            <div className="mt-3">
-              <div className="mb-1.5 font-medium text-[10px] text-warning">待审批 ({pendingCount})</div>
-              <div className="flex flex-col gap-1.5">
-                {pending.slice(0, 3).map((p) => (
-                  <Link
-                    key={p.id}
-                    href="/system/intercept/approvals"
-                    className="flex items-center justify-between rounded-lg border border-warning/20 bg-warning/5 px-2.5 py-2 hover:bg-warning/10"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium text-[10px]">{p.tool_name}</div>
-                      <div className="text-[9px] text-muted-foreground">{p.agent_name}</div>
-                    </div>
-                    <ArrowUpRightIcon className="size-3 shrink-0 text-warning" />
-                  </Link>
-                ))}
-                {pendingCount > 3 && (
-                  <Link
-                    href="/system/intercept/approvals"
-                    className="text-center text-[10px] text-muted-foreground hover:text-foreground"
-                  >
-                    还有 {pendingCount - 3} 条…
-                  </Link>
-                )}
-              </div>
-            </div>
-          )}
-
-          {pendingCount === 0 && (
-            <div className="mt-3 rounded-lg border bg-muted/10 px-3 py-3 text-center text-[10px] text-muted-foreground">
-              <ShieldCheckIcon className="mx-auto mb-1 size-4 text-success/50" />
-              无待审批拦截
-            </div>
-          )}
-        </Card>
-      </div>
     </div>
   );
 }

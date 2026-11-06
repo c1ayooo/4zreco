@@ -5,14 +5,26 @@ import * as React from "react";
 import { BanIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,7 +67,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
     <div className="space-y-1.5">
       <Label className="font-medium text-muted-foreground text-xs">{label}</Label>
       {children}
-      {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
+      {hint && <p className="text-muted-foreground text-xs">{hint}</p>}
     </div>
   );
 }
@@ -90,6 +102,7 @@ export default function AssetInterceptPage() {
   const [editing, setEditing] = React.useState<AssetInterceptRule | null>(null);
   const [form, setForm] = React.useState<RuleForm>(defaultForm());
   const [saving, setSaving] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<AssetInterceptRule | null>(null);
 
   const load = React.useCallback(async () => {
     try {
@@ -147,13 +160,14 @@ export default function AssetInterceptPage() {
   }
 
   async function handleDelete(rule: AssetInterceptRule) {
-    if (!window.confirm(`确定删除资产拦截规则「${rule.pattern}」？`)) return;
     try {
       await api.deleteAssetInterceptRule(rule.id);
       toast.success("规则已删除");
       await load();
     } catch (e) {
       toast.error((e as Error).message);
+    } finally {
+      setDeleteTarget(null);
     }
   }
 
@@ -169,23 +183,10 @@ export default function AssetInterceptPage() {
   const placeholder = KIND_OPTIONS.find((o) => o.value === form.kind)?.placeholder ?? "";
 
   return (
-    <div className="flex flex-1 flex-col gap-5 p-6">
+    <div className="flex flex-1 flex-col gap-5">
       {/* header */}
-      <div className="flex items-center gap-2.5">
-        <BanIcon className="h-5 w-5 shrink-0" />
-        <div>
-          <h1 className="font-semibold text-lg leading-tight">资产拦截</h1>
-          <p className="mt-0.5 text-muted-foreground text-sm">
-            全局资产黑名单：命中的域名 / IP / URL / 网段将被拦截，不对其执行任何操作
-          </p>
-        </div>
-      </div>
-
       <div className="flex items-center justify-between gap-3">
-        <p className="text-muted-foreground text-xs">
-          支持全等与模糊匹配的域名 / IP / URL，以及 CIDR 网段；默认内置模糊拦截政府（.gov / .gov.cn）与教育（.edu /
-          .edu.cn）网站
-        </p>
+        <h1 className="font-semibold text-2xl tracking-tight">资产拦截</h1>
         <Button onClick={openNew} size="sm" className="shrink-0">
           <PlusIcon className="h-4 w-4" />
           新建规则
@@ -195,16 +196,27 @@ export default function AssetInterceptPage() {
       <Card>
         <CardContent className="p-0">
           {loading ? (
-            <p className="p-6 text-muted-foreground text-sm">加载中…</p>
-          ) : rules.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-              <BanIcon className="h-8 w-8 text-muted-foreground/40" />
-              <p className="text-muted-foreground text-sm">暂无资产拦截规则</p>
-              <Button size="sm" variant="outline" onClick={openNew}>
-                <PlusIcon className="h-4 w-4" />
-                新建第一条规则
-              </Button>
+            <div className="flex flex-col gap-3 p-4">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
+          ) : rules.length === 0 ? (
+            <Empty className="py-16">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <BanIcon />
+                </EmptyMedia>
+                <EmptyTitle>暂无资产拦截规则</EmptyTitle>
+                <EmptyDescription>新建后命中的域名 / IP / URL / 网段将被全局拦截</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button size="sm" variant="outline" onClick={openNew}>
+                  <PlusIcon className="h-4 w-4" />
+                  新建第一条规则
+                </Button>
+              </EmptyContent>
+            </Empty>
           ) : (
             <Table>
               <TableHeader>
@@ -218,7 +230,7 @@ export default function AssetInterceptPage() {
               </TableHeader>
               <TableBody>
                 {rules.map((rule) => (
-                  <TableRow key={rule.id} className={!rule.enabled ? "opacity-40" : ""}>
+                  <TableRow key={rule.id} aria-disabled={!rule.enabled || undefined}>
                     <TableCell>
                       <KindBadge kind={rule.kind} />
                     </TableCell>
@@ -230,7 +242,7 @@ export default function AssetInterceptPage() {
                     <TableCell className="text-muted-foreground text-sm">
                       <div className="flex items-center gap-1.5">
                         {rule.builtin && (
-                          <Badge variant="secondary" className="shrink-0 px-1 py-0 text-[10px]">
+                          <Badge variant="secondary" className="shrink-0 px-1 py-0 text-xs">
                             内置
                           </Badge>
                         )}
@@ -238,18 +250,29 @@ export default function AssetInterceptPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      <Switch checked={rule.enabled} onCheckedChange={() => handleToggle(rule)} />
+                      <Switch
+                        checked={rule.enabled}
+                        aria-label={rule.enabled ? `停用「${rule.pattern}」` : `启用「${rule.pattern}」`}
+                        onCheckedChange={() => handleToggle(rule)}
+                      />
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-0.5">
-                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(rule)}>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          aria-label="编辑"
+                          onClick={() => openEdit(rule)}
+                        >
                           <PencilIcon className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           size="icon"
                           variant="ghost"
                           className="h-7 w-7 text-destructive hover:text-destructive"
-                          onClick={() => handleDelete(rule)}
+                          aria-label="删除"
+                          onClick={() => setDeleteTarget(rule)}
                         >
                           <Trash2Icon className="h-3.5 w-3.5" />
                         </Button>
@@ -280,7 +303,7 @@ export default function AssetInterceptPage() {
                 <SelectContent>
                   {KIND_GROUPS.map((g) => (
                     <React.Fragment key={g}>
-                      <div className="px-2 py-1 font-semibold text-xs text-muted-foreground">{g}</div>
+                      <div className="px-2 py-1 font-semibold text-muted-foreground text-xs">{g}</div>
                       {KIND_OPTIONS.filter((o) => o.group === g).map((o) => (
                         <SelectItem key={o.value} value={o.value}>
                           {o.label}
@@ -339,6 +362,29 @@ export default function AssetInterceptPage() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      {/* delete confirm */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除资产拦截规则「{deleteTarget?.pattern}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后该目标不再被拦截，作业可能重新触达它。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteTarget) void handleDelete(deleteTarget);
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
