@@ -38,6 +38,7 @@ import {
   SaveIcon,
   SearchIcon,
   SlidersHorizontalIcon,
+  TriangleAlertIcon,
   StarIcon,
   TagsIcon,
   Trash2Icon,
@@ -3375,6 +3376,28 @@ function CreateTaskSheet({
 
         <div className="flex-1 overflow-y-auto p-6">
           <div className="grid gap-5">
+            {noProjectsAtAll && (
+              <div className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+                <div className="flex-1 text-sm">
+                  <div className="font-medium text-amber-600 dark:text-amber-400">还没有项目</div>
+                  <div className="text-muted-foreground">任务必须挂在项目下——先创建一个项目，再回来新建任务。</div>
+                </div>
+                <Button size="sm" asChild>
+                  <Link href="/function/projects?create=1">去创建项目</Link>
+                </Button>
+              </div>
+            )}
+            {allViewBlocked && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-destructive">
+                  <TriangleAlertIcon className="size-4 shrink-0" />
+                  当前处于「全部」视图，不能创建任务
+                </div>
+                <div className="mt-1 pl-6 text-sm text-muted-foreground">
+                  请先在左上角项目切换器选择一个具体项目，再回来新建任务。
+                </div>
+              </div>
+            )}
             <TaskTemplateControls
               description={description}
               goal={goal}
@@ -3469,29 +3492,17 @@ function CreateTaskSheet({
                 个任务。实时只读继承所选任务的持久化黑板、资产范围及相关流量；新任务写入独立黑板。
               </FieldDescription>
             </Field>
-            <Field>
-              <FieldLabel>归属项目</FieldLabel>
-              {noProjectsAtAll ? (
-                <div className="text-sm text-muted-foreground">
-                  还没有任何项目，任务必须挂在项目下。先
-                  <Link href="/function/projects?create=1" className="mx-1 underline underline-offset-2">
-                    创建项目
-                  </Link>
-                  ，再回来新建任务。
-                </div>
-              ) : boundProject ? (
+            {boundProject && (
+              <Field>
+                <FieldLabel>归属项目</FieldLabel>
                 <div className="text-sm">
                   <span className="font-medium">{boundProject.name}</span>
                   <FieldDescription>
                     创建后自动挂到当前项目（不可改）；项目范围（域名/网段）种成本任务的初始任务范围。
                   </FieldDescription>
                 </div>
-              ) : (
-                <div className="text-sm text-destructive">
-                  未选择项目——请先在左上角切换到具体项目，「全部」视图不能创建任务。
-                </div>
-              )}
-            </Field>
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor="task-companies">关联企业资产范围</FieldLabel>
               <CompanyPicker
