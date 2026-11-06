@@ -2,12 +2,12 @@
 
 # 4zreco
 
-**AI 自主渗透测试 · 红队作战平台**
+**AI 自主渗透测试平台**
 
-> 4zreco——名字取自北斗第七星「破军」（Pojun），主杀伐、主变局。<br/>
-> 这套系统做的事正是「找到防线的破口，并把破口证明给你看」。
+把一个目标交给它，它自己拆解、调度工具、验证发现、写出报告——<br/>
+全程可视，随时可插手，每一步留痕可审计。
 
-Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent 自主推进 · 全程证据留痕
+Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent · 不可变审批审计
 
 [![Release](https://img.shields.io/github/v/release/c1ayooo/4zreco?include_prereleases&label=release)](https://github.com/c1ayooo/4zreco/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/c1ayooo/4zreco/ci.yml?label=ci)](https://github.com/c1ayooo/4zreco/actions/workflows/ci.yml)
@@ -21,23 +21,21 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent 
 
 ---
 
-## 4zreco 是什么
+## 它解决什么问题
 
-给一句话目标，它自动完成「**目标拆解 → 侦察 → 漏洞挖掘 → 利用 → 后渗透 →
-Word 报告**」全流程；人随时可以插手纠偏，每一步都有痕迹、有证据、有审计。
+用 LLM 跑渗透测试，常见的失败方式有三种：跑到一半上下文爆了；工具调用危险操作
+没人拦；最后产出的报告没有证据支撑，交付出去站不住。
 
-三个底层事实决定了它和「套壳工具」的区别：
+4zreco 针对这三件事各给了结构性答案：
 
-1. **状态在图里，不在对话里。** 资产与探索进度拆成两张由锚点缝合的图（资产图 ×
-   探索图），planner 每轮从图上读态势、往图上派意图——任务跑三天也不靠
-   上下文续命，换模型、断点恢复、事后复盘都是一等公民。
-2. **推理有内核，判定不进内核。** Agent 循环跑在 [cloudwego/eino](https://github.com/cloudwego/eino)
-   ADK Runner 上（中断-检查点-恢复是框架能力）；拦截规则、LLM 研判、范围匹配、
-   蜜罐签名、压缩决策全部是普通 Go 包/纯函数——可独立单测、可被 CLI 复用，
-   边界由 CI 门禁脚本机检。
-3. **审批记录不可篡改。** 审批三表 append-only + HMAC-SHA256 哈希链 + 触发器
-   拒绝改写，`/api/audit/verify` 逐行验链——「谁在什么时候放行了什么」有
-   密码学答案，不是一句日志。
+1. **状态放图里，不放对话里。** 资产与探索进度拆成两张由锚点缝合的图（资产图 ×
+   探索图），planner 每轮从图上读态势、往图上派意图。任务跑三天不依赖上下文，
+   换模型、断点恢复、事后复盘都是一等公民。
+2. **危险操作有闸门，且审批本身可审计。** 三层拦截（规则拒绝 / 模型研判 / 人工
+   审批）+ 审批三表 append-only + HMAC-SHA256 哈希链——「谁在什么时候放行了
+   什么」有密码学答案，`/api/audit/verify` 随时验链。
+3. **发现必须有证据。** worker 全部流量过 MITM 留痕，finding 绑定四类流量证据
+   并做 sha256 版本化，每个漏洞经过多路复现确认后才写入报告。
 
 **2026-11：agent 内核完成 norma → eino 换代**（四刀合入、行为等价验证、架构
 门禁机检），审批升级为不可变审计 + checkpoint 断点续跑。
@@ -62,7 +60,7 @@ Word 报告**」全流程；人随时可以插手纠偏，每一步都有痕迹�
 
 ## 界面速览
 
-> 以下截图来自真实运行实例，敏感信息均已脱敏。
+> 截图来自真实运行实例，敏感信息已脱敏。
 
 **入口与全局态势**
 
@@ -72,13 +70,13 @@ Word 报告**」全流程；人随时可以插手纠偏，每一步都有痕迹�
 
 **任务与资产**
 
-| 任务列表：目标进度、漏洞分布一屏可见 | 资产覆盖图：力导向布局，已测节点高亮 |
+| 任务列表：进度与漏洞分布 | 资产覆盖图：已测节点高亮 |
 | :---: | :---: |
 | ![任务列表](assets/screenshots/4zreco-tasks.png) | ![资产覆盖图](assets/screenshots/4zreco-assets-graph.png) |
 
-**证据与报告（SRC 交付的关键）**
+**证据与报告**
 
-| 证据附件：截图 / 数据样本自动归档、缩略图预览 | 漏洞详情：摘要 + 现场截图 + PoC + 复测入口 |
+| 证据附件：自动归档、缩略图预览 | 漏洞详情：摘要 + 截图 + PoC + 复测入口 |
 | :---: | :---: |
 | ![证据附件](assets/screenshots/4zreco-evidence.png) | ![漏洞详情](assets/screenshots/4zreco-finding-detail.png) |
 
@@ -88,7 +86,7 @@ Word 报告**」全流程；人随时可以插手纠偏，每一步都有痕迹�
 
 **平台配置**
 
-| Agent 清单：8 个内置角色 + 自定义 | 宿主环境：60+ 件工具体检 + 一键装齐 |
+| Agent 清单：8 个内置角色 + 自定义 | 宿主环境：工具体检 + 一键装齐 |
 | :---: | :---: |
 | ![Agent](assets/screenshots/4zreco-agents.png) | ![宿主环境](assets/screenshots/4zreco-hostenv.png) |
 
@@ -102,13 +100,11 @@ Word 报告**」全流程；人随时可以插手纠偏，每一步都有痕迹�
 
 ### 双图架构：资产图 × 探索图
 
-渗透测试的全部状态拆成两张独立、由锚点缝合的图：
-
 - **资产图**（全局共享）：`root_domain / subdomain / ip / service / app / endpoint`
   六类节点的真值库，跨任务复用；公司归属 + 授权边界（task_scope）挂在这里。
 - **探索图**（每任务一份）：`goal → intent → fact / finding` 的推进链，五种边
-  （spawns / derived_from / yields / proves / covers）构成**血缘**——「这个发现
-  是从哪条线索推出来的」全程可回溯，这是**报告可信度的根基**。
+  （spawns / derived_from / yields / proves / covers）记录推理血缘，任何发现
+  都能沿边回溯到最初的线索。
 
 ```mermaid
 flowchart LR
@@ -170,7 +166,7 @@ sequenceDiagram
 - **worker** 做完一条意图即停；结果写回双图后自动唤醒 planner。
 - **空转收场 / 拆解墙钟 / 规划轮超时 / model_error 重跑** 多层韧性：空转续跑在
   引擎层重开 Run（计数落库），免费限流通道也能稳定跑完任务。
-- **人在环路**：对话纠偏 / 意图暂停取消 / 人工审批 / `steer_work` 实时纠偏，
+- **人工介入点**：对话纠偏 / 意图暂停取消 / 人工审批 / `steer_work` 实时纠偏，
   每步 activity 在 UI 内联可见。
 
 ### 审批 · 拦截 · 不可变审计 · HITL
@@ -204,13 +200,13 @@ sequenceDiagram
   分发；指纹不匹配自动劣化回退（决定照落、运行侧收管控文本）。
 - **channel 模式**：经典阻塞语义，两模式共用同一张决定表，来回切不丢数据。
 
-### 漏洞情报运营（按时间流，不是静态知识库）
+### 漏洞情报运营
 
-多数同类产品的情报是「按组件查」；4zreco 做的是「**最近 7 天爆了什么 →
-匹配我的资产 → 排进任务**」：NVD 全量/增量 + **CISA KEV 在野利用** + GHSA
-版本区间 + GitHub PoC 聚合；**近期高危快通道**每 30 分钟拉 CVSS≥9.0 或 KEV；
-同步的 CVE 自动反向匹配资产 technologies 指纹，命中即向任务挂 hint；
-`search_vulns` 返回 `version_in_range` 三态判定（解析不出→保守「可能受影响」）。
+情报按**时间流**组织，而不是按组件静态查询：新 CVE 出现 → 自动匹配你资产的
+技术栈指纹 → 命中就往进行中的任务里塞 hint。数据面覆盖 NVD 全量/增量、
+CISA KEV 在野利用清单、GHSA 版本区间（NVD 缺区间时补位）、GitHub PoC；
+**近期高危快通道**每 30 分钟拉一次 CVSS≥9.0 或 KEV。`search_vulns` 对版本
+判定返回三态（在区间内 / 不在 / 解析不出→保守报「可能受影响」）。
 
 ### 红队作战能力
 
@@ -225,15 +221,16 @@ sequenceDiagram
   socat/linpeas/pspy/responder/sqlmap/hydra/hashcat/nuclei/ffuf…全部在
   「宿主环境」页一键安装（特权助手 4zreco-hostd 串行排队执行）。
 
-### 全程证据链
+### 证据与报告
 
 - **MITM 记录代理**：worker 的全部 HTTP/S 流量逐请求留存（CA 签发留痕）；
 - **发现绑定流量**：finding 可绑定 baseline/proof/verification/supporting 四类
   流量证据，快照版本化（sha256），报告引用可验证；
-- **数据回传**：本机文件内容外传类命令有专属拦截规则（judge 研判）；
+- **数据回传管控**：本机文件内容外传类命令有专属拦截规则（judge 研判）；
 - **报告导出**：Word（OOXML 手写零依赖）按 19 类漏洞枚举折叠聚合，封面·目录·
   页眉页脚·严重度着色·复测记录·修复路线图；
-- **对抗式自检**：换身份/换参数顺序/换客户端复现——「确认了才报」。
+- **对抗式自检**：每个 finding 要经换身份、换参数顺序、换客户端的多路复现，
+  确认成立才写入报告。
 
 ---
 
