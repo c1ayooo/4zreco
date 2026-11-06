@@ -2,7 +2,53 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.3.17] - 2026-11-07
+
+### 新增：任务创建强绑定当前项目
+
+- 创建任务面板移除「归属项目（可选）」下拉：归属=侧栏当前项目（只读展示，创建后
+  不可改）；「全部」视图禁用新建入口（按钮禁用 + 面板提交双拦截）；零项目新部署
+  在面板内引导「先创建项目」（直达项目页新建弹窗）。项目页「新建任务」深链不变。
+- 服务端语义不变（POST /api/tasks 的 project_id 校验照旧）。
+
+### 新增：通知推送飞书自建应用模式
+
+- 飞书渠道支持双形态：群自定义机器人 webhook（原有）+ 自建应用 app_id/app_secret
+  （tenant_access_token 换取 + 缓存 + 失效自动重试，IM 消息 API 交互卡片，
+  receive_id 五种类型）。缺省 mode=webhook 兼容存量配置。
+
+### 修复：流量录制代理端口被占时假「开启」
+
+- 启动前探测端口：绑不上（端口被占等）即置空录制器，本实例流量捕获不可用，
+  不再出现「开关显示开启、ProxyAddr 发死地址、流量一条没记」的静默故障；
+  新增 Serving 存活态并经 /api 暴露 alive 字段，前端据此告警。
+  （manager_traffic_probe_test / serving_test 回归）
+
+### 修复：schema 升级路径——老部署旧版不可变触发器挡迁移
+
+- 老部署带着 cb13bd0 原始形态不可变触发器（无 audit_writer 放行口）跑 apply
+  schema 时，ask_source 回填 UPDATE 被拒、启动崩溃循环（4zrec 生产升级首例，
+  2026-11-06）。回填 DML 前先摘旧触发器、文件尾统一重建，单隐式事务原子性不变。
+  （TestApplySchemaUpgradesLegacyImmutableTrigger 回归）
+
+### 治理：前端全站 UI 治理（unslop 三批次，202 项）
+
+- 真 bug 清零：无效 chart 令牌类十余处（dashboard/intercept/broadcast/sessions/
+  coverage-graph 渲染失效）、transcript 与 tools 类拼接缺空格、任务列表 sticky
+  分隔线无效 shadow、登录页 Markdown 星号残留、dashboard 信息序归位。
+- 系统根因令牌化：`lib/status.ts` 全站状态色（blue/emerald/amber/rose/violet/slate
+  → success/warning/info/destructive/primary/muted）；transcript 色系换 chart 令牌、
+  流式指示 bounce→pulse、对错符号改 lucide 图标；exploration-graph DOM 层去硬编码
+  （节点卡/徽标/描边走 card 与 chart 令牌，SVG 画布例外随主题分支）。
+- 逐页治理：卡中卡 ~15 处、window.confirm→AlertDialog ×5、伪 destructive 按钮、
+  四态（Skeleton/Empty/Alert/toast）补齐、双 padding ×6、小字号收敛 text-xs、
+  focus 环恢复、Switch/图标 aria-label、h1 定档。
+- 全局态势条 OpsPulse 移植（4zrec 同名组件，§2 唯一全局脉搏元素）：运行任务/
+  拦截待审批/LLM 状态一行常驻，任务名点击直达详情，替换此前的手搓跳转条。
+- 资产覆盖图暗色模式：画布透明 + 灰阶/标签/边线随主题分支，已测描边亮青
+  （G6 画布字面值随主题分支，UI_DESIGN §5.1 画布例外）。
+- 中文化：偏好设置弹层、搜索对话框、主题切换 aria、导航徽标。
+- 侧栏宽度缩窄 20%（spacing 68 → 54.4）。
 
 ### 新增：IM 交互机器人（对话式接入网关，移植自 4zrec）
 
@@ -19,8 +65,8 @@
 - 同 chat 建会话/轮换互斥（per-chat mutex，修复 4zrec 固有的首条并发双建会话）；
   Telegram 轮询 offset 持久化（settings 按 token 指纹分桶，30s 节拍 + 退出落盘，
   重启不重放已确认消息）。
-- Web 头部新增「在跑任务」跳转条：有 running 任务时显示脉冲胶囊（任务名 + 多任务
-  计数），点击直达任务详情；无任务不占位。
+- Web 头部新增全局态势条 OpsPulse：运行任务（点击直达详情）/ 拦截待审批数 /
+  LLM 状态一行常驻，30s 轮询；有内容的项才发声，无任务不占位。
 - 配置：settings 键 `im_bot_config` 整包 JSON；回显只给 `*_set` 布尔（凭据明文
   不出服务端），写入 nil=不改、""=清除，保存即全停重起收发循环。设置页新增
   「IM 机器人」卡片（四平台分区 + 企微回调地址回显）。
@@ -2524,7 +2570,8 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 - [@Autumn-27](https://github.com/Autumn-27)
 - [@neouks](https://github.com/neouks)
 
-[Unreleased]: https://github.com/c1ayooo/4zreco/compare/v0.3.10...HEAD
+[Unreleased]: https://github.com/c1ayooo/4zreco/compare/v0.3.17...HEAD
+[0.3.17]: https://github.com/c1ayooo/4zreco/compare/v0.3.16...v0.3.17
 [0.3.10]: https://github.com/c1ayooo/4zreco/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/c1ayooo/4zreco/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/c1ayooo/4zreco/compare/v0.3.7...v0.3.8
