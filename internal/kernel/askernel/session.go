@@ -54,6 +54,13 @@ type Session struct {
 	store     *transcript.Store
 	writer    *transcript.Writer // satisfies acllm.TranscriptRecorder structurally
 
+	// HITL 状态（hitl.go）：hitlPending 是上一个 run 捕获的审批中断（Nil =
+	// 未中断），resumeReq 是 ResumeApproval 预挂的一次性恢复指令（driveAgent
+	// 取走即清）。P2（方案 §4-P2）hitl_mode=eino 半边。
+	hitlMu      sync.Mutex
+	hitlPending *HitlInterrupt
+	resumeReq   *resumeRequest
+
 	// OnCallStart observes kernel-managed tool call initiation, synchronously
 	// before the permission pipeline / hooks (acllm.ToolGate.OnCallStart). The
 	// host wires it to its intercept audit trace (Trace.Start) so the guard's
@@ -68,6 +75,12 @@ type Session struct {
 	// call's judge sees the prior result without racing the event pump).
 	// Optional.
 	OnResult func(callID, name, text string, isErr bool, extras []llm.Message)
+
+	// OnCheckpointID observes each run's checkpoint id when the checkpoint store
+	// is armed（P2：装配点用它把装配指纹与 checkpoint id 绑在同一 runner_checkpoints
+	// 行上——P2-3 恢复校验按该行的 fingerprint 比对）。每个 run 开始时同步调用；
+	// set by the host driver before the first run; nil = observe nothing.
+	OnCheckpointID func(checkpointID string)
 }
 
 // NewSession builds a Session, mirroring norma agentcore.NewSession's assembly
@@ -300,6 +313,7 @@ func (s *Session) RunSettlement(ctx context.Context, prompt string, disabledTool
 // completed tool turns (norma turnCount parity: only tool-turns advance);
 // the driver uses it to re-arm its Stop chain (stopHookActive).
 func (s *Session) runStream(ctx context.Context, disabledTools []string, maxTurns int, yield func(harnessEvent, error) bool) {
+	s.clearInterrupt() // 每个 run 的中断捕获从零开始（上个 run 的挂起已被宿主消费或放弃）
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if s.opts.MaxDuration > 0 {
@@ -325,16 +339,27 @@ func (s *Session) runStream(ctx context.Context, disabledTools []string, maxTurn
 		// 仍活着、其后的模型流式阶段才死 → 流式阶段（aborted_streaming）。此前
 		// 的 turns>0 近似会把「工具轮之后的模型流式取消」误记成 aborted_tools
 		//（评审第 2 轮 #1）。
+		// P2-6 劣化优先：checkpoint 落盘失败（超限/存储故障）等 run 错误以错误
+		// 终态收场——挂起已被 Runner 拒收，走 awaiting_approval 会停靠在一个
+		// 无法恢复的钥匙上；错误终态交给宿主重试/重跑（pending 由 reaper 收尾）。
 		phase := termmap.PhaseModel
 		if toolsPhase {
 			phase = termmap.PhaseTools
 		}
 		term.Reason, term.Err = termmap.MapError(runCtx, runErr, phase)
+	} else if hitl := s.pendingInterrupt(); hitl != nil {
+		// P2-2：工具审批中断——checkpoint 已由 Runner 落盘，run 以
+		// awaiting_approval 终止（无 settlement、无 nudge；恢复由宿主显式发起）。
+		term.Reason = termmap.AwaitingApproval
+		term.Text = ""
 	} else {
 		term.Reason = termmap.Completed
 	}
 	term.Messages = s.dto.Get()
 	term.Text = lastAssistantText(s.dto.Get())
+	if term.Reason == termmap.AwaitingApproval {
+		term.Text = ""
+	}
 	term.Usage = s.Usage()
 
 	yield(harnessEvent{Kind: "result", Terminal: term}, nil)

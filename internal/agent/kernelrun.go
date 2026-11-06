@@ -32,6 +32,7 @@ import (
 
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/c1ayooo/4zreco/internal/kernel/termmap"
 )
 
 // emptyTurnNudge 是空转回合注入的续跑指令（原 engine.go 常量随路线 A 上移到这里）。
@@ -95,18 +96,25 @@ type kernelDriver struct {
 	nudge Nudger
 	// settle 是预算终态（max_turns/timeout）的收尾配置；nil 或 Prompt 空 = 不收尾。
 	settle *askernel.Settlement
-	// checkpoint 观测每次主 run 装配（runner_checkpoints.fingerprint 落库，
-	// P2 恢复校验用）。nil = 不落。指纹六元组现状（评审第 1 轮 #1 后）：agentKey、
-	// 工具集快照、解锁集种子（fpUnlockSeed 由 worker 从 ToolAugment 的
-	// DeferredInfo.UnlockSeed 接入）是真实的；promptVersion/mcpDigest/modelProfile
-	// 为 P2 占位（无仓内来源：版本按 agent id 存 DB、连接摘要与 profile 名在
-	// server 侧 provider 缓存）。
-	checkpoint     func(sessionID, fingerprint string)
+	// checkpoint 观测每次主 run 装配（runner_checkpoints.fingerprint 落库）；
+	// P2 起带 checkpointID：装配点把它与指纹绑在同一行上（恢复校验基准），
+	// checkpointID 为空 = 该 run 未 armed checkpoint（正常留痕行）。nil = 不落。
+	// 指纹六元组现状（评审第 1 轮 #1 后）：agentKey、工具集快照、解锁集种子
+	//（fpUnlockSeed 由 worker 从 ToolAugment 的 DeferredInfo.UnlockSeed 接入）
+	// 是真实的；promptVersion/mcpDigest/modelProfile 恒空（无仓内来源，两侧
+	// 计算一致所以校验语义成立）。
+	checkpoint     func(sessionID, checkpointID, fingerprint string)
 	fpAgentKey     string
 	fpPromptVer    string
 	fpUnlockSeed   string
 	fpMCPDigest    string
 	fpModelProfile string
+	// park 是 HITL 停靠钩子（P2-3，engine 注入）：run 以 awaiting_approval 终态
+	// 收场后调用——落映射表、注册停靠、等人工决定；返回签名决定数据（内核以
+	// ResumeApproval 精确续跑）。ok=false = 停靠被打断（任务终止/ctx 取消），
+	// 取消收尾（决定行）由钩子内落库，run 按取消语义交还上层状态机。
+	// nil = 不停靠（未接 checkpoint store 的装配，awaiting_approval 不会出现）。
+	park func(hitl *askernel.HitlInterrupt) (resume *db.HitlResumeData, ok bool)
 }
 
 // runKernel drives one conversation to a final terminal over the kernel session:
@@ -116,16 +124,24 @@ type kernelDriver struct {
 // and error — the worker/planner/chat/mainagent contract, byte-identical to
 // the norma era.
 func runKernel(ctx context.Context, sess *askernel.Session, input string, d kernelDriver, p *capturePump) (string, harness.TerminalReason, error) {
+	fp := sess.FingerprintOnSession(d.fpAgentKey, d.fpPromptVer, d.fpUnlockSeed, d.fpMCPDigest, d.fpModelProfile)
 	if d.checkpoint != nil {
-		d.checkpoint(sess.SessionID(), sess.FingerprintOnSession(d.fpAgentKey, d.fpPromptVer,
-			d.fpUnlockSeed, d.fpMCPDigest, d.fpModelProfile))
+		d.checkpoint(sess.SessionID(), "", fp) // 刀④ 语义的装配留痕行（checkpoint_id 空）
+	}
+	// P2：checkpoint id 与指纹绑同一行（P2-3 恢复校验按该行 fingerprint 比对）。
+	if d.checkpoint != nil {
+		sess.OnCheckpointID = func(cpID string) {
+			d.checkpoint(sess.SessionID(), cpID, fp)
+		}
 	}
 
 	stopHookActive := false
 	reason := harness.ReasonCompleted
 	var termErr error
 
-	run := sess.Prompt(ctx, input)
+	// P2-3：预挂的恢复指令（重领重建）以 ResumeWithParams 开场——续跑的是原
+	// 对话，不追加任何 user 消息；否则普通 Prompt(input)。
+	run := sess.StartPlanned(ctx, input)
 	for {
 		term, drained, rerr := p.drain(run)
 		if !drained {
@@ -145,6 +161,32 @@ func runKernel(ctx context.Context, sess *askernel.Session, input string, d kern
 		// Stop 链与 nudge 重新武装（连续空转只推一次的闸在此复位）。
 		if term.Turns > 0 {
 			stopHookActive = false
+		}
+
+		// P2-3：审批挂起 → 停靠等决定 → 从 checkpoint 精确续跑，循环到真实终态。
+		// 同轮多工具先后中断由循环承接（re-interrupt 再次浮出即再停靠）。
+		if reason == termmap.AwaitingApproval {
+			hitl := sess.Interrupt()
+			if d.park == nil || hitl == nil || hitl.CheckpointID == "" {
+				// 未接停靠的装配不该出现 awaiting_approval（checkpoint 未 armed
+				// 时 guard 走 channel）；防御性收场：按取消语义交还，不停靠。
+				p.emitResult(term)
+				return term.Text, reason, termErr
+			}
+			resume, ok := d.park(hitl)
+			if !ok || resume == nil {
+				// 停靠被打断（任务终止/删除/ctx 取消）：审批的取消收尾（决定行）
+				// 已在钩子内落库；run 按取消语义交还上层状态机。
+				p.emitResult(&harness.Terminal{
+					Reason: harness.ReasonAbortedStreaming, Err: ctx.Err(),
+					Usage: term.Usage, Turns: term.Turns, Messages: term.Messages,
+				})
+				return p.finalText, harness.ReasonAbortedStreaming, ctx.Err()
+			}
+			// 决定到达（内核在恢复重入点交 guard 验签）：从 checkpoint 精确续跑。
+			// denied 的续跑由 guard 以管控文本作 tool_result，run 自然继续。
+			run = sess.ResumeApproval(ctx, hitl.CheckpointID, hitl.InterruptID, resume)
+			continue
 		}
 
 		switch reason {

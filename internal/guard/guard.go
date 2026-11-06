@@ -15,8 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/Autumn-27/norma/hook"
+	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/intercept"
 )
 
 // AuditEntry records one gated tool call.
@@ -38,6 +39,11 @@ type Guard struct {
 	interceptor *intercept.Interceptor // optional; nil disables user-configured rules
 	egress      *EgressGuard           // optional; 出口审查(平台敏感指纹拦截)，nil 关闭
 	tarpit      *tarpitState           // optional; tarpit 熔断(每 host 抓取预算)，nil 关闭
+	// hitlMode 是 hitl_mode=eino 的 ask 路径开关（P2）：开启时 ask 分支只落库
+	// （PersistAsk）并经 ctx 信号交 gate 以 StatefulInterrupt 中断，本进程不再
+	// channel 阻塞；关闭（默认，channel 模式）走 HandleAsk 原语义。恢复重入的
+	// 验签放行不感知本开关——有恢复数据就核对。
+	hitlMode bool
 }
 
 // AttribSample 是一条 blocked/error 归因的最近样本（B6）：planner 只看计数时对不上
@@ -73,7 +79,30 @@ func newGuard(ic *intercept.Interceptor) *Guard {
 // Hooks returns the hook registry to attach to an agent session.
 func (g *Guard) Hooks() *hook.Registry { return g.reg }
 
+// SetHitlMode arms the eino-mode ask path (hitl_mode=settings；默认 channel)。
+// 装配点（任务 guard 构建 / chat guard 构建）读开关后调用，运行期不热切——
+// 与 checkpoint 装配同一生效时点（4zrec 同款取舍）。
+func (g *Guard) SetHitlMode(on bool) {
+	g.mu.Lock()
+	g.hitlMode = on
+	g.mu.Unlock()
+}
+
+// hitlOn reads the mode flag under the same mutex as egress (装配期写、运行期读).
+func (g *Guard) hitlOn() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.hitlMode
+}
+
 func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
+	// P2-3 恢复重入（先于一切判定）：本调用此前被审批中断、框架带着 checkpoint
+	// 重放。核对决定行 + HMAC + 工具名/输入摘要绑定——伪造 resume 不可放行；
+	// allowed → 继续原判定管线之外的执行（该调用已审，不再重判/重问）；
+	// denied → 管控文本作 tool_result，run 继续（劣化路径同语义）。
+	if r := db.HitlResumeFrom(ctx); r != nil {
+		return g.applyHitlResume(ctx, ev, r)
+	}
 	// Extract the shell-command surface for the audit log: Bash + the interactive-shell
 	// tools (shell_open's command, shell_send's text). Destructive/exfil gating is no
 	// longer hard-coded here — it now lives in the DB intercept rules, evaluated by
@@ -209,10 +238,42 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 			return g.block(ev.ToolName, systemBlockMessage("工作已取消，平台安全管控阻止执行"), "")
 		}
 		convID := intercept.ConvIDFromContext(ctx)
+		// P2-2：hitl_mode=eino 时拆两段——落库段照旧（PersistAsk），等待段改为
+		// ctx 信号交 gate 以 StatefulInterrupt 中断（checkpoint 落盘，人工决定
+		// 后从断点精确续跑）。
+		//
+		// 先核对信号持有者（评审第 1 轮 #2 的 fail-closed 闸）：gate 半边
+		//（SetHitl）与 guard 半边（SetHitlMode）的装配时点可以漂移——灰度期
+		// settings 把开关翻回 channel 后，常驻内存的任务 guard 仍 hitlOn，而新
+		// 装配的 gate 不再注入持有者。没有这个核对，RaiseAskInterrupt 会在无
+		// 持有者时静默丢弃、工具无审批直跑（fail-open）。持有者不存在 → 完整
+		// 回退下方的 channel 阻塞语义。
+		if g.hitlOn() && db.HasAskSignal(ctx) {
+			info, err := g.interceptor.PersistAsk(ctx, convID, dec, ev.ToolName, ev.Input)
+			if err != nil {
+				log.Printf("[guard] hitl 落库段失败(%v)，按拒绝收口: %s", err, ev.ToolName)
+				return g.block(ev.ToolName, systemBlockMessage("审批请求落库失败，按拒绝处理"), "")
+			}
+			db.RaiseAskInterrupt(ctx, info)
+			return hook.Result{}
+		}
 		if !g.interceptor.HandleAsk(ctx, convID, dec, ev.ToolName, ev.Input) {
 			return g.block(ev.ToolName, systemBlockMessage("人工审批未通过（用户拒绝或审批超时）"), "")
 		}
 		return hook.Result{}
+	}
+	return hook.Result{}
+}
+
+// applyHitlResume 是恢复重入的核对与放行（P2-3）：恢复数据必须能与库中决定行
+// 对上（签名 + 决定方向 + 工具名 + 输入摘要四重绑定），对不上按拒绝收口——
+// 一次校验失败也不能落入「默认放行」。
+func (g *Guard) applyHitlResume(ctx context.Context, ev hook.Event, r *db.HitlResumeData) hook.Result {
+	if !g.interceptor.VerifyHitlResumeCall(r, ev.ToolName, ev.Input) {
+		return g.block(ev.ToolName, systemBlockMessage("审批恢复数据校验失败，本次调用不放行"), "")
+	}
+	if !r.Allowed {
+		return g.block(ev.ToolName, systemBlockMessage("人工审批未通过（用户拒绝执行）"), "")
 	}
 	return hook.Result{}
 }

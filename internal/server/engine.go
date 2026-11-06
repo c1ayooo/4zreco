@@ -16,6 +16,7 @@ import (
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -146,6 +147,12 @@ type Engine struct {
 	steerMu  sync.Mutex
 	steerBox map[int64][]string
 
+	// parks 是 HITL 审批挂起的停靠注册表（pendingID → *hitlPark，P2 §4-P2 第
+	// 3 条；hitl_mode=eino 时经 DeliverHitlDecision 投递签名决定，停靠中的 run
+	// 从 checkpoint 精确续跑；决定先于停靠注册到达的由停靠轮询自查库补投）。
+	// 惰性初始化（engine_hitl.go parksMap）。
+	parks *sync.Map
+
 	plannerRound sync.Map // taskID -> int, planner round counter (for UI round separators)
 
 	// 任务级超时(见 docs/任务级超时与收尾设计.md):
@@ -187,8 +194,15 @@ func (e *Engine) nextPlannerRound(taskID string) int {
 
 // Pause stops a task: marks it paused AND cancels any in-flight planner/worker run
 // for it (a long worker.Execute would otherwise keep going until it finishes).
+// P2-5（方案 §4-P2 第 5 条）：有审批挂起钥匙（hitl_pending_checkpoint 行）的
+// run 不 cancel——interrupt 已 checkpoint，天然 parked；暂停跨审批等待存活，
+// 决定后原调用从断点续跑。其余暂停保持 cancel 语义。
 func (e *Engine) Pause(taskID string, cause error) {
 	e.paused.Store(taskID, true)
+	if e.HasHitlPendingCheckpoint(taskID) {
+		log.Printf("[hitl] task %s 审批挂起中，暂停转为 park（不 cancel 等待中的 run）", taskID)
+		return
+	}
 	e.cancelExec(taskID, cause)
 }
 
@@ -1185,8 +1199,10 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		drain:   func() (string, bool) { return e.drainSteer(iid) },
 		repeats: newRepeatTracker(),
 	}
+	wTaskID, _ := strconv.ParseInt(t.ID, 10, 64) // HITL 停靠钩子的任务数值 id
 	// 路线 A（刀④）的 driver 旋钮：DB 空转预算 + 装配指纹落库（P2 恢复校验的
-	// 留痕半边）。
+	// 留痕半边）。P2（§4-P2）hitl_mode=eino 时追加 checkpoint store + 停靠钩子 +
+	// 重领重建种子 + 会话 checkpoint 清理（nil = channel 语义照旧）。
 	runParams := agent.KernelRunParams{
 		Nudge: &agent.IntentNudger{
 			Store:  t.Store,
@@ -1194,16 +1210,30 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			LimitN: e.emptyTurnNudgeLimit(),
 			LabelS: label,
 		},
-		Checkpoint: func(sessionID, fingerprint string) {
+		Checkpoint: func(sessionID, checkpointID, fingerprint string) {
 			if e.m.pg == nil {
 				return
 			}
-			if err := e.m.pg.RecordRunnerCheckpoint(context.Background(), sessionID, "worker", "", fingerprint); err != nil {
+			if err := e.m.pg.RecordRunnerCheckpoint(context.Background(), sessionID, "worker", checkpointID, fingerprint); err != nil {
 				log.Printf("[work %s] task %s 意图 #%d 装配指纹落库失败: %v", name, t.ID, iid, err)
 			}
 		},
 	}
-	wTaskID, _ := strconv.ParseInt(t.ID, 10, 64)
+	if e.m.pg != nil && e.hitlEnabled() {
+		store := e.m.pg.AsCheckpointStore()
+		runParams.CheckpointStore = store
+		runParams.Park = func(hitl *askernel.HitlInterrupt) (*db.HitlResumeData, bool) {
+			return e.hitlParkHook(wTaskID, hitl)
+		}
+		runParams.HitlResumeSeed = func(sessionID, fingerprint string) []askernel.ResumeDirective {
+			return e.hitlResumeSeed(sessionID, fingerprint)
+		}
+		runParams.CheckpointDrop = func(sessionID string) {
+			if err := e.m.pg.DeleteCheckpointsBySession(sessionID); err != nil {
+				log.Printf("[work %s] task %s 意图 #%d checkpoint 清理失败: %v", name, t.ID, iid, err)
+			}
+		}
+	}
 	runStart := time.Now() // 意图墙钟起点（跨 model_error 重试累计），结算时落 payload
 	e.BeginLLMCall(t.ID)
 	var reason harness.TerminalReason

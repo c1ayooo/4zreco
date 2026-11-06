@@ -43,6 +43,8 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/c1ayooo/4zreco/internal/db"
 )
 
 // ToolHooks is the PreToolUse/PostToolUse seam the host hands to the gate —
@@ -104,6 +106,14 @@ type ToolGate struct {
 	// the ArgsFromEino-decoded payload (the same bytes the hooks receive, so
 	// WithCall's key digest matches). nil = observe nothing.
 	OnCallStart func(callID, name string, input json.RawMessage)
+
+	// hitl 是 hitl_mode=eino 的 gate 半边（SetHitl）：开启后 execOne 的步骤 3
+	// 会向 hooks 链注入 db.AskSignal，PreToolUse 返回后读到审批挂起即以
+	// StatefulInterrupt 中断本次调用（checkpoint 由内核 Runner 落盘）；同时
+	// 恢复重入路径（GetInterruptState/GetResumeContext）生效。false = channel
+	// 语义照旧。装配点与 askernel.Options.CheckpointStore 同源（内核 armed ⇔
+	// gate armed），由 Session 装配处统一传导。
+	hitl bool
 }
 
 // NewToolGate builds a gate over tools. maxConcurrency ≤ 0 defaults to 10
@@ -162,6 +172,11 @@ func (g *ToolGate) SetDeferred(deferred []string, unlock *actool.UnlockSet) *Too
 	return g
 }
 
+// SetHitl arms the eino-mode ask path（P2-2）：guard 的 ask 经 ctx 信号升级为
+// tool.StatefulInterrupt（checkpoint 落盘、决定后精确续跑），恢复重入在本端点
+// 顶部接住。与 askernel.Options.CheckpointStore 同源装配。
+func (g *ToolGate) SetHitl(on bool) *ToolGate { g.hitl = on; return g }
+
 // Managed returns the managed tools in registration order — the exact list
 // that fed NewToolGate (and ToEinoTools for binding). The gate keeps the slice
 // so the order cannot drift (toolset_snapshot_hash stability, 方案 §4-P1 第 8 条).
@@ -177,6 +192,11 @@ func (g *ToolGate) Tool(name string) (actool.CoreTool, bool) {
 
 // WrapInvokableToolCall implements adk.ChatModelAgentMiddleware. Managed tools
 // are replaced by the gate endpoint; anything else passes through untouched.
+//
+// Like 4zrec's gateMiddleware, the returned endpoint NEVER returns a non-nil Go
+// error on tool failures — EXCEPT the HITL interrupt (StatefulInterrupt 原样上
+// 抛，ADK 提升为 CompositeInterrupt 事件并由 Runner 落 checkpoint；4zrec
+// askernel/middleware.go 同款例外)。
 func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.InvokableToolCallEndpoint, tCtx *adk.ToolContext) (adk.InvokableToolCallEndpoint, error) {
 	t, ok := g.tools[tCtx.Name]
 	if !ok {
@@ -187,7 +207,24 @@ func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.Invok
 		if g.OnCallStart != nil {
 			g.OnCallStart(tCtx.CallID, t.Name(), input)
 		}
-		text, isErr, extras := g.execOne(ctx, t, tCtx.CallID, input)
+		// P2-3 恢复重入：本调用此前被审批中断，框架带着 checkpoint 重放本端点。
+		// 命中的调用把决定交 guard 核对（db.WithHitlResume → guard 顶部）；未命中
+		// （同轮兄弟中断按官方语义——Targets 只投递命中的 interrupt id）以原状态
+		// 重新 interrupt 保状态。
+		if g.hitl {
+			if was, _, stored := tool.GetInterruptState[*hitlState](ctx); was {
+				isTarget, hasData, data := tool.GetResumeContext[*db.HitlResumeData](ctx)
+				if !isTarget || !hasData || data == nil {
+					return "", tool.StatefulInterrupt(ctx, stored.Info, stored)
+				}
+				ctx = db.WithHitlResume(ctx, data)
+			}
+		}
+		text, isErr, extras, intErr := g.execOne(ctx, t, tCtx.CallID, input)
+		if intErr != nil {
+			// 审批中断：工具未执行、无结果可记——结果在恢复后落 DTO。
+			return "", intErr
+		}
 		if g.OnResult != nil {
 			g.OnResult(tCtx.CallID, t.Name(), text, isErr, extras)
 		}
@@ -198,9 +235,10 @@ func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.Invok
 // execOne resolves and runs a single tool call — norma harness execOne
 // ordering, verbatim. It never panics; failures become error results.
 // input is pre-decoded (ArgsFromEino, done by the endpoint so OnCallStart and
-// the hooks see the same bytes).
-func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID string, input json.RawMessage) (text string, isErr bool, extras []llm.Message) {
-	fail := func(msg string) (string, bool, []llm.Message) { return msg, true, nil }
+// the hooks see the same bytes). intErr 非 nil 表示 HITL 审批中断
+// （StatefulInterrupt 错误，端点原样上抛，其余失败仍是 error tool_result）。
+func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID string, input json.RawMessage) (text string, isErr bool, extras []llm.Message, intErr error) {
+	fail := func(msg string) (string, bool, []llm.Message, error) { return msg, true, nil, nil }
 
 	// 0. Deferred hard gate (V5 双保险): a locked deferred tool is not callable
 	//    directly — the model must go through ExecuteExtraTool after its skill
@@ -252,14 +290,25 @@ func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID string
 	//    harness/tools.go:78): egress→tarpit→规则→judge via the guard's hook
 	//    registry, steer drain and 空转拦截 via the engine's wrapper — whatever
 	//    composed chain the host passed to SetHooks. First block halts; the
-	//    message becomes the tool error result. 本刀 ask 在链内走现有 channel
-	//    HandleAsk（分钟级阻塞照旧）；P2 HITL 才把 ask 换成
-	//    tool.StatefulInterrupt（挂点已由 4zrec hitl.go 验证，此处先不动）。
+	//    message becomes the tool error result.
+	//    P2-2：hitl 模式先注入 AskSignal 持有者再调链——guard 的 ask 分支只落库
+	//    （PersistAsk）并把挂起写进信号，返回后读到即以 StatefulInterrupt 中断
+	//    本次调用（checkpoint 落盘，决定后精确续跑）。channel 模式不注入，guard
+	//    走 HandleAsk 原语义（分钟级阻塞照旧）。信号走 ctx 是唯一不破坏旁路包装
+	//    链（toollog/idlestop/steer 都原样转发 ctx）的通道。
 	if g.hooks != nil {
+		if g.hitl {
+			ctx = db.WithAskSignal(ctx)
+		}
 		if block, msg, updated := g.hooks.PreToolUse(ctx, t.Name(), input); block {
 			return fail("Blocked by hook: " + msg)
 		} else if len(updated) > 0 {
 			input = updated
+		}
+		if g.hitl {
+			if ask := db.AskInterruptFrom(ctx); ask != nil {
+				return "", false, nil, interruptFromSignal(ctx, ask)
+			}
 		}
 	}
 
@@ -303,7 +352,7 @@ func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID string
 		g.hooks.PostToolUse(ctx, t.Name(), input, raw, res.IsError)
 	}
 
-	return text, res.IsError, res.Extra
+	return text, res.IsError, res.Extra, nil
 }
 
 // safeToolCall invokes the tool with guardPanic semantics: a panicking tool

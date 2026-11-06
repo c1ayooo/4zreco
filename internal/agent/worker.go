@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,17 +21,29 @@ import (
 	"github.com/c1ayooo/4zreco/internal/hosttools"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/c1ayooo/4zreco/internal/kernel/termmap"
+	"github.com/cloudwego/eino/adk"
 )
 
 // KernelRunParams carries the route-A loop knobs the engine wires per intent run
 // (刀④)：nudge 预算（DB 计数）、装配指纹落库回调，以及指纹六元组里 P2 才接源的
 // 占位分量。零值 = 全部不介入。
+// P2（方案 §4-P2）新增 hitl_mode=eino 半边：CheckpointStore + Park 由 engine 在
+// 开关开启时接线（nil = channel 语义照旧）；CheckpointDrop 在意图收场时清该
+// 会话的 checkpoint（CheckPointDeleter 的任务终态清理）。
 type KernelRunParams struct {
-	Nudge        Nudger
-	Checkpoint   func(sessionID, fingerprint string)
-	FPPromptVer  string // prompt 版本（SeedPromptVersioned；P2 接来源，暂空）
-	FPMCPDigest  string // MCP 连接摘要（不含临时状态；P2 接来源，暂空）
-	FPServeModel string // 模型 profile 名（P2 接来源，暂空）
+	Nudge           Nudger
+	Checkpoint      func(sessionID, checkpointID, fingerprint string)
+	FPPromptVer     string // prompt 版本（SeedPromptVersioned；P2 接来源，暂空）
+	FPMCPDigest     string // MCP 连接摘要（不含临时状态；P2 接来源，暂空）
+	FPServeModel    string // 模型 profile 名（P2 接来源，暂空）
+	CheckpointStore adk.CheckPointStore
+	Park            func(hitl *askernel.HitlInterrupt) (*db.HitlResumeData, bool)
+	CheckpointDrop  func(sessionID string)
+	// HitlResumeSeed（P2-3 重领重建）engine 接线：返回该会话可续跑的已决定审批
+	// 指令（指纹核对通过、映射钥匙已消费、决定已签名）；指纹不匹配按 P2-6 回退
+	// ——不返回该条，正常重跑可能重审。nil = 未接。
+	HitlResumeSeed func(sessionID, fingerprint string) []askernel.ResumeDirective
 }
 
 // Worker is an LLM work agent (docs §4.4): it claims ONE intent, completes it
@@ -582,12 +595,12 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		settle = wrapupSettlementForTask("worker", []string{"Bash"}, clamped)
 	}
 	opts := askernel.Options{
-		Model:           acllm.BridgeModel(w.prov),
-		SystemPrompt:    system,
-		Tools:           tools,
-		DeferredTools:   def.Deferred,
-		UnlockSet:       def.Unlock,
-		PermissionMode:  permission.ModeBypass,
+		Model:          acllm.BridgeModel(w.prov),
+		SystemPrompt:   system,
+		Tools:          tools,
+		DeferredTools:  def.Deferred,
+		UnlockSet:      def.Unlock,
+		PermissionMode: permission.ModeBypass,
 		// WebFetch 走记录代理，其 HTTP 与 curl 一样被留痕；载入代理 CA 让经 MITM
 		// 重签的 HTTPS 证书能【正常校验通过】（而非关掉校验）。proxy 空则直连。
 		EnableWebFetch: true,
@@ -647,6 +660,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		})
 	}
 	opts.Hooks = stopChain
+	// P2 HITL（hitl_mode=eino）：engine 接线 CheckpointStore + Park 后，工具审批
+	// 中断→checkpoint→停靠→精确续跑；nil = channel 语义照旧（灰度默认）。
+	if params.CheckpointStore != nil {
+		opts.CheckpointStore = params.CheckpointStore
+	}
 	if w.tx != nil { // persist raw LLM conversation; one file per worked intent
 		opts.Transcript = w.tx
 		opts.SessionID = WorkerSessionID(ts.ID(), intent.ID)
@@ -678,9 +696,33 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// restarting from scratch.
 	alreadyRecorded := false
 	if w.tx != nil {
-		_ = s.Resume(opts.SessionID)
+		// P2-3 重领重建前置判定：本会话有「已决定、钥匙未消费、checkpoint 仍在」
+		// 的审批 → 以 ResumeForApproval 装配（保留尾部 assistant tool_use——它就是
+		// 待续跑的调用）+ 预挂续跑指令；engine 的 HitlResumeSeed 核对装配指纹
+		//（不匹配按 P2-6 回退：不预挂，正常重跑可能重审）并消费钥匙（一次性，
+		// 防同一决定重放二次执行）。
+		plannedHitl := false
+		if params.HitlResumeSeed != nil && params.CheckpointStore != nil {
+			fp := s.FingerprintOnSession("worker", params.FPPromptVer,
+				askernel.UnlockSeed(def.UnlockSeed), params.FPMCPDigest, params.FPServeModel)
+			for _, d := range params.HitlResumeSeed(opts.SessionID, fp) {
+				if err := s.ResumeForApproval(opts.SessionID); err != nil {
+					log.Printf("[worker %s] 意图 #%d HITL 续跑装配失败(%v)，回退正常重跑", name, intent.ID, err)
+					break
+				}
+				s.PlanResume(d)
+				plannedHitl = true
+				break // 一次续跑一个挂起；同轮其余挂起由续跑后的 re-interrupt 承接
+			}
+		}
+		if !plannedHitl {
+			_ = s.Resume(opts.SessionID)
+		}
 		alreadyRecorded = requestID != "" && hasWorkerChatMessage(s.Messages(), requestID)
-		if len(s.Messages()) > 0 && message == "" {
+		if plannedHitl {
+			// 续跑的是原对话（不追加任何 user 消息）；解锁种子照常回放。
+			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
+		} else if len(s.Messages()) > 0 && message == "" {
 			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
 			// 续跑摘要（v0.3.95 B9）：上次跑到哪、为什么停、图上已有什么——不注入
 			// 的话模型要自己翻历史重建方向感；零写回的续跑被强制先反思。
@@ -706,19 +748,26 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// Runner ctx 携带的 deadline 生效（4zrec 已接受的取舍）。ctx itself carries only
 	// pause / planner kill / shutdown, which the engine distinguishes and re-queues/stops.
 	driver := kernelDriver{
-		stop:       stopChain,
-		nudge:      params.Nudge,
-		settle:     settle,
-		checkpoint: params.Checkpoint,
-		fpAgentKey: "worker",
-		fpPromptVer:    params.FPPromptVer,
+		stop:        stopChain,
+		nudge:       params.Nudge,
+		settle:      settle,
+		checkpoint:  params.Checkpoint,
+		park:        params.Park,
+		fpAgentKey:  "worker",
+		fpPromptVer: params.FPPromptVer,
 		// 解锁集种子真实来源：ToolAugment 装配的初始已解锁集合（评审第 1 轮 #1
-		// 修复——此前恒空串）。promptVersion/mcpDigest/modelProfile 仍为 P2 占位。
+		// 修复——此前恒空串）。promptVersion/mcpDigest/modelProfile 恒空（两侧
+		// 计算一致，校验语义成立）。
 		fpUnlockSeed:   askernel.UnlockSeed(def.UnlockSeed),
 		fpMCPDigest:    params.FPMCPDigest,
 		fpModelProfile: params.FPServeModel,
 	}
 	_, reason, err := captureRunSession(ctx, s, input, emitWrap, driver)
+	// CheckPointDeleter（任务终态清理）：意图收场即清本会话的 checkpoint 与
+	// 其映射钥匙（awaiting_approval 收场时 park 循环还在 execute 内，不会走到这里）。
+	if params.CheckpointDrop != nil && reason != termmap.AwaitingApproval {
+		params.CheckpointDrop(opts.SessionID)
+	}
 	return reason, tsx.Writes(), err
 }
 

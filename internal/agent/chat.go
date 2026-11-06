@@ -6,16 +6,17 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/c1ayooo/4zreco/internal/acllm"
-	"github.com/c1ayooo/4zreco/internal/db"
-	"github.com/c1ayooo/4zreco/internal/guard"
-	"github.com/c1ayooo/4zreco/internal/intercept"
-	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/guard"
+	"github.com/c1ayooo/4zreco/internal/intercept"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/cloudwego/eino/adk"
 )
 
 // ChatAgent is the generic, task-independent conversational runner behind the chat
@@ -37,6 +38,10 @@ type ChatAgent struct {
 	nonStreamingFn func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
 	noaEnabledFn   func() bool  // resolver: use experimental noa compaction? (nil = off)
 	maxTokensFn    func() int   // resolver: per-reply output cap (nil/0 = send no cap)
+	// hitlFn 是 hitl_mode=eino 的 chat 半边（P2，engine 接线）：返回本 run 的
+	// checkpoint store 与停靠钩子（store nil = channel 语义照旧）。每次 Chat 读
+	// 一遍——开关对下一次会话生效，与 checkpoint 装配同一时点。
+	hitlFn ChatHitlSource
 }
 
 func NewChatAgent(prov llm.Provider, model, workDir string, tx *transcript.Store, window int) *ChatAgent {
@@ -75,6 +80,17 @@ func (c *ChatAgent) SetWebSearch(o WebSearchOpts) { c.webSearch = o }
 // SetGuard attaches a guard (with user-configured intercept rules) to this chat
 // agent. Must be called before Chat; safe to call multiple times.
 func (c *ChatAgent) SetGuard(g *guard.Guard) { c.guard = g }
+
+// ChatHitlSource 是 hitl_mode 的 chat 半边接线类型（engine 提供实现；adk 类型
+// 在 agent 侧命名——engine*.go 源文件不得出现 eino 引用，R1 机检口径）。ctx 是
+// 本次 run 的上下文：停靠钩子随它感知取消（客户端断开 → 审批按取消收尾，与
+// channel 模式的 HandleAsk 同观感）。
+type ChatHitlSource = func(ctx context.Context) (adk.CheckPointStore, func(*askernel.HitlInterrupt) (*db.HitlResumeData, bool))
+
+// SetHitl wires the hitl_mode=eino chat half（P2）：fn 返回本次 run 的 checkpoint
+// store 与停靠钩子（store nil = channel 语义照旧）。每次 Chat 读取——开关对下一
+// 次会话生效。nil fn = 永远 channel。
+func (c *ChatAgent) SetHitl(fn ChatHitlSource) { c.hitlFn = fn }
 
 // chatWorkDirSpec returns a working-directory notice appended to every chat
 // agent's system prompt. Mirrors artifactSpec but without pentest-specific
@@ -129,15 +145,15 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃——system 分段在内核侧
 	// 拼成一条 system message，缓存交 provider 侧。
 	opts := askernel.Options{
-		Model:           acllm.BridgeModel(c.prov),
-		SystemPrompt:    system,
-		Tools:           tools,
-		DeferredTools:   def.Deferred,
-		UnlockSet:       def.Unlock,
-		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   c.proxyAddr,
-		WebFetchCACert:  c.proxyCACert,
+		Model:          acllm.BridgeModel(c.prov),
+		SystemPrompt:   system,
+		Tools:          tools,
+		DeferredTools:  def.Deferred,
+		UnlockSet:      def.Unlock,
+		PermissionMode: permission.ModeBypass,
+		EnableWebFetch: true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
+		WebFetchProxy:  c.proxyAddr,
+		WebFetchCACert: c.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       ws.Enabled,
@@ -157,8 +173,8 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		// large tool output spills to cmd-output/ under the session dir.
 		// 截断上限用 SDK 默认(tool.Capture 的 30000 字符)。
 		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
-		NonStreaming: c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:    c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
+		NonStreaming:  c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
+		MaxTokens:     c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
 	}
 	// 命中预算(步数)→ 收尾机制(runKernel 的 settlement 分支):输出一句总结。
 	// Prompt 与收尾轮数按本 agent key 后台可编辑
@@ -170,6 +186,15 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		hooks = wrapToolLog(c.guard.Hooks(), KindChat, "")
 	}
 	opts.Hooks = hooks // gate 的 PreToolUse/PostToolUse 半边（结构兼容 acllm.ToolHooks）
+	// P2 HITL（hitl_mode=eino）：armed 时 ask 走审批中断 + checkpoint（停靠在
+	// engine 注册表，与任务共用 pendingID 键）；store nil = channel 语义照旧。
+	var hitlPark func(*askernel.HitlInterrupt) (*db.HitlResumeData, bool)
+	if c.hitlFn != nil {
+		if store, park := c.hitlFn(ctx); store != nil {
+			opts.CheckpointStore = store
+			hitlPark = park
+		}
+	}
 	if c.tx != nil { // persist raw human↔AI conversation; one accumulating file per thread
 		opts.Transcript = c.tx
 		opts.SessionID = sessionID
@@ -193,6 +218,6 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 			r.Worker = agentKey
 			emit(r)
 		}
-	}, kernelDriver{stop: hooks, settle: settle})
+	}, kernelDriver{stop: hooks, settle: settle, park: hitlPark})
 	return text, err
 }

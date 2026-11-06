@@ -59,7 +59,7 @@ type Task struct {
 	SourceTaskIDs      []int64 `json:"source_task_ids,omitempty"`
 	CompanyIDs         []int64 `json:"company_ids,omitempty"`
 	ProjectID          *int64  `json:"project_id,omitempty"` // 归属项目(创建时定,不可变)
-	Status             string  `json:"status"` // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
+	Status             string  `json:"status"`               // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
 	// 任务级超时(见 docs/任务级超时与收尾设计.md)。DeadlineAt/FirstRunAt 为 unix 秒,0=未设/未运行。
 	TimeoutSeconds       int                    `json:"timeout_seconds"`
 	PlanHeartbeatSeconds int                    `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
@@ -268,8 +268,8 @@ type DeleteTaskResult struct {
 // Manager owns the PostgreSQL data source (asset graph + every task's exploration
 // graph + config) and the in-memory set of task handles.
 type Manager struct {
-	dir         string          // 数据根（工作空间浏览器根）；与 paths.Data 同值，读侧用 dirs()
-	paths       config.Paths    // 运行时目录唯一解析点（internal/config/paths.go）；NewManager 注入
+	dir         string       // 数据根（工作空间浏览器根）；与 paths.Data 同值，读侧用 dirs()
+	paths       config.Paths // 运行时目录唯一解析点（internal/config/paths.go）；NewManager 注入
 	pg          *pgdb.DB
 	assets      *pgdb.AssetStore
 	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
@@ -1182,6 +1182,13 @@ func taskFromPG(pt *pgdb.Task, m *Manager, store *pgdb.ExplorationStore) *Task {
 	g := guard.NewWithInterceptor(ic)
 	if m.egress != nil {
 		g.SetEgress(m.egress) // 出口审查：进程级共享指纹集合
+	}
+	// P2（hitl_mode=eino）：任务装配点读开关——ask 走审批中断而非 channel 阻塞
+	//（gate 半边由 runWorkerStep 的 CheckpointStore 同步装配；两半同源）。
+	if m.pg != nil {
+		if v, ok, _ := m.pg.GetSetting("hitl_mode"); ok && v == "eino" {
+			g.SetHitlMode(true)
+		}
 	}
 	if m.pg != nil && store != nil {
 		g.SetTarpit(newTarpitConfig(m.pg, store)) // tarpit 熔断(每任务计数,重启清零)

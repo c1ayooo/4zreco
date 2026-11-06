@@ -13,12 +13,17 @@ import (
 )
 
 // RecordRunnerCheckpoint persists one assembly fingerprint row (per primary
-// kernel run). checkpointID stays empty in P1 — P2 fills it when HITL
-// checkpoints land.
+// kernel run). P2 起 checkpointID 非空时与 SetCheckpoint 落在同一行（部分唯一
+// 索引上的 upsert：装配方拥有 fingerprint/session/agent 字段，SetCheckpoint 拥有
+// payload 字段——两个写者互不覆盖，先到者建行后到者补字段）。
 func (d *DB) RecordRunnerCheckpoint(ctx context.Context, sessionID, agentKey, checkpointID, fingerprint string) error {
 	_, err := d.ExecContext(ctx, `INSERT INTO runner_checkpoints
 (session_id, agent_key, checkpoint_id, fingerprint)
-VALUES ($1, $2, $3, $4)`, sessionID, agentKey, checkpointID, fingerprint)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (checkpoint_id) WHERE checkpoint_id <> '' DO UPDATE
+SET session_id=EXCLUDED.session_id, agent_key=EXCLUDED.agent_key, fingerprint=EXCLUDED.fingerprint,
+    created_at=now()`, // 重录即重盖时刻，保住 LatestRunnerCheckpoint 的「最新行」语义
+		sessionID, agentKey, checkpointID, fingerprint)
 	return err
 }
 

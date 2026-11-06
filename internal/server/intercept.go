@@ -11,11 +11,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cloudwego/eino/adk"
+
+	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/intercept"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/c1ayooo/4zreco/internal/llmrec"
-	"github.com/Autumn-27/norma/llm"
 )
 
 // judgeWorkerLane is the usage-ledger "worker" label for intercept fallback-judge
@@ -29,7 +33,27 @@ func (s *Server) chatGuard() *guard.Guard {
 	if s.m.egress != nil {
 		g.SetEgress(s.m.egress) // chat 对话同样过出口敏感指纹拦截
 	}
+	// P2（hitl_mode=eino）：chat 装配点读开关（与 ChatAgent 的 checkpoint 半边
+	// 同一装配时点生效）。
+	if s.engine != nil && s.engine.hitlEnabled() {
+		g.SetHitlMode(true)
+	}
 	return g
+}
+
+// chatHitlSource 是 ChatAgent.SetHitl 的接线（P2 hitl_mode=eino）：返回本 run 的
+// checkpoint store 与停靠钩子（engine 注册表与任务共用 pendingID 键）。hitl_mode
+// 非 eino 时 store=nil，chat 保持 channel 语义。放在本文件（server 面而非
+// engine*.go——R1 机检对 engine*.go 源文件 grep eino 引用）。
+func (s *Server) chatHitlSource() agent.ChatHitlSource {
+	return func(ctx context.Context) (adk.CheckPointStore, func(*askernel.HitlInterrupt) (*db.HitlResumeData, bool)) {
+		if s.engine == nil || s.m == nil || s.m.pg == nil || !s.engine.hitlEnabled() {
+			return nil, nil
+		}
+		return s.m.pg.AsCheckpointStore(), func(hitl *askernel.HitlInterrupt) (*db.HitlResumeData, bool) {
+			return s.engine.ChatHitlPark(ctx, hitl)
+		}
+	}
 }
 
 // wireInterceptReviewer installs the LLM fallback judge into the interceptor. The
@@ -484,7 +508,15 @@ func (s *Server) interceptDecide(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true})
+	// P2-3（hitl_mode=eino）：决定落库后按映射表投递签名恢复数据，停靠中的 run
+	// 从 checkpoint 精确续跑（该工具不重审）。resumed=false 时 requires_rerun=true
+	// ——P2-6 劣化路径：决定照常在库，运行侧按重跑收尾（可能重审），审批操作
+	// 不被运行时问题阻塞。
+	resumed, requiresRerun := false, true
+	if s.engine != nil {
+		resumed, requiresRerun = s.engine.DeliverHitlDecision(id, req.Decision == "allowed")
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "resumed": resumed, "requires_rerun": requiresRerun})
 }
 
 // auditVerify 是审计链校验端点（P0-3）：逐行重算审批决定哈希链，区分

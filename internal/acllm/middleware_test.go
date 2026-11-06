@@ -571,7 +571,7 @@ func TestGateDeferredHardGate(t *testing.T) {
 		},
 	})
 	g := NewToolGate([]actool.CoreTool{core}, ToolTemplate{}, 0).SetDeferred([]string{"mcp__a__locked"}, actool.NewUnlockSet())
-	text, isErr, _ := g.execOne(context.Background(), core, "call_1", json.RawMessage("{}"))
+	text, isErr, _, _ := g.execOne(context.Background(), core, "call_1", json.RawMessage("{}"))
 	if !isErr || executed {
 		t.Fatalf("locked tool executed: text=%q executed=%v", text, executed)
 	}
@@ -579,7 +579,7 @@ func TestGateDeferredHardGate(t *testing.T) {
 		t.Fatalf("hard gate text = %q", text)
 	}
 	g.unlock.Add("mcp__a__locked")
-	text, isErr, _ = g.execOne(context.Background(), core, "call_2", json.RawMessage("{}"))
+	text, isErr, _, _ = g.execOne(context.Background(), core, "call_2", json.RawMessage("{}"))
 	if isErr || text != "ran" || !executed {
 		t.Fatalf("unlocked tool did not run: text=%q isErr=%v executed=%v", text, isErr, executed)
 	}
@@ -640,7 +640,7 @@ func TestGateHooksRewriteAndBlock(t *testing.T) {
 
 	rewriter := &rewriteHooks{updated: []byte(`{"command":"curl http://rewritten"}`)}
 	gate := NewToolGate([]actool.CoreTool{core}, ToolTemplate{}, 0).SetHooks(rewriter)
-	text, isErr, _ := gate.execOne(context.Background(), core, "c1", json.RawMessage(`{"command":"curl http://original"}`))
+	text, isErr, _, _ := gate.execOne(context.Background(), core, "c1", json.RawMessage(`{"command":"curl http://original"}`))
 	if isErr || len(ran) != 1 || ran[0] != "curl http://rewritten" {
 		t.Fatalf("updated input not applied: text=%q ran=%v", text, ran)
 	}
@@ -648,7 +648,7 @@ func TestGateHooksRewriteAndBlock(t *testing.T) {
 	blocker := &rewriteHooks{blockMsg: "停"}
 	gate2 := NewToolGate([]actool.CoreTool{core}, ToolTemplate{}, 0).SetHooks(blocker)
 	ran = nil
-	text, isErr, _ = gate2.execOne(context.Background(), core, "c2", json.RawMessage(`{"command":"x"}`))
+	text, isErr, _, _ = gate2.execOne(context.Background(), core, "c2", json.RawMessage(`{"command":"x"}`))
 	if !isErr || len(ran) != 0 || !strings.Contains(text, "Blocked by hook: 停") {
 		t.Fatalf("block path broken: text=%q ran=%v", text, ran)
 	}
@@ -683,7 +683,7 @@ func TestGatePostToolUseSeesFinalText(t *testing.T) {
 	spy := &hooksSpy{}
 	gate := NewToolGate([]actool.CoreTool{core}, ToolTemplate{MaxOutputChars: 100}, 0).SetHooks(spy)
 
-	text, _, _ := gate.execOne(context.Background(), core, "c1", json.RawMessage(`{"command":"probe"}`))
+	text, _, _, _ := gate.execOne(context.Background(), core, "c1", json.RawMessage(`{"command":"probe"}`))
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 	if len(spy.post) != 1 || spy.post[0] != "Bash" {
@@ -717,7 +717,7 @@ func TestGatePostToolUsePayloadNormaShape(t *testing.T) {
 	})
 	spy := &hooksSpy{}
 	gate := NewToolGate([]actool.CoreTool{multi}, ToolTemplate{}, 0).SetHooks(spy)
-	text, _, _ := gate.execOne(context.Background(), multi, "c1", json.RawMessage("{}"))
+	text, _, _, _ := gate.execOne(context.Background(), multi, "c1", json.RawMessage("{}"))
 	spy.mu.Lock()
 	var payload string
 	if err := json.Unmarshal([]byte(spy.result[0]), &payload); err != nil {
@@ -741,7 +741,7 @@ func TestGatePostToolUsePayloadNormaShape(t *testing.T) {
 	})
 	spy2 := &hooksSpy{}
 	gate2 := NewToolGate([]actool.CoreTool{empty}, ToolTemplate{}, 0).SetHooks(spy2)
-	text2, isErr2, _ := gate2.execOne(context.Background(), empty, "c2", json.RawMessage("{}"))
+	text2, isErr2, _, _ := gate2.execOne(context.Background(), empty, "c2", json.RawMessage("{}"))
 	spy2.mu.Lock()
 	var payload2 string
 	if err := json.Unmarshal([]byte(spy2.result[0]), &payload2); err != nil {
@@ -766,7 +766,7 @@ func TestGateHooksOrderGuardAfterPermission(t *testing.T) {
 	gate := NewToolGate([]actool.CoreTool{core}, ToolTemplate{}, 0).
 		SetHooks(spy).
 		SetDenyRules([]string{"Bash"})
-	text, isErr, _ := gate.execOne(context.Background(), core, "c1", json.RawMessage(`{"command":"x"}`))
+	text, isErr, _, _ := gate.execOne(context.Background(), core, "c1", json.RawMessage(`{"command":"x"}`))
 	if !isErr || len(ran) != 0 {
 		t.Fatalf("deny rule not enforced: %q", text)
 	}

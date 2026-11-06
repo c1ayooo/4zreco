@@ -37,6 +37,7 @@ import (
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 
 	"github.com/c1ayooo/4zreco/internal/acllm"
@@ -80,17 +81,17 @@ type Options struct {
 	// 刀③ 移植). Nil = off.
 	Compaction *acllm.CompactionConfig
 
-	MaxTurns     int           // 0 = unlimited (adk 需要 >0，内核给 MaxInt32)
-	MaxDuration  time.Duration // run 墙钟（ctx deadline；4zrec 已接受取舍：模型与工具同受墙钟）
-	MaxTokens    int           // 0 = 不发上限
-	NonStreaming bool          // true → EnableStreaming=false，整轮非流式
-	MaxConcurrency int         // ≤0 = 10（norma harness 默认）
+	MaxTurns       int           // 0 = unlimited (adk 需要 >0，内核给 MaxInt32)
+	MaxDuration    time.Duration // run 墙钟（ctx deadline；4zrec 已接受取舍：模型与工具同受墙钟）
+	MaxTokens      int           // 0 = 不发上限
+	NonStreaming   bool          // true → EnableStreaming=false，整轮非流式
+	MaxConcurrency int           // ≤0 = 10（norma harness 默认）
 
-	WorkingDir        string
-	AgentID           string
-	ToolOutputDir     string
+	WorkingDir         string
+	AgentID            string
+	ToolOutputDir      string
 	MaxToolOutputChars int
-	BashEnv           []string
+	BashEnv            []string
 
 	// Todos, when non-nil, adds the TodoWrite tool backed by this store and
 	// arms the throttled todo reminder middleware (norma harness 同款).
@@ -122,6 +123,20 @@ type Options struct {
 	// <system-reminder> prepended to every request (today's date is always
 	// included). Per-request prepend, NOT a master message — norma parity.
 	SystemReminderFunc func() string
+
+	// CheckpointStore（P2，hitl_mode=eino 半边的总开关）：非 nil 时每个 run 以
+	// 稳定 checkpoint id 启动，工具审批中断（guard ask → gate StatefulInterrupt）
+	// 的图状态由 Runner 落此存储，run 以 termmap.AwaitingApproval 终态收场，
+	// 宿主决定后 ResumeApproval 续跑。nil = channel 语义照旧（无 checkpoint、
+	// ask 走 HandleAsk 阻塞）。实现是 internal/db 的同签名方法集（结构化满足
+	// adk.CheckPointStore，db 包无 eino import，R1 红线不动）。
+	CheckpointStore adk.CheckPointStore
+
+	// OnCheckpointID observes each run's checkpoint id when the checkpoint store
+	// is armed（装配点用它把装配指纹与 checkpoint id 绑在同一 runner_checkpoints
+	// 行上——P2-3 恢复校验按该行的 fingerprint 比对）。每个 run 开始时同步调用；
+	// nil = 不观测。
+	OnCheckpointID func(checkpointID string)
 
 	// OnWarn receives configuration warnings (misconfigurations worked around).
 	OnWarn func(string)

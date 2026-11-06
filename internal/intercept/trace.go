@@ -170,6 +170,11 @@ func auditFor(ctx context.Context, dec Decision, input []byte, status string) *d
 		a = db.InterceptAudit{Correlation: "unavailable", InputDigest: digestInput(input), CapturedAt: time.Now().UTC()}
 	}
 	a.InitialAction, a.InitialReason = dec.Action, dec.Message
+	// ask 等待的固化超时策略（P2：reaper 扫描器读 audit 快照，不再依赖
+	// 进程内 timer；channel 模式的 HandleAsk 仍用 dec 的活值，行为不变）。
+	a.AskTimeoutEnabled = dec.TimeoutEnabled
+	a.AskTimeoutSeconds = dec.TimeoutSeconds
+	a.AskTimeoutAction = dec.TimeoutAction
 	a.ModelFallback = dec.ModelFallback
 	a.ModelInput, a.ModelInputDigest = dec.ModelInput, dec.ModelInputDigest
 	a.RuleName, a.ConfigDigest, a.ProfileID = dec.RuleName, dec.ConfigDigest, dec.ProfileID

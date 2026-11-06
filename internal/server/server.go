@@ -1,11 +1,11 @@
 package server
 
 import (
-	"github.com/c1ayooo/4zreco/internal/config"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/c1ayooo/4zreco/internal/config"
 	"io"
 	"log"
 	"net"
@@ -298,6 +298,11 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 	s.restoreTaskRuntimes()
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
+	// P2 HITL reaper（方案 §4-P2 第 4 条）：per-ask goroutine timer 退役，进程级
+	// 扫描器负责超时兜底与孤儿清理（channel 模式的挂起无映射，扫描器自动跳过）。
+	if s.engine != nil {
+		s.engine.StartHitlReaper(s.ctx)
+	}
 	// 让特权安装助手跟上主程序版本：它装在 root 拥有的 /usr/local/bin，
 	// 主服务写不进去，只能由它自己换装——这里只负责发现版本不一致并通知。
 	s.StartHostdReconcile()
@@ -548,6 +553,9 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	s.chatAgent.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	s.chatAgent.SetWebSearch(s.m.WebSearchOpts())
 	s.chatAgent.SetGuard(s.chatGuard())
+	if s.engine != nil {
+		s.chatAgent.SetHitl(s.chatHitlSource()) // P2 hitl_mode=eino 的 chat 半边
+	}
 	s.chatAgent.SetNonStreaming(nonStreamingResolver(cfg))
 	s.chatAgent.SetMaxTokens(maxTokensResolver(cfg))
 	s.chatAgent.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(每 run 读)
@@ -689,6 +697,9 @@ func (s *Server) chatAgentForProfile(id int64) *agent.ChatAgent {
 	ca.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	ca.SetWebSearch(s.m.WebSearchOpts())
 	ca.SetGuard(s.chatGuard())
+	if s.engine != nil {
+		ca.SetHitl(s.chatHitlSource()) // P2 hitl_mode=eino 的 chat 半边
+	}
 	ca.SetNonStreaming(nonStreamingResolver(cfg))
 	ca.SetMaxTokens(maxTokensResolver(cfg))
 	ca.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(每 run 读)
@@ -3544,7 +3555,7 @@ func (s *Server) settingsPayload() map[string]any {
 		"intent_budget_enabled": ib.Enabled,
 		"intent_budget_tokens":  ib.Tokens,
 		// 证据逐字回验（v0.4.29）：off|warn|block，默认 warn。
-		"finding_evidence_verify":    evidenceVerifyModeFromPG(s.m.pg).String(),
+		"finding_evidence_verify":     evidenceVerifyModeFromPG(s.m.pg).String(),
 		"tool_output_injection_guard": injectionGuardFromPG(s.m.pg),
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
@@ -3642,8 +3653,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		IntentBudgetEnabled *bool `json:"intent_budget_enabled"`
 		IntentBudgetTokens  *int  `json:"intent_budget_tokens"`
 		// 证据逐字回验（v0.4.29）：off|warn|block；工具输出注入告警开关。
-		EvidenceVerify     *string `json:"finding_evidence_verify"`
-		InjectionGuard     *bool   `json:"tool_output_injection_guard"`
+		EvidenceVerify *string `json:"finding_evidence_verify"`
+		InjectionGuard *bool   `json:"tool_output_injection_guard"`
 		// LLM 轮询(故障转移)开关 + 「绑定配置失败也兜底回轮询链」开关。两者都需要
 		// 重建 provider 链才生效，走下面的 changed → applyLLM 路径。
 		LLMPoolEnabled      *bool `json:"llm_pool_enabled"`

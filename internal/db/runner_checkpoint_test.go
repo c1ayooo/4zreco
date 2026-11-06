@@ -7,7 +7,9 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestRunnerCheckpointRoundTrip(t *testing.T) {
@@ -18,17 +20,22 @@ func TestRunnerCheckpointRoundTrip(t *testing.T) {
 	defer d.Close()
 	ctx := context.Background()
 
-	if err := d.RecordRunnerCheckpoint(ctx, "exp9-worker-i3", "worker", "", "fp-abc"); err != nil {
+	// 运行级唯一 id：共享测试库多轮累计（AGENTS.md §1 固定名 fixture 教训），
+	// 且 P2 的 upsert 会让旧 checkpoint 行复用旧 id/旧时刻——固定 id 会与历史行
+	// 撞「最新一条」的判定。
+	sid := fmt.Sprintf("exp9-worker-i3-%d", time.Now().UnixNano())
+	ck1 := fmt.Sprintf("ckpt-1-%d", time.Now().UnixNano())
+	if err := d.RecordRunnerCheckpoint(ctx, sid, "worker", "", "fp-abc"); err != nil {
 		t.Fatalf("RecordRunnerCheckpoint: %v", err)
 	}
-	if err := d.RecordRunnerCheckpoint(ctx, "exp9-worker-i3", "worker", "ckpt-1", "fp-def"); err != nil {
+	if err := d.RecordRunnerCheckpoint(ctx, sid, "worker", ck1, "fp-def"); err != nil {
 		t.Fatalf("RecordRunnerCheckpoint: %v", err)
 	}
 	if err := d.RecordRunnerCheckpoint(ctx, "exp9-worker-i9", "planner", "", "fp-other"); err != nil {
 		t.Fatalf("RecordRunnerCheckpoint: %v", err)
 	}
 
-	fp, err := d.LatestRunnerCheckpoint(ctx, "exp9-worker-i3")
+	fp, err := d.LatestRunnerCheckpoint(ctx, sid)
 	if err != nil {
 		t.Fatalf("LatestRunnerCheckpoint: %v", err)
 	}
@@ -37,7 +44,7 @@ func TestRunnerCheckpointRoundTrip(t *testing.T) {
 	}
 	// checkpointID 只在非空时落库（P1 空、P2 补）。
 	var ck string
-	if err := d.QueryRowContext(ctx, `SELECT checkpoint_id FROM runner_checkpoints WHERE fingerprint='fp-abc'`).Scan(&ck); err != nil {
+	if err := d.QueryRowContext(ctx, `SELECT checkpoint_id FROM runner_checkpoints WHERE fingerprint='fp-abc' ORDER BY id DESC LIMIT 1`).Scan(&ck); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	if ck != "" {

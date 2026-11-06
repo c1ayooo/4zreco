@@ -1753,8 +1753,11 @@ ALTER TABLE assets ADD COLUMN IF NOT EXISTS honeypot_evidence TEXT NOT NULL DEFA
 -- ── runner 装配指纹（刀④，docs/Eino深度接入方案-2026-11-05.md §4-P1 第 8 条）──
 -- 每次内核 run 装配写一行：fingerprint = sha256(agentKey, promptVersion,
 -- toolset_snapshot_hash, unlock_seed, mcp_connection_digest, model_profile)。
--- P2 HITL 恢复时按它校验：不匹配则不 resume（P2-6 回退）。本表 P1 只写不读——
--- 先把「中断时的工具面」留痕，恢复语义随 P2 接续。
+-- P2 HITL 恢复时按它校验：不匹配则不 resume（P2-6 回退）。
+-- P2（§4-P2 第 1 条）起本表兼任 eino adk.CheckPointStore 的载体：payload bytea
+-- 存 Runner 的 gob 快照（仅中断时写；Set 用 INSERT … ON CONFLICT 复写同一
+-- checkpoint id 支持 re-interrupt），version 标记消费方格式版本（升级不兼容即
+-- 回退），payload 上限由 CHECK 约束兜底（与 db.CheckpointPayloadLimit 同值）。
 CREATE TABLE IF NOT EXISTS runner_checkpoints (
     id            BIGSERIAL PRIMARY KEY,
     session_id    TEXT NOT NULL,
@@ -1765,6 +1768,40 @@ CREATE TABLE IF NOT EXISTS runner_checkpoints (
 );
 CREATE INDEX IF NOT EXISTS idx_runner_checkpoints_session
     ON runner_checkpoints(session_id, created_at DESC);
+-- P2 加列（幂等）：checkpoint 载荷 + 版本 + 任务归属 + 复写时刻。
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS payload BYTEA;
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 0;
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS task_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- checkpoint 行的唯一键：装配留痕行（checkpoint_id=''）不参与；ON CONFLICT 目标。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_runner_checkpoints_checkpoint_id
+    ON runner_checkpoints(checkpoint_id) WHERE checkpoint_id <> '';
+-- payload 上限（§6 checkpoint 体积风险兜底）：Go 侧 ErrCheckpointTooLarge 同值双保险。
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='runner_checkpoints_payload_limit') THEN
+        ALTER TABLE runner_checkpoints ADD CONSTRAINT runner_checkpoints_payload_limit
+            CHECK (payload IS NULL OR octet_length(payload) <= 33554432);
+    END IF;
+END $$;
+
+-- ── P2 HITL 映射表（§4-P2 第 1 条）────────────────────────────────────────
+-- 审批↔checkpoint↔中断点的恢复钥匙：人工决定后据此精确 ResumeWithParams。
+-- 进程重启后内存态全失，这张表是唯一的恢复钥匙；决定投递/重领续跑消费后
+-- 即删（一次性钥匙，防同一决定重放二次执行）。不在 append-only 三表之列——
+-- 它是运行态钥匙，不是审批历史。
+CREATE TABLE IF NOT EXISTS hitl_pending_checkpoint (
+    pending_id    BIGINT PRIMARY KEY REFERENCES intercept_pending(id),
+    checkpoint_id TEXT NOT NULL,
+    interrupt_id  TEXT NOT NULL,
+    task_id       TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_hitl_pending_checkpoint_task
+    ON hitl_pending_checkpoint(task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_hitl_pending_checkpoint_checkpoint
+    ON hitl_pending_checkpoint(checkpoint_id);
 
 -- ── 空轮次续跑计数（刀④，§3.1 路线 A）──────────────────────────────────
 -- 空转回合（只有思考、无正文无工具）的续跑指令注入预算按「每条意图总量」计，

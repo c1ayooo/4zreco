@@ -402,7 +402,7 @@ const (
 	// 长命令——几百到上千字符的 shell 脚本——明显更久），而且正文为空时会
 	// 升预算重试（32768 → 65536），重试要挤在同一个超时窗口内。时间给短了
 	// 就会把「模型其实能裁决」误判成超时失败。
-	defaultJudgeTimeoutSecs = 180
+	defaultJudgeTimeoutSecs      = 180
 	defaultJudgeFailAction       = "ask"
 	defaultJudgeAskTimeoutSecs   = 180
 	defaultJudgeAskTimeoutAction = "allow"
@@ -873,6 +873,77 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		_ = i.db.CompleteIntercept(pendingID, audit.RunID, audit.ToolUseID, "not_executed", "执行前工作已取消", false)
 		return false
 	}
+}
+
+// PersistAsk 是 HandleAsk 拆两段（方案 §4-P2 第 2 条）的落库段：INSERT
+// intercept_pending + 审批上下文绑定 + 会话/任务卡片，**不等待**。等待段在
+// eino 模式下由 gate 的 StatefulInterrupt + checkpoint 承接（运行侧不再阻塞），
+// channel 模式继续走 HandleAsk（原样保留，含 channel 注册与超时 timer）。
+// 返回的 HitlAskInfo 是中断载荷：{pending_id, tool, kind, input_digest,
+// 裁决依据}——不带工具入参明文（体积与敏感度都不可控）。
+//
+// nil db（server 尚未接上数据库）：无法落库也就没有可决定的对象，eino 模式
+// 下按拒绝收口（调用方 fail-closed），与 HandleAsk 同语义。
+func (i *Interceptor) PersistAsk(ctx context.Context, convID int64, dec Decision, toolName string, input []byte) (*db.HitlAskInfo, error) {
+	if i == nil || i.db == nil {
+		return nil, errors.New("intercept: 无数据库，无法落审批请求")
+	}
+	ruleID := dec.RuleID
+	taskID, agentName := taskInfoFromCtx(ctx)
+	taskEmit := taskEmitFromCtx(ctx)
+
+	audit := auditFor(ctx, dec, input, "pending")
+	pendingID, err := i.db.CreateInterceptPending(ruleID, convID, taskID, agentName, toolName, input, dec.Message, dec.Kind, audit)
+	if err != nil {
+		return nil, err
+	}
+	i.bindResult(ctx, pendingID, audit)
+
+	detail, _ := json.Marshal(map[string]any{
+		"pending_id": pendingID,
+		"tool":       toolName,
+		"input":      json.RawMessage(input),
+	})
+	activity := db.Activity{
+		Kind:    "intercept_request",
+		Summary: fmt.Sprintf("工具 %s 请求审批 (#%d)", toolName, pendingID),
+		Detail:  string(detail),
+	}
+	if convID != 0 {
+		_, _ = i.db.AppendConvActivity(convID, activity)
+	} else if taskEmit != nil {
+		taskEmit(activity)
+	}
+	return &db.HitlAskInfo{
+		PendingID:   pendingID,
+		Tool:        toolName,
+		Kind:        dec.Kind,
+		InputDigest: audit.InputDigest,
+		Reason:      dec.Message,
+	}, nil
+}
+
+// VerifyHitlResumeCall 核对一次恢复重入（P2-3 验签，伪造 resume 不可放行）：
+// 签名与库中决定行一致，且该决定确实属于**本次工具调用**——pending 的工具名
+// 与输入摘要都要对上，防止拿 A 调用的决定放行 B 调用。
+func (i *Interceptor) VerifyHitlResumeCall(r *db.HitlResumeData, toolName string, input []byte) bool {
+	if i == nil || i.db == nil || r == nil {
+		return false
+	}
+	if !i.db.VerifyHitlResume(r) {
+		return false
+	}
+	detail, err := i.db.GetInterceptDetail(r.PendingID)
+	if err != nil || detail == nil {
+		return false
+	}
+	if detail.ToolName != toolName {
+		return false
+	}
+	if detail.Audit == nil || detail.Audit.InputDigest == "" {
+		return false
+	}
+	return detail.Audit.InputDigest == digestInput(input)
 }
 
 var ErrAlreadyDecided = errors.New("审批已处理或不存在，请刷新记录")

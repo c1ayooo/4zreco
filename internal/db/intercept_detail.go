@@ -39,15 +39,20 @@ type InterceptAudit struct {
 	ModelInputDigest string                  `json:"model_input_digest,omitempty"`
 	InitialAction    string                  `json:"initial_action"`
 	InitialReason    string                  `json:"initial_reason"`
-	EffectiveAction  string                  `json:"effective_action,omitempty"`
-	DecisionReason   string                  `json:"decision_reason,omitempty"`
-	RuleName         string                  `json:"rule_name,omitempty"`
-	ConfigDigest     string                  `json:"config_digest,omitempty"`
-	ProfileID        int64                   `json:"profile_id,omitempty"`
-	ExecutionStatus  string                  `json:"execution_status"`
-	Output           string                  `json:"output,omitempty"`
-	OutputTruncated  bool                    `json:"output_truncated,omitempty"`
-	ExecutionEndedAt *time.Time              `json:"execution_ended_at,omitempty"`
+	// Ask 审批等待的固化策略（P2 reaper 依据；ask 创建时写死，永不更新）：
+	// TimeoutEnabled/Seconds/Action 与规则或 judge 配置在 ask 时刻的取值。
+	AskTimeoutEnabled bool       `json:"ask_timeout_enabled,omitempty"`
+	AskTimeoutSeconds int        `json:"ask_timeout_seconds,omitempty"`
+	AskTimeoutAction  string     `json:"ask_timeout_action,omitempty"`
+	EffectiveAction   string     `json:"effective_action,omitempty"`
+	DecisionReason    string     `json:"decision_reason,omitempty"`
+	RuleName          string     `json:"rule_name,omitempty"`
+	ConfigDigest      string     `json:"config_digest,omitempty"`
+	ProfileID         int64      `json:"profile_id,omitempty"`
+	ExecutionStatus   string     `json:"execution_status"`
+	Output            string     `json:"output,omitempty"`
+	OutputTruncated   bool       `json:"output_truncated,omitempty"`
+	ExecutionEndedAt  *time.Time `json:"execution_ended_at,omitempty"`
 }
 
 type InterceptDetail struct {

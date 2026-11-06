@@ -127,7 +127,10 @@ func (s *Session) driveAgent(ctx context.Context, disabledTools []string, maxTur
 
 	gate := acllm.NewToolGate(toolSet, s.tcTpl, s.opts.MaxConcurrency).
 		SetPermissionMode(s.opts.PermissionMode).
-		SetHooks(s.opts.Hooks)
+		SetHooks(s.opts.Hooks).
+		// P2：checkpoint store armed ⇔ gate 的 ask 走审批中断（两半同源，
+		// host 只装配一个开关）。
+		SetHitl(s.opts.CheckpointStore != nil)
 	if len(s.opts.DeferredTools) > 0 {
 		gate.SetDeferred(s.opts.DeferredTools, s.unlock)
 	}
@@ -212,8 +215,34 @@ func (s *Session) driveAgent(ctx context.Context, disabledTools []string, maxTur
 	if err != nil {
 		return 0, false, err, true
 	}
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: ag, EnableStreaming: !s.opts.NonStreaming})
-	turns, runErr, drained := s.drainEvents(runner.Run(ctx, nil), rs, yield)
+	// P2（方案 §4-P2 第 1 条）：checkpoint store 非 nil = HITL 半边 armed。
+	// 普通 run 也带 checkpoint id（Runner 只在中断时落库，正常完成零开销）——
+	// re-interrupt 与同轮聚合都落在同一 id 上（Set 的 ON CONFLICT 复写）。
+	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: ag, EnableStreaming: !s.opts.NonStreaming,
+		CheckPointStore: s.opts.CheckpointStore})
+	if res := s.takeResume(); res != nil {
+		// HITL 恢复：决定数据按 interrupt id 定点投递（官方 Targets 语义；
+		// 未命中的兄弟中断由 gate 以原状态 re-interrupt）。恢复 run 不带
+		// WithCheckPointID——Resume 路径由 Runner 自行从 store 读 checkpoint。
+		iter, rerr := runner.ResumeWithParams(ctx, res.checkpointID, &adk.ResumeParams{
+			Targets: map[string]any{res.interruptID: res.resume},
+		})
+		if rerr != nil {
+			return 0, false, rerr, true
+		}
+		turns, runErr, drained := s.drainEvents(iter, rs, yield, res.checkpointID)
+		return turns, rs.toolsPhaseCancel(), runErr, drained
+	}
+	cpID := ""
+	if s.opts.CheckpointStore != nil {
+		cpID = newCheckpointID(s.sessionID)
+		if s.opts.OnCheckpointID != nil {
+			s.opts.OnCheckpointID(cpID)
+		}
+		turns, runErr, drained := s.drainEvents(runner.Run(ctx, nil, adk.WithCheckPointID(cpID)), rs, yield, cpID)
+		return turns, rs.toolsPhaseCancel(), runErr, drained
+	}
+	turns, runErr, drained := s.drainEvents(runner.Run(ctx, nil), rs, yield, cpID)
 	return turns, rs.toolsPhaseCancel(), runErr, drained
 }
 
@@ -246,8 +275,9 @@ func unknownToolResult() func(ctx context.Context, name, input string) (string, 
 // tool_result and usage events to the consumer as harness.Events. DTO writes
 // do NOT happen here (the view middleware captures assistants and the gate's
 // OnResult persists tool results synchronously with the graph) — except for
-// unknown-tool results, which the gate never saw.
-func (s *Session) drainEvents(eventIter *adk.AsyncIterator[*adk.AgentEvent], rs *runState, yield func(harnessEvent, error) bool) (int, error, bool) {
+// unknown-tool results, which the gate never saw. cpID 是本次 run 的 checkpoint
+// id（中断事件捕获用；空 = 未 armed）。
+func (s *Session) drainEvents(eventIter *adk.AsyncIterator[*adk.AgentEvent], rs *runState, yield func(harnessEvent, error) bool, cpID string) (int, error, bool) {
 	var runErr error
 	for {
 		ev, ok := eventIter.Next()
@@ -257,6 +287,13 @@ func (s *Session) drainEvents(eventIter *adk.AsyncIterator[*adk.AgentEvent], rs 
 		}
 		if ev.Err != nil {
 			runErr = ev.Err // last error wins (4zrec spike drain parity)
+			continue
+		}
+		if ev.Action != nil && ev.Action.Interrupted != nil {
+			// P2：工具审批中断——事件流随后闭合。记录首个可归属的中断上下文
+			//（聚合中断在恢复侧按 interrupt id 逐个投递决定；未命中的 re-interrupt
+			// 会再次浮出，captureInterrupt 只留首个）。
+			s.captureInterrupt(hitlFromEvent(ev, cpID))
 			continue
 		}
 		if ev.Output == nil || ev.Output.MessageOutput == nil {

@@ -66,6 +66,12 @@ const (
 	// Settlement：4zreco 引擎自有的收尾终态——norma v0.4.4 枚举只有 11 个值，
 	// 第 12 个是宿主侧扩展（engine 收尾路径专用，方案表注明「不来自 ADK」）。
 	Settlement = harness.TerminalReason("settlement")
+	// AwaitingApproval：P2 第 13 个值（§4-P2 第 2/3 条）——工具审批中断终态。
+	// Run 的 checkpoint 已由 Runner 落 Options.CheckpointStore，事件流以
+	// Interrupted 收尾；宿主停靠等人工决定后显式 ResumeApproval 续跑。不来自
+	// ADK 错误映射（内核在中断事件上直接给定），engine 状态机不消费它（park
+	// 循环在 runKernel 内闭合）。
+	AwaitingApproval = harness.TerminalReason("awaiting_approval")
 )
 
 // ErrHookStopped marks "a middleware actively terminated the run" — wrap it from

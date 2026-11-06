@@ -94,9 +94,15 @@ norma→eino（cloudwego/eino ADK Runner）迁移进行中，方案唯一权威�
 分期依次接续：**P0 审批不可变**（不依赖 eino、独立有价值：审批三表 append-only + HMAC 哈希链 +
 `v_intercept` 视图 + decided_by，随本轮工作区改动引入）→ **P1 内核迁移**（单开 `feat/eino-migration`
 分支长跑，master 正常演进、定期 rebase；eino 依赖到该分支才进 go.mod，当前 master 上没有）→
-**P2 HITL**（审批走 eino Interrupt/checkpoint/Resume，引入 `hitl_mode: channel|eino` 双轨开关灰度，
-默认 channel，两模式共用 P0 决定表）→ **P3 前端** → **P4 删 norma**。改到哪一期就按哪一期描述行为，
-不要在 master 上预设 eino 已存在。
+**P2 HITL**（已落地：审批走 eino Interrupt/checkpoint/Resume；`hitl_mode: channel|eino` 双轨
+settings 开关灰度、默认 channel，两模式共用 P0 决定表。落点：PG CheckPointStore/映射表/签名
+在 `internal/db/hitl.go`（db 无 eino import，adk 接口按同签名结构化满足，R1 不动）；ask 中断
+挂点在 `internal/acllm/hitl.go`+`toolgate.go`（guard 经 ctx 信号交挂起，不感知 eino，R4 不动）；
+内核 checkpoint/续跑在 `internal/kernel/askernel/hitl.go`（`ResumeApproval`/`ResumeForApproval`/
+`StartPlanned`，新终态 `termmap.AwaitingApproval`）；停靠注册表/decide 投递/reaper/暂停=park/
+重领重建在 `internal/server/engine_hitl.go`。注意 engine*.go 不得出现 eino 引用——chat 半边的
+adk 类型接线在 server/intercept.go 的 `chatHitlSource`）→ **P3 前端** → **P4 删 norma**。
+改到哪一期就按哪一期描述行为，不要在 master 上预设 eino 已存在。
 
 **红线 R1-R4（不可协商；R1/R2/R4 + 版本锁有机检 = §1 的 `bash scripts/check-eino-boundary.sh`，
 脚本规格见方案 §8.2；R3 无机检，靠 code review 把关）**：
