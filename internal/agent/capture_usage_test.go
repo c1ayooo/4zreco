@@ -6,10 +6,10 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 type captureUsageProvider struct {

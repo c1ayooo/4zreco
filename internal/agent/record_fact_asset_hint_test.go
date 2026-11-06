@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/db"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // record_fact 传了不存在的 asset id 时：事实必须写进去，且模型必须被告知

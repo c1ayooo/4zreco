@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // TestValidateFindingEvidence v0.4.5 证据门槛：critical/high 必须达到最低篇幅，

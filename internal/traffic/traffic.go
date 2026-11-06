@@ -31,8 +31,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/c1ayooo/4zreco/internal/db"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	mproxy "github.com/lqqyt2423/go-mitmproxy/proxy"
 	_ "modernc.org/sqlite"
 )
@@ -327,7 +327,6 @@ func (t *Traffic) ProxyAddr() string {
 func (t *Traffic) ProxyPoolEnabled() bool {
 	return t.pool.Load() != nil
 }
-
 
 // SetUpstreamProxy points every captured request at a global egress proxy
 // (http/https/socks5, optional user:pass in the URL). An empty raw string clears

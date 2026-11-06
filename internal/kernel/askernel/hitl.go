@@ -17,7 +17,7 @@ import (
 	"iter"
 	"time"
 
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/cloudwego/eino/adk"
 
 	"github.com/c1ayooo/4zreco/internal/db"

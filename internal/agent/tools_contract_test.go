@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 
 	"github.com/c1ayooo/4zreco/internal/intercept"
 )

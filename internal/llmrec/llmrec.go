@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreco/internal/db"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 )
 
 type taskIDContextKey struct{}
@@ -173,8 +173,8 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 			if err != nil {
 				status = "error"
 			}
-		// Lightweight metering row — always written.
-		r.recordUsage(taskID, expID, worker, intentID, usage, int(time.Since(start).Milliseconds()), status)
+			// Lightweight metering row — always written.
+			r.recordUsage(taskID, expID, worker, intentID, usage, int(time.Since(start).Milliseconds()), status)
 			// Heavy trace row — only when body recording is on.
 			if recordBodies {
 				r.record(req, session, taskID, worker, reqBody, capt, start, textBuf.String(), thinkingBuf.String(), usage, stopReason, err)

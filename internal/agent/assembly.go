@@ -8,7 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // DeferredInfo carries the deferred-tools wiring an agent needs to build its
@@ -25,8 +25,8 @@ type DeferredInfo struct {
 	// ——server 装配的 globalNames 快照），装配指纹 unlock_seed 分量的真实来源
 	// （评审第 1 轮 #1：此前该分量恒空串）。actool.UnlockSet 无枚举 API，种子经
 	// 本字段显式携带；skill 加载后的 Add() 不改种子——指纹只管「装配时刻」。
-	UnlockSeed   []string
-	UnlockSkill  func(skillName string)
+	UnlockSeed  []string
+	UnlockSkill func(skillName string)
 }
 
 // ToolAugment, if set, returns the EXTRA tools an agent should see beyond its

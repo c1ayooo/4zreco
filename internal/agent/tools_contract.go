@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 
 	"github.com/c1ayooo/4zreco/internal/intercept"
 )
@@ -180,14 +180,15 @@ func WriteContractScript(dir string) (string, error) {
 // contractScriptSource 是契约解析脚本的源码（纯标准库，无第三方依赖）。
 //
 // 输出结构：
-//   {
-//     "contract": "https://t/openapi.json",   // 命中的契约文件（没找到则空）
-//     "found": true/false,
-//     "api_count": 12,                          // 接口总数
-//     "endpoints": [ {path, method, summary, auth_required, params:[{name,in,required}]} ],
-//     "auth_endpoints": [ ... ],                // 需要鉴权的那批（越权挖掘先看这批）
-//     "auth_schemes": ["bearer","apiKey"],     // 契约里声明的鉴权方式
-//   }
+//
+//	{
+//	  "contract": "https://t/openapi.json",   // 命中的契约文件（没找到则空）
+//	  "found": true/false,
+//	  "api_count": 12,                          // 接口总数
+//	  "endpoints": [ {path, method, summary, auth_required, params:[{name,in,required}]} ],
+//	  "auth_endpoints": [ ... ],                // 需要鉴权的那批（越权挖掘先看这批）
+//	  "auth_schemes": ["bearer","apiKey"],     // 契约里声明的鉴权方式
+//	}
 //
 // 为什么把「需要鉴权的接口」单列：越权/未授权挖掘的入口就是这批接口。
 // 混在几百个接口里，模型大概率只看前几个。

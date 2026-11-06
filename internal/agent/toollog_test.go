@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 // spyHook 记录转发给 inner 的调用，用来验证日志层是【旁路】而不是拦截层。

@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+### eino 内核迁移收官（P0–P4）——内核切换 eino Runner，norma 退役，hitl_mode 双轨
+
+按 `docs/Eino深度接入方案-2026-11-05.md` 分期落地，feat/eino-migration 分支：
+
+- **P0 审批不可变**：审批三表 append-only + HMAC 哈希链 + `v_intercept` 视图 +
+  `decided_by`；`GET /api/audit/verify` 审计链校验。决定行不可改写（存储层保证），
+  历史行落在锚点之前不参与逐行校验。
+- **P1 内核迁移**（四刀）：`internal/acllm` 转换层（schema.Message ↔ 落盘 DTO 双向，
+  落盘 JSON 形状冻结）；工具桥接（CoreTool 进 eino ToolsNode、八字段 ToolContext、
+  capOutput、读写分流门）；中间件装配（压缩三挂点、view/injection/deferred/gate
+  四件套、guard 链与审计尾钩）；`internal/kernel/termmap` 终态映射独立成包（12+1
+  终态，含中断给定的 `awaiting_approval`）、空转续跑上移、装配指纹落库、主循环切
+  eino 内核（`internal/kernel/askernel`）。
+- **P2 HITL**：审批走 eino Interrupt/checkpoint/Resume。settings 键 `hitl_mode`
+  双轨灰度（`eino` | `channel`，**缺省 channel**），两模式共用 P0 决定表；PG
+  CheckPointStore/映射表/签名在 `internal/db/hitl.go`；ask 中断挂点
+  `internal/acllm/hitl.go`+`toolgate.go`；停靠 park/reaper/decide 投递在
+  `internal/server/engine_hitl.go`。eino 模式下审批等待 parked 于 checkpoint，
+  `kill -9` 重启后 decide 可从中断点续跑不重审；指纹不匹配/载荷损坏走回退语义
+  （决定照常落库、运行侧按 denied 收尾、界面「需重跑」）。无热切：armed
+  checkpoint store ⇔ gate SetHitl ⇔ guard hitlMode 三半同源（任务启动时读取）。
+- **P3 前端**：审批中心 kind 筛选、已挂起徽标、decide 续跑回执（resumed /
+  requires_rerun）、审计链校验入口。
+- **P4 删 norma**：go.mod 移除 norma 依赖与 replace；仍在用的类型/运行时基座按
+  v0.4.4 非测试代码逐字 fork 内化 `internal/norma/`（llm/tool/permission/
+  transcript/harness/skill/hook/mcp，Apache-2.0，冻结不扩展）；`agentcore`/
+  `noaadapter` 随退役删除（noa 实验功能退化为告警+内置 compaction 回退）；
+  `compaction.EstimateTokens` 本地化进 sidequestion；压缩差分测试改 golden 基线
+  （`internal/acllm/testdata/compaction_port/`，快照在 norma 仍在依赖内时经
+  「port == norma 逐字节一致」差分生成）；连接测试改直调 provider 单发完成
+  （按 profile 真实收发模式选 Complete/Stream）。全仓 grep norma 模块路径归零。
+- **配套**：`scripts/check-eino-boundary.sh` 版本锁激活并随 P4 通过（eino 精确
+  v0.9.21）；`docs/04-审批与拦截.md` 终稿（审批链路换 checkpoint/Interrupt 版）。
+
 ## [0.3.16] - 2026-11-04
 
 > 本仓库首个独立发版 tag（自原作者已删除仓库基线 v0.3.15 接手）。除下述功能外，
@@ -1558,7 +1592,7 @@ done 18 / exhausted 99 / blocked 82——**exhausted 是 done 的 5.5 倍**，�
 
 ### 修复的问题
 
-- **norma 依赖解耦**：agent 全部基建此前单点依赖 `github.com/Autumn-27/norma`,该路径曾随原作者删库而不可解析。现 go.mod 以 `replace` 重定向到维护者 fork（`github.com/chu0119/Norma`,内容 = 上游 v0.4.4）,顺带升级 v0.3.15 所用的 v0.4.3 → v0.4.4。
+- **norma 依赖解耦**：agent 全部基建此前单点依赖 norma 的上游模块路径,该路径曾随原作者删库而不可解析。现 go.mod 以 `replace` 重定向到维护者 fork（内容 = 上游 v0.4.4）,顺带升级 v0.3.15 所用的 v0.4.3 → v0.4.4。
 - **llmrec 测试依赖服务启动副作用**：`llm_usage` 表由服务启动路径确保存在,测试在干净库上因缺表失败。测试改为自建,不再依赖运行时副作用。
 - **删除断言已移除 API 的僵尸测试**：`TestGraphOverviewExpandsAssociatedCompanyScope` 断言的 `coverage.scope` 键在 graph_overview 上下文瘦身重构时已从生产代码移除,测试自上游 v0.3.6 起未同步,CI 必挂。
 

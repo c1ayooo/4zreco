@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strconv"
 
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/db"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // ArtifactRecorder 由 host（server）实现：校验路径边界与限额、复制到任务附件

@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"github.com/c1ayooo/4zreco/internal/acllm"
-	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
-	"github.com/Autumn-27/norma/llm"
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
 	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 )
 
 // goalsDefaultTmpl is the built-in EDITABLE body (段 [A]) of the goals-decomposer

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/norma/skill"
+	"github.com/c1ayooo/4zreco/internal/norma/skill"
 )
 
 // 内置 skill 必须能被 norma 的 loader 正确加载。

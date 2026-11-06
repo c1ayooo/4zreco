@@ -27,7 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 const httpProbeScript = `#!/usr/bin/env bash

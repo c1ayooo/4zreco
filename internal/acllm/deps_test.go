@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 	eclaude "github.com/cloudwego/eino-ext/components/model/claude"
 	eopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"

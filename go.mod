@@ -3,13 +3,14 @@ module github.com/c1ayooo/4zreco
 go 1.26.3
 
 require (
-	github.com/Autumn-27/norma v0.4.3
 	github.com/cloudwego/eino v0.9.21
 	github.com/cloudwego/eino-ext/components/model/claude v0.1.26
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
+	github.com/creack/pty v1.1.24
 	github.com/eino-contrib/jsonschema v1.0.3
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
+	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.18.6
 	github.com/lqqyt2423/go-mitmproxy v1.9.2
@@ -51,7 +52,6 @@ require (
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.17 // indirect
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/evanphx/json-patch v0.5.2 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -65,7 +65,6 @@ require (
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -127,7 +126,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-// norma 为本项目核心 agent 基建，原上游 github.com/Autumn-27/norma 曾发生仓库删除。
-// 将解析重定向到维护者 fork（内容 = 上游 v0.4.4，fork 内 module 声明保持原路径），彻底解耦单点依赖。
-replace github.com/Autumn-27/norma => github.com/chu0119/Norma v0.4.4

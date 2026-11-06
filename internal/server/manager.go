@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/config"
 	pgdb "github.com/c1ayooo/4zreco/internal/db"
@@ -24,6 +23,7 @@ import (
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/honeydetect"
 	"github.com/c1ayooo/4zreco/internal/intercept"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/traffic"
 	"github.com/c1ayooo/4zreco/internal/vulnintel"
 )

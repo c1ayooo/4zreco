@@ -6,8 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/norma/compaction"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 type Exchange struct {
@@ -41,7 +40,7 @@ var ErrContextBudget = errors.New("旁路上下文压缩后仍超过模型预算
 // safety factor. Include system/schema and framing costs too; JSON characters
 // are not tokens (and marshaling HTML can add many non-semantic escapes).
 func EstimateInputTokens(req llm.CompletionRequest) int {
-	tokens := compaction.EstimateTokens(req.Messages)*4/3 + 32 + len(req.Messages)*8
+	tokens := estimateTokens(req.Messages)*4/3 + 32 + len(req.Messages)*8
 	for _, text := range req.System {
 		tokens += (len(text)+2)/3 + 8
 	}
@@ -50,6 +49,42 @@ func EstimateInputTokens(req llm.CompletionRequest) int {
 		tokens += (len(b)+2)/3 + 8
 	}
 	return tokens
+}
+
+// estimateTokens approximates the token footprint of messages (~4 chars/token),
+// counting each block by type (text, thinking text, tool_use name+input, and
+// nested tool_result content). Ported verbatim from norma/compaction
+// (P4 删 norma，随 EstimateInputTokens 一同本地化).
+func estimateTokens(msgs []llm.Message) int {
+	chars := 0
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			chars += blockChars(b)
+		}
+	}
+	return chars / 4
+}
+
+// blockChars is the per-block character footprint. A norma ContentBlock has no
+// image/document type; if one is added, its fixed 2000-token cost (claude-code
+// IMAGE_MAX_TOKEN_SIZE) would be added here.
+func blockChars(b llm.ContentBlock) int {
+	switch b.Type {
+	case llm.BlockText:
+		return len(b.Text)
+	case llm.BlockThinking:
+		return len(b.Thinking)
+	case llm.BlockToolUse:
+		return len(b.Name) + len(b.Input)
+	case llm.BlockToolResult:
+		n := 0
+		for _, cb := range b.Content {
+			n += blockChars(cb)
+		}
+		return n
+	default:
+		return len(b.Text)
+	}
 }
 
 func outputBudget(req llm.CompletionRequest, configured int) int {

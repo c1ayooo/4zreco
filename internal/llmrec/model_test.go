@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/norma/transcript"
 	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"

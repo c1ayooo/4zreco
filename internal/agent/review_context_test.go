@@ -10,8 +10,8 @@ import (
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/intercept"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // Real PostgreSQL + SDK hooks: Worker reviews receive the current call only.

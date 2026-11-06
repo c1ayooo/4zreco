@@ -8,13 +8,13 @@ import (
 	"sync"
 
 	"github.com/c1ayooo/4zreco/internal/acllm"
-	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
+	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 )
 
 // Planner is the event-driven LLM planner (docs §4.3): each time the asset or
@@ -453,15 +453,15 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		settle = wrapupSettlementForTask("planner", nil, clamped)
 	}
 	opts := askernel.Options{
-		Model:           acllm.BridgeModel(p.prov),
-		SystemPrompt:    system,
-		Tools:           tools,
-		DeferredTools:   def.Deferred,
-		UnlockSet:       def.Unlock,
-		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   p.proxyAddr,
-		WebFetchCACert:  p.proxyCACert,
+		Model:          acllm.BridgeModel(p.prov),
+		SystemPrompt:   system,
+		Tools:          tools,
+		DeferredTools:  def.Deferred,
+		UnlockSet:      def.Unlock,
+		PermissionMode: permission.ModeBypass,
+		EnableWebFetch: true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
+		WebFetchProxy:  p.proxyAddr,
+		WebFetchCACert: p.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       p.webSearch.Enabled,
@@ -479,7 +479,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		MaxDuration:           maxDur,     // 0=不限;有 deadline 时=距 deadline 剩余
 		Compaction:            compactionConfig(p.compactionWindow()),
 		// 跨唤醒共享的规划待办：让串行链在多轮之间保留（session 是新的，store 不是）。
-		Todos: p.todoFor(ts.ID()),
+		Todos:        p.todoFor(ts.ID()),
 		NonStreaming: p.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    p.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
 	}

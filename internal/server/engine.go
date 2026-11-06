@@ -11,12 +11,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

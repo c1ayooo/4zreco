@@ -381,7 +381,7 @@ docs/           设计文档 / 部署手册 / 评估报告 / 能力对照
 - **保留**：双图架构、planner/worker 编排、MITM 流量代理、审批门框架、基础
   工具集——原作者的架构设计是优秀的，git 历史向其致意；
 - **重建**：全部设计文档（原作者删除过 docs）、CI 门禁、依赖解耦（norma SDK
-  fork）、Docker 源；
+  fork，其后随 eino 内核迁移退役，类型基座内化进 `internal/norma/`）、Docker 源；
 - **新增**：上文[能力线](#这是什么)所列的情报运营 / 红队作战 / 安全加固 /
   工程可靠性 / 工具与交付五大线，以及 160+ 提交的持续修复与加固。
 
@@ -412,6 +412,7 @@ docs/           设计文档 / 部署手册 / 评估报告 / 能力对照
 
 ## 参考
 
-- [norma](https://github.com/Autumn-27/norma) — agent harness SDK（本平台多 Agent 引擎）
+- norma — agent harness SDK（P4 已退役：内核=eino Runner，类型基座 fork 内置于
+  `internal/norma/`，Apache-2.0）
 - [Cairn](https://github.com/oritera/Cairn) — 黑板架构参考
 - [SecLists](https://github.com/danielmiessler/SecLists) / [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) — 语料与模板

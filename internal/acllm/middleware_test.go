@@ -18,10 +18,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Autumn-27/norma/llm"
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/guard"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"

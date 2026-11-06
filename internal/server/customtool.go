@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreco/internal/db"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // 本文件实现自定义工具执行器(docs/自定义工具设计.md)。system=false 的 tools 行按

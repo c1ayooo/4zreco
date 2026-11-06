@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
 	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hosttools"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/c1ayooo/4zreco/internal/kernel/termmap"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/cloudwego/eino/adk"
 )
 

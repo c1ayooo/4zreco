@@ -41,8 +41,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 )

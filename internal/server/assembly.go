@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/norma/skill"
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/norma/skill"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/traffic"
 )
 

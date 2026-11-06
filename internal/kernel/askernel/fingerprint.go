@@ -24,7 +24,7 @@ import (
 	"sort"
 	"strings"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // Fingerprint computes the runner assembly fingerprint over its six canonical

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 // 无增量自动收尾（idle-stop）：worker 连续若干轮没有写回任何东西时，
@@ -215,7 +215,6 @@ func (s *idleStopper) totalLocked() int {
 	return s.writes().Total()
 }
 
-
 // idleStopHooks 把 idleStopper 挂在 harness 的 hook 链上。
 //
 // 它是**旁路观察 + 收场请求**的组合：
@@ -355,9 +354,9 @@ func wrapIdleStop(inner harness.HookRunner, writes func() WriteCounts, onStop fu
 //   - 不推进计数。写回会让 writes 增长，计数自然被 refreshLocked 清零；
 //     再额外推进一次等于把「有产出」的一轮算成两轮。
 var idleStopWriteTools = map[string]bool{
-	"record_fact":     true,
-	"insert_assets":   true,
-	"report_finding":  true,
+	"record_fact":    true,
+	"insert_assets":  true,
+	"report_finding": true,
 }
 
 // idleStopMessage 是收场时给模型的说明。
@@ -383,6 +382,7 @@ func summarizeWriteDelta(cur, prev WriteCounts) string {
 // planner 靠它区分两种 exhausted：
 //   - 「被墙钟掐断」（还有明确的下一步，只是没时间）
 //   - 「探到边界」（这个方向本身没东西了）
+//
 // 这两种在 planner 的决策里完全相反，混在一起就会导致「一直续派同一方向」。
 func idleStopStateText(reason string) string {
 	return strings.TrimSpace(reason)

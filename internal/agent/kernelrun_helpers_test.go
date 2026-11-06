@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 type coreToolAlias = actool.CoreTool

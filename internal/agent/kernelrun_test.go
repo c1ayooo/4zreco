@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
@@ -124,7 +124,9 @@ func (m *scriptModel) Stream(ctx context.Context, input []*schema.Message, opts 
 	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
 }
 
-func (m *scriptModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) { return m, nil }
+func (m *scriptModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return m, nil
+}
 
 // thinkingTurn renders a thinking-only assistant turn (route-A nudge condition).
 func thinkingTurn() *schema.Message {
@@ -156,7 +158,9 @@ func runNudgeCase(t *testing.T, sm *scriptModel, nudger *memNudger) (string, har
 func TestRunKernelEmptyTurnNudgedOnce(t *testing.T) {
 	sm := &scriptModel{}
 	sm.script(func(int) (*schema.Message, error) { return thinkingTurn(), nil }) // 空转回合
-	sm.script(func(int) (*schema.Message, error) { return schema.AssistantMessage("扫描完成，无开放端口", nil), nil })
+	sm.script(func(int) (*schema.Message, error) {
+		return schema.AssistantMessage("扫描完成，无开放端口", nil), nil
+	})
 
 	nudger := &memNudger{limit: testEmptyTurnNudges}
 	text, reason, sess := runNudgeCase(t, sm, nudger)

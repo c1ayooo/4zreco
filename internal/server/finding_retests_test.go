@@ -17,8 +17,8 @@ import (
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
-	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 type retestProvider struct {

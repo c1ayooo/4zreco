@@ -9,11 +9,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 
 	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/kernel/termmap"

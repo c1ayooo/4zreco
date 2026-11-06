@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 
 	"github.com/c1ayooo/4zreco/internal/db"
 )
@@ -129,8 +129,8 @@ func (t *ToolSet) authRequest() actool.CoreTool {
 				"run_with_bash": cmd,
 				"auth_kind":     authKind(entry),
 				"auth_source":   fmt.Sprintf("资产#%d 的第 %d 条凭据", a.AssetID, idx),
-				"note": "用 Bash 工具执行上面这条命令。**命令含明文凭据**——不要把命令原文"+
-					"写进 fact/报告，用「资产#<id> 的 <类型> 凭据」指代。响应 401/403 说明"+
+				"note": "用 Bash 工具执行上面这条命令。**命令含明文凭据**——不要把命令原文" +
+					"写进 fact/报告，用「资产#<id> 的 <类型> 凭据」指代。响应 401/403 说明" +
 					"凭据或认证方式不对，换资产上的另一条凭据试（auth_index）。",
 			})
 		},

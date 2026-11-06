@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 // toolLogHooks 把「谁在什么任务下调用了什么工具、结果如何、怎么收场」写进 journal。
@@ -122,6 +122,7 @@ func (h *toolLogHooks) prefix(ctx context.Context) string {
 func (h *toolLogHooks) logPost(ctx context.Context, name string, input, result []byte, isErr bool) {
 	log.Printf("%s ← %s %s out=%dB", h.prefix(ctx), name, classifyToolResult(name, result, isErr), len(result))
 }
+
 // logStop 打收场行：最后一个助手回合有没有正文/工具调用。这是区分
 // 「正常做完」「空转收场」「模型报错」的第一手信号。
 func (h *toolLogHooks) logStop(ctx context.Context, messages []llm.Message) {

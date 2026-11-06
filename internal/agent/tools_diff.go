@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unicode"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 
 	"github.com/c1ayooo/4zreco/internal/intercept"
 )
@@ -113,8 +113,8 @@ func diffResponse(statusA, statusB int, bodyA, bodyB string) responseDiff {
 	d := responseDiff{
 		StatusA: statusA, StatusB: statusB,
 		StatusKnown: statusA != 0 || statusB != 0,
-		SameStatus: statusA == statusB,
-		LenA:       len(bodyA), LenB: len(bodyB),
+		SameStatus:  statusA == statusB,
+		LenA:        len(bodyA), LenB: len(bodyB),
 	}
 	objA, okA := parseJSONObject(bodyA)
 	objB, okB := parseJSONObject(bodyB)
@@ -299,6 +299,7 @@ func looksLikeNoise(v any) bool {
 // 刻意**不含** `key` 与 `session`：
 //   - 裸 `key` 多半是业务字段（cache_key / sort_key / object_key / key_id）
 //   - 裸 `session` 同理（session_count / session_duration）
+//
 // 误判的代价是**有害**的：真值被抹掉，模型看不到差异内容就下不了判断。
 // 这两个词靠下面的限定规则处理（api_key / session_id）。
 var sensitiveWords = map[string]bool{
@@ -427,9 +428,10 @@ func valuePreview(v any) string {
 // 平台自己发请求会绕过整条管控链。
 //
 // 两种模式：
-//   a) 文件模式（file_a/file_b）：工具读文件直接算——零网络、零脚本。
-//   b) URL 模式（url_a/url_b）：工具在工作目录写出差分脚本，返回一条
-//      「取两段响应 + 做差分」的命令。
+//
+//	a) 文件模式（file_a/file_b）：工具读文件直接算——零网络、零脚本。
+//	b) URL 模式（url_a/url_b）：工具在工作目录写出差分脚本，返回一条
+//	   「取两段响应 + 做差分」的命令。
 func (t *ToolSet) diffResponses() actool.CoreTool {
 	return readTool(
 		"diff_responses",
@@ -598,7 +600,7 @@ func buildDiffScript(a diffArgs, scriptPath, workDir string) string {
 		quoteShell(scriptPath), quoteShell(bodyA), quoteShell(bodyB))
 }
 
-// quoteShell 用 POSIX 单引号包裹一个值（内部单引号按 '\'' 转义）。
+// quoteShell 用 POSIX 单引号包裹一个值（内部单引号按 '\” 转义）。
 func quoteShell(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -14,9 +14,8 @@ import (
 // 落快照，见 internal/sidequestion/capture.go 的 boundProvider），BridgeModel 桥接
 // 的正是这个 bound provider，所以内核路径不需要 acllm.BindCaptureModel（那是纯
 // eino 模型栈用的；本仓模型面仍是 norma provider）。无 publisher / 无归属的调用
-// 纯透传（boundProvider 规则）。
-//
-// norma 版本（经 QueryDeps 注入，agentcore 路径）随 P4 删除；当前仅存这份。
+// 纯透传（boundProvider 规则）。norma 版本（经 QueryDeps 注入，agentcore 路径）
+// 已随 P4 删 norma 一并移除，仅存这份。
 func attachSideCapture(ctx context.Context) context.Context {
 	ri := RunInfoFrom(ctx)
 	p := sidequestion.Parent{TaskID: ri.TaskID, ExplorationID: ri.ExplorationID, IntentID: ri.IntentID}

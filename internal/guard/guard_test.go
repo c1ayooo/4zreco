@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/norma/hook"
+	"github.com/c1ayooo/4zreco/internal/norma/hook"
 )
 
 // A guard with no interceptor no longer hard-blocks anything: destructive/exfil

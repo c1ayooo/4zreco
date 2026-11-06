@@ -3,8 +3,8 @@ package server
 import (
 	"strings"
 
-	"github.com/Autumn-27/norma/llm"
 	"github.com/c1ayooo/4zreco/internal/agent"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 // thinking 拒绝错误的识别与自动降级。

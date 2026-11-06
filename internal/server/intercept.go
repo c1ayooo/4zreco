@@ -13,13 +13,13 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 
-	"github.com/Autumn-27/norma/llm"
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/c1ayooo/4zreco/internal/llmrec"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 // judgeWorkerLane is the usage-ledger "worker" label for intercept fallback-judge

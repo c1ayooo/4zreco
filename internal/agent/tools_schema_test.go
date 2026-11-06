@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // 工具的 JSON Schema 不允许出现空的必填字段名。

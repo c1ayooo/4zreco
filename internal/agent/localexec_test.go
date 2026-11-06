@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // local_exec 关掉的 agent 必须丢掉一切本机执行/写文件工具，只留只读检查与平台工具——

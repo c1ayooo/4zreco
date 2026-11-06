@@ -48,7 +48,7 @@ ZRECO_SKIP_FRONTEND=1 ZRECO_SKIP_NPM_CI=1 ZRECO_COMPRESS=0 ZRECO_PACKAGE=0 \
 - **判定法**：`go test ./internal/server/ -run <name> -count=1` 单跑，过 = 环境问题。
 - **DSN 门控测试的假绿**：`internal/llmrec` 的 Model* 五个定向测试（eino 侧录制装饰器）
   无 `ZRECO_PG_DSN` 时静默 skip——不带 DSN 的 `go test ./internal/llmrec/` 全绿不等于该
-  装饰器已验证。定向跑法见 §1（norma 侧的 TestSideUsageRecordedOnceOnConsumerCancellation
+  装饰器已验证。定向跑法见 §1（同包的 TestSideUsageRecordedOnceOnConsumerCancellation
   同款门控）。
 - **Windows 特有**：`evidence` 目录 fsync 已做 GOOS 分支；不要引入依赖目录 fsync 的新代码。
 
@@ -88,21 +88,32 @@ ZRECO_SKIP_FRONTEND=1 ZRECO_SKIP_NPM_CI=1 ZRECO_COMPRESS=0 ZRECO_PACKAGE=0 \
   `<Base>/nuclei-templates`（项目目录内部，非 data 目录），老部署启动时自动迁移。
 - **不要在对话/报告里写**：FOFA key、LLM API key、任何密码明文——凭据只进运行时配置。
 
-## 5. 内核与审批架构（eino 迁移）
+## 5. 内核与审批架构（eino 内核，norma 已退役）
 
-norma→eino（cloudwego/eino ADK Runner）迁移进行中，方案唯一权威见 §7 的 `docs/Eino深度接入方案-2026-11-05.md`。
-分期依次接续：**P0 审批不可变**（不依赖 eino、独立有价值：审批三表 append-only + HMAC 哈希链 +
-`v_intercept` 视图 + decided_by，随本轮工作区改动引入）→ **P1 内核迁移**（单开 `feat/eino-migration`
-分支长跑，master 正常演进、定期 rebase；eino 依赖到该分支才进 go.mod，当前 master 上没有）→
-**P2 HITL**（已落地：审批走 eino Interrupt/checkpoint/Resume；`hitl_mode: channel|eino` 双轨
-settings 开关灰度、默认 channel，两模式共用 P0 决定表。落点：PG CheckPointStore/映射表/签名
-在 `internal/db/hitl.go`（db 无 eino import，adk 接口按同签名结构化满足，R1 不动）；ask 中断
-挂点在 `internal/acllm/hitl.go`+`toolgate.go`（guard 经 ctx 信号交挂起，不感知 eino，R4 不动）；
-内核 checkpoint/续跑在 `internal/kernel/askernel/hitl.go`（`ResumeApproval`/`ResumeForApproval`/
-`StartPlanned`，新终态 `termmap.AwaitingApproval`）；停靠注册表/decide 投递/reaper/暂停=park/
-重领重建在 `internal/server/engine_hitl.go`。注意 engine*.go 不得出现 eino 引用——chat 半边的
-adk 类型接线在 server/intercept.go 的 `chatHitlSource`）→ **P3 前端** → **P4 删 norma**。
-改到哪一期就按哪一期描述行为，不要在 master 上预设 eino 已存在。
+内核=eino（cloudwego/eino ADK Runner）。norma→eino 迁移 **P0-P4 已全部落地**
+（分期史见 §7 的 `docs/Eino深度接入方案-2026-11-05.md` 与 CHANGELOG Unreleased 节；
+eino 在 `feat/eino-migration` 分支，合并后 master 才有）。现状要点：
+
+- **内核循环**：`internal/kernel/askernel`（Session/Run/Interrupt/ResumeForApproval/
+  StartPlanned），终态映射独立包 `internal/kernel/termmap`（13 终态；
+  `awaiting_approval` 由中断事件直接给定，不进 MapError，engine 状态机不消费它）。
+- **HITL**：settings 键 `hitl_mode: channel|eino`（缺省 channel 灰度），两模式共用 P0
+  决定表（审批三表 append-only + HMAC 哈希链 + `v_intercept` + decided_by）。
+  落点：PG CheckPointStore/映射表/签名在 `internal/db/hitl.go`（db 无 eino import，
+  adk 接口按同签名结构化满足，R1 不动）；ask 中断挂点在 `internal/acllm/hitl.go`+
+  `toolgate.go`（guard 经 ctx 信号交挂起，不感知 eino，R4 不动）；checkpoint/续跑在
+  `internal/kernel/askernel/hitl.go`（`ResumeApproval`/`ResumeForApproval`/`StartPlanned`）；
+  停靠注册表/decide 投递/reaper/暂停=park/重领重建在 `internal/server/engine_hitl.go`
+  （engine*.go 不得出现 eino 引用——chat 半边的 adk 类型接线在 server/intercept.go 的
+  `chatHitlSource`）。
+- **无热切**：armed checkpoint store ⇔ gate SetHitl ⇔ guard hitlMode 三半同源
+  （任务启动时读取；切 hitl_mode 只影响之后启动的 run）。
+- **刀⑤级未竟**：noa 未随内核移植（开关开着=告警+内置 compaction 回退，
+  `internal/agent/noa.go`）；装配指纹三分量真实来源（SeedPromptVersioned/MCP 连接
+  摘要/模型 profile 名）未接真值。
+- **norma 基座**：`internal/norma/`（v0.4.4 非测试代码逐字 fork，冻结不扩展）——
+  llm DTO 的落盘 JSON 形状不变是硬约束（llmrec 录制/replay、transcript 都依赖它），
+  动它之前先读 `internal/norma/README.md`。
 
 **红线 R1-R4（不可协商；R1/R2/R4 + 版本锁有机检 = §1 的 `bash scripts/check-eino-boundary.sh`，
 脚本规格见方案 §8.2；R3 无机检，靠 code review 把关）**：
@@ -117,8 +128,8 @@ adk 类型接线在 server/intercept.go 的 `chatHitlSource`）→ **P3 前端**
   `get_worker_trace`），禁止 transfer-tool/subagent 作调度通道。
 - **R4 判定逻辑不感知 eino**：`internal/guard`、`internal/intercept`、`internal/vulnintel`、
   `internal/honeydetect` 不得 import eino，导出函数签名不得出现 `schema.Message` 等 eino 类型。
-- **版本锁定**：eino 版本锁死（当前锁定 v0.9.21，eino 未引入时门禁自动跳过该项）；一旦引入，
-  `go.mod` 必须精确等于锁定值，升级前重跑 checkpoint 兼容尖刺 + 终态映射回归。
+- **版本锁定**：eino 版本锁死（当前 v0.9.21，**门禁机检已激活**——`go.mod` 必须
+  精确等于锁定值）；升级前重跑 checkpoint 兼容尖刺 + 终态映射回归。
 
 **骨架/器官分层**：eino 只做编排与中断恢复的骨架（agent 循环、ToolsNode 工具面、审批型 HITL 的
 中断-检查点-恢复挂点）；判定逻辑——拦截规则引擎、LLM judge、范围匹配、蜜罐签名、压缩决策——
@@ -144,8 +155,9 @@ internal/            全部 Go 业务包（import 路径 github.com/c1ayooo/4zre
   db/                PostgreSQL 唯一存储（schema.sql 幂等迁移；拦截规则 seed 批次 v1-v5；
                      审批三表 append-only + HMAC 哈希链 + v_intercept 视图，P0 随本轮引入）
   server/            HTTP 面与引擎调度（全部路由注册在 server.go 的 Handler() 起，:724 一带）
-  acllm/             eino 转换层（schema.Message ↔ 落盘 transcript DTO 双向，落盘 JSON 形状冻结；
-                     P1 刀①引入，norma 删除前 DTO 类型暂用 norma/llm）
+  kernel/            eino 内核（askernel/ Session/Run/HITL 续跑；termmap/ 13 终态映射）
+  acllm/             eino 转换层（schema.Message ↔ 落盘 transcript DTO 双向，落盘 JSON 形状冻结）
+  norma/             类型基座（norma v0.4.4 逐字 fork，冻结不扩展；provenance 见其 README.md）
   intercept/         三层拦截（规则+LLM judge+ask 审批；judge prompt 在 prompt.go）
   guard/             审批门（Attributions 已回流 planner 态势）
   traffic/           MITM 流量采集与出口代理池
@@ -177,7 +189,8 @@ data/ dist/ *.key    运行态/构建产物（本地生成，已 gitignore，不
 部署与排障：`docs/部署手册.md`（含 LAN 源安装配方）。接手背景：`docs/项目交接文档.md`。
 项目主轴与对话绑定（projects/project_scope/任务对话挂载/切换器）：`docs/项目管理与对话绑定改造-2026-11-04.md`
 （明确不接资产围栏，project_scope 仅组织定义）。
-核心设计三篇：`docs/01-双图架构.md` ~ `docs/03-LLM接入层.md`；旧 `docs/04-审批与拦截.md` 已归档进
-`docs/archive/`（审批表结构的现行权威=上方 Eino 方案），读它了解背景可以，别当现行规范。
+核心设计四篇：`docs/01-双图架构.md` ~ `docs/04-审批与拦截.md`（04 为 2026-11-06 终稿：
+审批链路=hitl_mode 双轨 + checkpoint/Interrupt 版，表结构深权文仍是上方 Eino 方案；
+旧版在其下方 `docs/archive/`，只作背景）。
 已完成的计划/历史快照在 `docs/archive/`（产品优化清单-2026-10-29、改名影响面、蜜罐迁移方案等），
 读它们了解背景可以，**别把它们当现行规范**。

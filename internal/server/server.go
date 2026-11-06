@@ -21,9 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hostd"
@@ -31,6 +28,9 @@ import (
 	"github.com/c1ayooo/4zreco/internal/listener"
 	"github.com/c1ayooo/4zreco/internal/llmpool"
 	"github.com/c1ayooo/4zreco/internal/llmrec"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/c1ayooo/4zreco/internal/report"
 	"github.com/c1ayooo/4zreco/internal/traffic"
 )

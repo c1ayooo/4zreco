@@ -11,8 +11,8 @@ import (
 
 	"github.com/c1ayooo/4zreco/internal/agent"
 	"github.com/c1ayooo/4zreco/internal/db"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/traffic"
-	actool "github.com/Autumn-27/norma/tool"
 )
 
 func (s *Server) seedFindingWorkflowTools() {

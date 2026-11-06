@@ -37,7 +37,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/Autumn-27/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
 	"github.com/cloudwego/eino/adk"
 
 	"github.com/c1ayooo/4zreco/internal/acllm"

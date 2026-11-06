@@ -16,7 +16,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/Autumn-27/norma/hook"
+	"github.com/c1ayooo/4zreco/internal/norma/hook"
 )
 
 // defaultTarpitFetchBudget 是每 host 抓取调用的默认预算（settings 键

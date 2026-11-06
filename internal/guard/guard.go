@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/norma/hook"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
+	"github.com/c1ayooo/4zreco/internal/norma/hook"
 )
 
 // AuditEntry records one gated tool call.

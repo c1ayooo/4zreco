@@ -13,7 +13,7 @@ import (
 	"sort"
 
 	"github.com/c1ayooo/4zreco/internal/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // digestMemberEntry builds the compact per-member view expand_digest returns —

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hosttools"
+	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // compactIntents distills intents to {id, summary, state, asset_ids, parents,

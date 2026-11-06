@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/c1ayooo/4zreco/internal/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 func callReadJSON(t *testing.T, tool actool.CoreTool, input string) any {

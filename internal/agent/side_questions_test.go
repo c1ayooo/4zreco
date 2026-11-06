@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/c1ayooo/4zreco/internal/sidequestion"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
 )
 
 type sideAgentProvider struct {

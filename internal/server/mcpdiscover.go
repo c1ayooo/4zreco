@@ -9,8 +9,8 @@ import (
 
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/mcphttp"
-	"github.com/Autumn-27/norma/mcp"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/mcp"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 )
 
 // mcpClient is the shared surface of a connected MCP server (stdio, Streamable HTTP,

@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/c1ayooo/4zreco/internal/db"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/google/uuid"
 )
 

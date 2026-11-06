@@ -12,15 +12,15 @@ import (
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 	"github.com/c1ayooo/4zreco/internal/sidequestion"
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
 )
 
 // captureRun drives one agent turn-to-completion over the eino kernel and emits
 // a coalesced ActivityRecord per execution step (tool_use / tool_result / text /
-// thinking / result). 刀④ 切换默认：这是 planner 与目标拆解（goals）的主循环入口
-// ——norma agentcore 版本保留不删（P4 删，见 capture_norma.go）。
+// thinking / result). 这是 planner 与目标拆解（goals）的主循环入口（P4 起 norma
+// agentcore 版已随 norma 退役删除）。
 //
 // The emitted records carry only Kind/Tool/ToolUseID/IsError/Summary/Detail; the
 // caller's emit fills in IntentID/Worker. Returns the final assistant text +
@@ -62,8 +62,8 @@ func captureRunSession(ctx context.Context, s *askernel.Session, input string, e
 // live usage, and the final result record. The coalescing state and the audit
 // trace span the WHOLE conversation (all runs of the route-A loop), not one run.
 type capturePump struct {
-	ctx       context.Context
-	rec       func(db.Activity) // auditTrace.Append + emit
+	ctx        context.Context
+	rec        func(db.Activity) // auditTrace.Append + emit
 	auditTrace *intercept.Trace
 
 	toolNames map[string]string // tool_use id -> name, to label results

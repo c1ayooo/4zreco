@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -86,7 +86,9 @@ func (m *scriptModel) Stream(ctx context.Context, input []*schema.Message, opts 
 	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
 }
 
-func (m *scriptModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) { return m, nil }
+func (m *scriptModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return m, nil
+}
 
 func toolTurnModel() *scriptModel {
 	sm := &scriptModel{}
@@ -312,7 +314,9 @@ func (m *ctxBlockModel) Stream(ctx context.Context, input []*schema.Message, opt
 	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
 }
 
-func (m *ctxBlockModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) { return m, nil }
+func (m *ctxBlockModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return m, nil
+}
 
 // TestTodoReminderThrottle: todo 提醒节流——写完 TodoWrite 后 10 个 assistant 回合
 // 内不提醒、到阈值注入一次、注入后重新节流（norma maybeInjectTodoReminder 移植）。
@@ -515,7 +519,7 @@ func m2ptr(m *schema.Message) *schema.Message { return m }
 
 // cancelingTool cancels the run's parent mid-execution, then blocks on ctx —
 // deterministically reproducing "cancellation interrupted an in-flight tool"
-//（无 goroutine、无 sleep：取消点就在工具执行体内）。
+// （无 goroutine、无 sleep：取消点就在工具执行体内）。
 func cancelingTool(t *testing.T, cancel context.CancelFunc) actool.CoreTool {
 	t.Helper()
 	return actool.Build(actool.Spec{
@@ -595,7 +599,7 @@ func TestSessionCancelDuringModelStreamAfterTools(t *testing.T) {
 }
 
 // TestSessionCancelDuringFirstStream: 首个模型流式阶段被取消 → aborted_streaming
-//（无工具回合，flag 天然未置）。
+// （无工具回合，flag 天然未置）。
 func TestSessionCancelDuringFirstStream(t *testing.T) {
 	sm := newBlockModel() // 无脚本步：首个调用即阻塞等 ctx
 	parent, cancel := context.WithCancel(context.Background())

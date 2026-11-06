@@ -20,17 +20,17 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Autumn-27/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
 
 // fakeNormaProvider replays scripted norma StreamEvents / a scripted Complete.
 type fakeNormaProvider struct {
-	mu      sync.Mutex
-	events  []llm.StreamEvent
+	mu       sync.Mutex
+	events   []llm.StreamEvent
 	complete func(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error)
-	reqs    []llm.CompletionRequest
+	reqs     []llm.CompletionRequest
 }
 
 func (f *fakeNormaProvider) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Autumn-27/norma/harness"
+	"github.com/c1ayooo/4zreco/internal/norma/harness"
 	"github.com/cloudwego/eino/adk"
 )
 
@@ -46,14 +46,14 @@ func TestMapErrorTableDriven(t *testing.T) {
 	deadlineErr := fmt.Errorf("tool exec: %w", context.DeadlineExceeded)
 
 	cases := []struct {
-		name    string
-		ctx     func() context.Context
-		err     error
-		phase   Phase
-		want    Reason
-		wantErr     error // 期望的 Terminal.Err 负载（errors.Is 核对）
-		dropPayload bool  // 预算类终态（max_turns/timeout）吞掉错误，norma finish(reason, nil)
-		produce func() Reason // 宿主直接给定的终态（无错误来源）走这里，跳过 MapError
+		name        string
+		ctx         func() context.Context
+		err         error
+		phase       Phase
+		want        Reason
+		wantErr     error         // 期望的 Terminal.Err 负载（errors.Is 核对）
+		dropPayload bool          // 预算类终态（max_turns/timeout）吞掉错误，norma finish(reason, nil)
+		produce     func() Reason // 宿主直接给定的终态（无错误来源）走这里，跳过 MapError
 	}{
 		{
 			// 1. Completed：模型无 tool_call 正常终态——不是错误映射；防御性输入返回 Completed。
@@ -65,10 +65,10 @@ func TestMapErrorTableDriven(t *testing.T) {
 		},
 		{
 			// 2. MaxTurns：ErrExceedMaxIterations。
-			name:  "max_turns_from_adk",
-			ctx:   context.Background,
-			err:     fmt.Errorf("agent loop: %w", adk.ErrExceedMaxIterations),
-			phase:   PhaseModel,
+			name:        "max_turns_from_adk",
+			ctx:         context.Background,
+			err:         fmt.Errorf("agent loop: %w", adk.ErrExceedMaxIterations),
+			phase:       PhaseModel,
 			want:        MaxTurns,
 			dropPayload: true, // 预算类终态不带错误负载（norma finish(MaxTurns, nil)）
 		},
@@ -82,7 +82,7 @@ func TestMapErrorTableDriven(t *testing.T) {
 		},
 		{
 			// 4. AbortedStreaming：模型流式阶段的 ctx 取消。
-			name:  "aborted_streaming_model_phase",
+			name: "aborted_streaming_model_phase",
 			ctx: func() context.Context {
 				c, cancel := context.WithCancel(context.Background())
 				cancel()
@@ -103,10 +103,10 @@ func TestMapErrorTableDriven(t *testing.T) {
 		},
 		{
 			// 6. Timeout：ctx deadline / engine 墙钟。
-			name:    "timeout_deadline",
-			ctx:     context.Background,
-			err:     deadlineErr,
-			phase:   PhaseTools,
+			name:        "timeout_deadline",
+			ctx:         context.Background,
+			err:         deadlineErr,
+			phase:       PhaseTools,
 			want:        Timeout,
 			dropPayload: true, // 预算类终态不带错误负载
 		},

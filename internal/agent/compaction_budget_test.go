@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/norma/llm"
 	"github.com/c1ayooo/4zreco/internal/db"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
 
 // fakeProvider 是一个可控的假 provider：记录每次调用的 MaxTokens 与输入长度，

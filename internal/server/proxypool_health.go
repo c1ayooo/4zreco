@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/traffic"
-	actool "github.com/Autumn-27/norma/tool"
 )
 
 // StartProxyPoolHealthCheck launches the background probe loop. It is a no-op
@@ -131,12 +131,12 @@ func (s *Server) proxyStatusResult() (actool.Result, error) {
 	}
 	st := s.loadProxyPool()
 	out := map[string]any{
-		"strategy":      st.Strategy,
-		"total":         len(st.Entries),
-		"capturing":     s.m.TrafficEnabled(),
-		"global_proxy":  s.m.GlobalProxy() != "",
-		"upstreams":     s.m.traffic.ProxyPoolStatus(),
-		"health_check":  settingOr(s.m.pg, settingProxyCheckTarget, defaultProxyCheckTarget),
+		"strategy":     st.Strategy,
+		"total":        len(st.Entries),
+		"capturing":    s.m.TrafficEnabled(),
+		"global_proxy": s.m.GlobalProxy() != "",
+		"upstreams":    s.m.traffic.ProxyPoolStatus(),
+		"health_check": settingOr(s.m.pg, settingProxyCheckTarget, defaultProxyCheckTarget),
 	}
 	if len(st.Entries) == 0 {
 		out["note"] = "代理池为空：流量直接出本机（或走「全局出口代理」）。要轮换出口请在 系统 → 代理池 配置。"

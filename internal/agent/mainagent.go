@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hosttools"
 	"github.com/c1ayooo/4zreco/internal/intercept"
-	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/c1ayooo/4zreco/internal/norma/llm"
+	"github.com/c1ayooo/4zreco/internal/norma/permission"
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
+	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 )
 
 // MainAgent is the thin human-interface orchestrator (docs §4.2 / §7). The human
@@ -130,11 +130,11 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	}
 	tsx.SetTaskID(taskID)
 	tsx.SetCoverageEnabled(as == nil || as.CoverageEnabled(taskID))
-	tsx.SetNotify(notify)         // 通用唤醒（无专用回调的写操作走它，debounced）
-	tsx.SetResumeTask(resume)     // set_goals 新增目标 → 把已完成/暂停的任务拉回 running
-	tsx.SetNotifyGoal(notifyGoal) // set_goals 新增目标 → 给 planner 记一条「人新增了目标：…」触发
-	tsx.SetNotifyHint(notifyHint) // add_hint 新增提示 → 给 planner 记一条「人新增了 N 条战略提示：…」触发
-	tsx.steerWork = m.steerWork   // enable steer_work tool (nil = unavailable)
+	tsx.SetNotify(notify)             // 通用唤醒（无专用回调的写操作走它，debounced）
+	tsx.SetResumeTask(resume)         // set_goals 新增目标 → 把已完成/暂停的任务拉回 running
+	tsx.SetNotifyGoal(notifyGoal)     // set_goals 新增目标 → 给 planner 记一条「人新增了目标：…」触发
+	tsx.SetNotifyHint(notifyHint)     // add_hint 新增提示 → 给 planner 记一条「人新增了 N 条战略提示：…」触发
+	tsx.steerWork = m.steerWork       // enable steer_work tool (nil = unavailable)
 	tsx.attributions = m.attributions // Guard 归因 → 概览 guard_attributions 块（nil = 省略）
 	// 领域工具 + 基础默认工具集（Read/Write/Edit/MultiEdit/LS/Glob/Grep/Bash）
 	// 资产覆盖度功能关闭时剔除 add_task_scope/list_untested_assets（不入 prompt）。
@@ -149,15 +149,15 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（system 分段拼一条
 	// system message，缓存交 provider 侧）。
 	opts := askernel.Options{
-		Model:           acllm.BridgeModel(m.prov),
-		SystemPrompt:    system,
-		Tools:           tools,
-		DeferredTools:   def.Deferred,
-		UnlockSet:       def.Unlock,
-		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   m.proxyAddr,
-		WebFetchCACert:  m.proxyCACert,
+		Model:          acllm.BridgeModel(m.prov),
+		SystemPrompt:   system,
+		Tools:          tools,
+		DeferredTools:  def.Deferred,
+		UnlockSet:      def.Unlock,
+		PermissionMode: permission.ModeBypass,
+		EnableWebFetch: true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
+		WebFetchProxy:  m.proxyAddr,
+		WebFetchCACert: m.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:       m.webSearch.Enabled,
@@ -172,10 +172,10 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 		WorkingDir:            mainDir,                              // 本任务工作目录 <workDir>/tasks/<taskID>
 		ToolOutputDir:         cmdOutDir(mainDir),
 		MaxTurns:              m.maxTurns,                             // 0 = unlimited (configurable in agent management)
-		Compaction: compactionConfig(m.compactionWindow()), // long chats stay within the window
-		Todos:      actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
-		NonStreaming: m.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:    m.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
+		Compaction:            compactionConfig(m.compactionWindow()), // long chats stay within the window
+		Todos:                 actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
+		NonStreaming:          m.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
+		MaxTokens:             m.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
 	}
 	// 工具调用可观测：与 planner 同理，此前 journal 里看不到 mainagent 的动作。
 	// 同一条链喂两处：gate 的 Pre/Post 半边 + driver 的 Stop 半边。
