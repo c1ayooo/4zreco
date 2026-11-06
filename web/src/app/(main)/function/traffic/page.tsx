@@ -14,11 +14,13 @@ import {
   RadioTowerIcon,
   SearchIcon,
   Trash2Icon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { HttpCodeBlock } from "@/components/http-code-block";
 import { LinkTrafficDialog } from "@/components/link-traffic-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -336,6 +338,10 @@ export default function TrafficPage() {
   const pageCount = Math.max(1, Math.ceil(total / size));
   const rangeStart = total === 0 ? 0 : page * size + 1;
   const rangeEnd = page * size + exchanges.length;
+  // 录制三态：off=捕获关；dead=开关开着但录制代理没起来（启动失败，一条都记不到）；live=正常录制。
+  let rec: "live" | "dead" | "off" = "off";
+  if (traffic?.enabled) rec = traffic.alive === false ? "dead" : "live";
+  const recText = { dead: "录制代理未运行", live: "录制中", off: "已停用" } as const;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -347,13 +353,13 @@ export default function TrafficPage() {
           <span
             className={cn(
               "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.5 font-medium text-xs",
-              traffic?.enabled
-                ? "border-success/20 bg-success/15 text-success"
-                : "border-transparent bg-muted text-muted-foreground",
+              rec === "dead" && "border-destructive/20 bg-destructive/15 text-destructive",
+              rec === "live" && "border-success/20 bg-success/15 text-success",
+              rec === "off" && "border-transparent bg-muted text-muted-foreground",
             )}
           >
-            <RadioTowerIcon className="size-3.5" />
-            {traffic?.enabled ? "录制中" : "已停用"}
+            {rec === "dead" ? <TriangleAlertIcon className="size-3.5" /> : <RadioTowerIcon className="size-3.5" />}
+            {recText[rec]}
           </span>
           {traffic?.proxy && <span className="font-mono text-muted-foreground text-xs">{traffic.proxy}</span>}
           <span className="text-muted-foreground text-xs">
@@ -361,6 +367,16 @@ export default function TrafficPage() {
           </span>
         </div>
       </div>
+
+      {rec === "dead" && (
+        <Alert variant="destructive">
+          <TriangleAlertIcon />
+          <AlertTitle>流量捕获已开启，但录制代理未运行——当前不会有任何流量被记录</AlertTitle>
+          <AlertDescription>
+            录制代理启动时绑定端口失败，通常是端口已被其他实例占用。释放端口后重启本服务即可恢复。
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">

@@ -176,6 +176,10 @@ type Traffic struct {
 	// lastPick 记录 host → 最近一次为它选中的池上游(Pick 时写,错误上报时读;
 	// host 粒度足够熔断统计,并发同 host 偶尔错位可接受)。
 	lastPick sync.Map // host(string) -> proxy URL string
+	// serving 在 Start 运行期间为 true，Start 返回（含绑定失败退出）即变 false。
+	// 让 Manager 能区分「开关开着」与「录制代理真的在监听」——后者不成立时
+	// ProxyAddr 不得再把死地址发给 agent。
+	serving atomic.Bool
 }
 
 // Open initializes the traffic tree, blob store and SQLite index under dir.
@@ -419,7 +423,24 @@ func (t *Traffic) CACertPath() string {
 }
 
 // Start runs the proxy (blocking); run in a goroutine.
-func (t *Traffic) Start() error { return t.proxy.Start() }
+// Start runs the recording proxy. It blocks for the proxy's whole lifetime and
+// returns when the proxy stops — including the bind-failure case (port taken by
+// another instance), which otherwise dies as one log line while the capture
+// toggle keeps claiming recording is on. Serving() flips false the moment Start
+// returns, so the manager stops handing out a dead proxy address.
+func (t *Traffic) Start() error {
+	t.serving.Store(true)
+	defer t.serving.Store(false)
+	return t.proxy.Start()
+}
+
+// Serving reports whether the recording proxy is currently listening.
+func (t *Traffic) Serving() bool { return t.serving.Load() }
+
+// MarkServing 预置存活标志：调用方在把 Start 丢进 goroutine 之前同步置位，堵住
+// 「已创建但 goroutine 还没跑」的窗口里 Serving() 短暂误报 false。Start 退出时
+// （含绑定失败）照常翻回 false。
+func (t *Traffic) MarkServing() { t.serving.Store(true) }
 
 // Close waits for background tree reclamation to finish before closing the
 // index, so shutdown never leaves a goroutine unlinking files out from under a

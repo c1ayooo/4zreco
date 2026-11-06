@@ -1156,6 +1156,12 @@ ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS audit JSONB;
 -- rule_id 判据回填历史行），新 decision_source 一词让位给 intercept_decisions。
 ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS ask_source TEXT NOT NULL DEFAULT '';
 ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT '';
+-- 升级路径：老部署的旧版不可变触发器（cb13bd0 原始形态）没有 audit_writer
+-- 放行口，会拦掉紧随其后的旧库回填 DML——首例即生产库 4zrec 升级：ask_source
+-- 回填 UPDATE 被旧触发器拒绝，apply schema 整体失败、start.sh 崩溃循环
+--（2026-11-06）。整个 apply schema 是单条 Exec 的单隐式事务：这里先摘旧触发器、
+-- 文件尾统一重建，摘挂窗口不对外可见，原子性不变。
+DROP TRIGGER IF EXISTS trg_intercept_pending_immutable ON intercept_pending;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns
@@ -1228,6 +1234,9 @@ INSERT INTO audit_chain_head(chain_id) VALUES ('intercept') ON CONFLICT (chain_i
 -- 旧库回填（兼容第 7 项）：把已决 pending 行按旧 status 合成 decision 行
 --（decided_by='legacy'，seq NULL 落历史区不接链）。必须在删 status/decided_at
 -- 列之前执行；DO $$ 判列存在（删列后语句不再可执行）。
+-- 老部署的旧版触发器同样挂在这两张表上（同上，无放行口），先摘再回填。
+DROP TRIGGER IF EXISTS trg_intercept_decisions_immutable ON intercept_decisions;
+DROP TRIGGER IF EXISTS trg_intercept_executions_immutable ON intercept_executions;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns

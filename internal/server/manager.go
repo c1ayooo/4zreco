@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -628,15 +629,31 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 				return nil, fmt.Errorf("recover traffic delete staging: %w", err)
 			}
 		}
-		if tr != nil {
-			m.traffic = tr
-			go func() {
-				log.Printf("[traffic] recording proxy on %s (set HTTP_PROXY=%s + trust _ca CA)", proxyAddr, tr.ProxyAddr())
-				if err := tr.Start(); err != nil {
-					log.Printf("[traffic] proxy stopped: %v", err)
-				}
-			}()
+	if tr != nil {
+		// Open() 只准备存储与 CA，真正的端口绑定发生在上面 Start() 的 goroutine 里，
+		// 失败只是一行后台日志——曾导致另一个实例占住端口时，开关仍显示捕获开启、
+		// ProxyAddr 仍把死地址发给所有 agent、流量一条都记不到。这里先探测端口：
+		// 绑不上就把录制器置空，捕获在本实例不可用（不管持久化的开关是什么值）。
+		if ln, perr := net.Listen("tcp", proxyAddr); perr != nil {
+			log.Printf("[traffic] 录制代理无法监听 %s，本实例流量捕获不可用（释放端口或改 -proxy 启动参数）：%v", proxyAddr, perr)
+			_ = tr.Close()
+			tr = nil
+		} else {
+			ln.Close()
 		}
+	}
+	if tr != nil {
+		m.traffic = tr
+		// 同步置位再起 goroutine：避免启动后到 Start 真正跑起来之间的窗口里，
+		// 设置请求把「未监听」误报出去。绑定失败时 Start 返回会把标志翻回 false。
+		tr.MarkServing()
+		go func() {
+			log.Printf("[traffic] recording proxy on %s (set HTTP_PROXY=%s + trust _ca CA)", proxyAddr, tr.ProxyAddr())
+			if err := tr.Start(); err != nil {
+				log.Printf("[traffic] proxy stopped: %v", err)
+			}
+		}()
+	}
 	}
 	// Asset auto-completion engine (§5): HTTP probes routed through the recording
 	// proxy (via m.ProxyAddr, which honors the traffic-capture toggle).
@@ -1037,7 +1054,7 @@ func (m *Manager) Traffic() *traffic.Traffic { return m.traffic }
 // So the global proxy takes effect in both modes: at the MITM's upstream when
 // capturing, in the agent's own bash env / WebFetch when not.
 func (m *Manager) ProxyAddr() string {
-	if m.traffic != nil && m.TrafficEnabled() {
+	if m.traffic != nil && m.traffic.Serving() && m.TrafficEnabled() {
 		return m.traffic.ProxyAddr()
 	}
 	m.mu.RLock()
@@ -1051,10 +1068,19 @@ func (m *Manager) ProxyAddr() string {
 // preserves real target certs, so no custom CA is needed there. Its emptiness is
 // also the worker's "recording off" signal (see workerSystem).
 func (m *Manager) ProxyCACert() string {
-	if m.traffic == nil || !m.TrafficEnabled() {
+	if m.traffic == nil || !m.traffic.Serving() || !m.TrafficEnabled() {
 		return ""
 	}
 	return m.traffic.CACertPath()
+}
+
+// TrafficProxyAlive reports whether the recording proxy is actually listening.
+// Distinct from TrafficEnabled: the persisted toggle can be on while the proxy
+// failed to bind (e.g. the port is taken by another instance) — the settings
+// payload exposes both so the UI can show a "capture on but not recording"
+// warning instead of the toggle silently lying.
+func (m *Manager) TrafficProxyAlive() bool {
+	return m.traffic != nil && m.traffic.Serving()
 }
 
 // runVulnIntelSync drives the periodic CVE/KEV sync. One pass per cycle; the

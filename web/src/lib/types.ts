@@ -1011,6 +1011,7 @@ export interface TrafficExchange {
 
 export interface TrafficResp {
   enabled: boolean;
+  alive?: boolean; // 录制代理是否真的在监听；enabled 开着但 alive=false = 启动失败（多半端口被占），不会记录流量
   proxy?: string;
   count?: number; // global total (unfiltered)
   total?: number; // rows matching the current filter (for pagination)
@@ -1034,6 +1035,7 @@ export interface TrafficHost {
 // ---- App settings (runtime toggles) ----
 export interface Settings {
   traffic_capture: boolean;
+  traffic_proxy_alive: boolean; // 录制代理是否真的在监听；capture 开着但为 false = 启动失败（多半端口被占），不会记录流量
   agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认关闭；不影响人工绑定
   llm_record: boolean; // LLM 录制开关（默认关）；关闭时不记录任何 LLM 调用
   // Web search. brave_key_set / tavily_key_set reflect whether a key is stored

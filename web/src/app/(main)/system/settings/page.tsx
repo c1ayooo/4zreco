@@ -25,11 +25,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSendMode } from "@/lib/chat-send-mode";
 import type { ImBotSettingsInput, Settings } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
   const [trafficCapture, setTrafficCapture] = React.useState(false);
+  const [trafficProxyAlive, setTrafficProxyAlive] = React.useState(true);
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
   const [webSearch, setWebSearch] = React.useState(false);
   const [backend, setBackend] = React.useState("ddgs");
@@ -104,6 +106,8 @@ export default function SystemSettingsPage() {
 
   const apply = React.useCallback((s: Settings) => {
     setTrafficCapture(!!s.traffic_capture);
+    // 字段缺失（旧后端）视为存活，不误报。
+    setTrafficProxyAlive(s.traffic_proxy_alive !== false);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
     setWebSearch(!!s.web_search_enabled);
     setBackend(s.web_search_backend || "ddgs");
@@ -285,6 +289,14 @@ export default function SystemSettingsPage() {
       .then((ps) => setLlmProfileOpts(ps.map((p) => ({ id: p.id, name: p.name }))))
       .catch(() => setLlmProfileOpts([]));
   }, [apply]);
+
+  // 录制代理死亡态文案：开关开着但代理没起来（多半端口被占）时，标签行就地变红说明后果。
+  let trafficState = "已关闭 · 不记录、不注入代理";
+  if (trafficCapture) {
+    trafficState = trafficProxyAlive
+      ? "已开启 · 正在记录流量并注入代理"
+      : "已开启 · 录制代理未运行，不会记录流量（释放端口后重启服务恢复）";
+  }
 
   const toggleTraffic = (v: boolean) => {
     setTrafficCapture(v); // optimistic
@@ -528,8 +540,14 @@ export default function SystemSettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex items-center justify-between gap-4">
-            <Label htmlFor="traffic-capture" className="font-normal text-muted-foreground text-sm">
-              {trafficCapture ? "已开启 · 正在记录流量并注入代理" : "已关闭 · 不记录、不注入代理"}
+            <Label
+              htmlFor="traffic-capture"
+              className={cn(
+                "font-normal text-sm",
+                trafficCapture && !trafficProxyAlive ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {trafficState}
             </Label>
             <Switch
               id="traffic-capture"

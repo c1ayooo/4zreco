@@ -38,10 +38,10 @@ import {
   SaveIcon,
   SearchIcon,
   SlidersHorizontalIcon,
-  TriangleAlertIcon,
   StarIcon,
   TagsIcon,
   Trash2Icon,
+  TriangleAlertIcon,
   Undo2Icon,
   XIcon,
 } from "lucide-react";
@@ -102,7 +102,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -3534,20 +3533,30 @@ function CreateTaskSheet({
                       onChange={(e) => setAuthCfg((c) => ({ ...c, login_url: e.target.value }))}
                     />
                     <div className="flex flex-wrap gap-2">
-                      <NativeSelect
+                      <Select
                         value={authCfg.method}
-                        onChange={(e) => setAuthCfg((c) => ({ ...c, method: e.target.value as "POST" | "GET" }))}
+                        onValueChange={(v) => setAuthCfg((c) => ({ ...c, method: v as "POST" | "GET" }))}
                       >
-                        <NativeSelectOption value="POST">POST</NativeSelectOption>
-                        <NativeSelectOption value="GET">GET</NativeSelectOption>
-                      </NativeSelect>
-                      <NativeSelect
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent position="popper">
+                          <SelectItem value="POST">POST</SelectItem>
+                          <SelectItem value="GET">GET</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select
                         value={authCfg.content_type}
-                        onChange={(e) => setAuthCfg((c) => ({ ...c, content_type: e.target.value as "json" | "form" }))}
+                        onValueChange={(v) => setAuthCfg((c) => ({ ...c, content_type: v as "json" | "form" }))}
                       >
-                        <NativeSelectOption value="json">JSON</NativeSelectOption>
-                        <NativeSelectOption value="form">表单</NativeSelectOption>
-                      </NativeSelect>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent position="popper">
+                          <SelectItem value="json">JSON</SelectItem>
+                          <SelectItem value="form">表单</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Input

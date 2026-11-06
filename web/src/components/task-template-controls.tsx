@@ -27,8 +27,8 @@ import {
 } from "@/components/ui/combobox";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
@@ -273,21 +273,23 @@ function TaskTemplateManager({
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="task-template-category">任务分类</FieldLabel>
-                  <NativeSelect
-                    id="task-template-category"
-                    className="w-full"
-                    value={draft.categoryID == null ? "" : String(draft.categoryID)}
-                    onChange={(event) =>
-                      patchDraft({ categoryID: event.target.value === "" ? null : Number(event.target.value) })
-                    }
+                  {/* Radix SelectItem 不允许空字符串 value，「未分类」用哨兵值表达 null 分类 */}
+                  <Select
+                    value={draft.categoryID == null ? "__none__" : String(draft.categoryID)}
+                    onValueChange={(v) => patchDraft({ categoryID: v === "__none__" ? null : Number(v) })}
                   >
-                    <NativeSelectOption value="">未分类</NativeSelectOption>
-                    {categories.map((c) => (
-                      <NativeSelectOption key={c.id} value={String(c.id)}>
-                        {c.name}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
+                    <SelectTrigger id="task-template-category" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      <SelectItem value="__none__">未分类</SelectItem>
+                      {categories.map((c) => (
+                        <SelectItem key={c.id} value={String(c.id)}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <FieldDescription>应用模板时预填此分类（可再改）。</FieldDescription>
                 </Field>
                 <Field>

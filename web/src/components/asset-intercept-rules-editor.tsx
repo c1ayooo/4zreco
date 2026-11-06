@@ -4,11 +4,11 @@ import { PlusIcon, Trash2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { AssetInterceptKind, AssetInterceptRuleInput } from "@/lib/types";
 
-// 用 NativeSelect（原生 <select>）而非 shadcn Select：这个编辑器会用在 Sheet 抽屉内，
-// shadcn Select 的下拉 portal 到 body、点击外部会触发抽屉的「点击外部关闭」误关；原生下拉无此问题。
+// 下拉用全站统一的 shadcn Select（Radix 弹层）。这个编辑器用在 Sheet 抽屉内——
+// Radix DismissableLayer 分层保证弹层内点击不算抽屉的「点击外部」，不会误关抽屉。
 export const ASSET_INTERCEPT_KIND_OPTIONS: {
   value: AssetInterceptKind;
   label: string;
@@ -48,27 +48,27 @@ export function AssetInterceptRulesEditor({
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: 行无稳定 id，按索引受控即可
           <div key={i} className="flex items-center gap-2">
-            <NativeSelect
-              size="sm"
-              className="w-[84px] shrink-0"
-              value={r.action}
-              onChange={(e) => update(i, { action: e.target.value as "block" | "allow" })}
-            >
-              <NativeSelectOption value="block">拦截</NativeSelectOption>
-              <NativeSelectOption value="allow">允许</NativeSelectOption>
-            </NativeSelect>
-            <NativeSelect
-              size="sm"
-              className="w-[120px] shrink-0"
-              value={r.kind}
-              onChange={(e) => update(i, { kind: e.target.value as AssetInterceptKind })}
-            >
-              {ASSET_INTERCEPT_KIND_OPTIONS.map((o) => (
-                <NativeSelectOption key={o.value} value={o.value}>
-                  {o.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+            <Select value={r.action} onValueChange={(v) => update(i, { action: v as "block" | "allow" })}>
+              <SelectTrigger size="sm" className="w-[84px] shrink-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                <SelectItem value="block">拦截</SelectItem>
+                <SelectItem value="allow">允许</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={r.kind} onValueChange={(v) => update(i, { kind: v as AssetInterceptKind })}>
+              <SelectTrigger size="sm" className="w-[120px] shrink-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                {ASSET_INTERCEPT_KIND_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Input
               className="flex-1"
               placeholder={ph}

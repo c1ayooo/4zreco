@@ -31,8 +31,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import type {
@@ -601,14 +601,15 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <CardContent className="flex flex-col gap-3">
           {/* 新增表单 */}
           <div className="flex flex-wrap items-center gap-2">
-            <NativeSelect
-              size="sm"
-              value={conKind}
-              onChange={(e) => setConKind(e.target.value as TaskConstraint["kind"])}
-            >
-              <NativeSelectOption value="deny">禁止</NativeSelectOption>
-              <NativeSelectOption value="allow">允许</NativeSelectOption>
-            </NativeSelect>
+            <Select value={conKind} onValueChange={(v) => setConKind(v as TaskConstraint["kind"])}>
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                <SelectItem value="deny">禁止</SelectItem>
+                <SelectItem value="allow">允许</SelectItem>
+              </SelectContent>
+            </Select>
             <Input
               className="h-7 min-w-56 flex-1 text-sm"
               placeholder="一条操作约束，如『仅测当前端口，不扫其他端口』"
@@ -635,14 +636,15 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               {constraints.map((c) =>
                 editingConId === c.id ? (
                   <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5">
-                    <NativeSelect
-                      size="sm"
-                      value={editConKind}
-                      onChange={(e) => setEditConKind(e.target.value as TaskConstraint["kind"])}
-                    >
-                      <NativeSelectOption value="deny">禁止</NativeSelectOption>
-                      <NativeSelectOption value="allow">允许</NativeSelectOption>
-                    </NativeSelect>
+                    <Select value={editConKind} onValueChange={(v) => setEditConKind(v as TaskConstraint["kind"])}>
+                      <SelectTrigger size="sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent position="popper">
+                        <SelectItem value="deny">禁止</SelectItem>
+                        <SelectItem value="allow">允许</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <Input
                       className="h-7 min-w-56 flex-1 text-sm"
                       value={editConText}
@@ -830,19 +832,20 @@ export function OverviewTab({ taskId }: { taskId: string }) {
         <CardContent className="flex flex-col gap-3">
           {/* 新增表单 */}
           <div className="flex flex-wrap items-center gap-2">
-            <NativeSelect
-              size="sm"
-              value={scopeKind}
-              onChange={(e) => setScopeKind(e.target.value as TaskScopeRow["kind"])}
-            >
-              <NativeSelectOption value="root_domain">根域名</NativeSelectOption>
-              <NativeSelectOption value="subdomain">子域名</NativeSelectOption>
-              <NativeSelectOption value="ip">IP</NativeSelectOption>
-              <NativeSelectOption value="cidr">网段</NativeSelectOption>
-              <NativeSelectOption value="icp">ICP</NativeSelectOption>
-              <NativeSelectOption value="keyword">关键词</NativeSelectOption>
-              <NativeSelectOption value="company">公司</NativeSelectOption>
-            </NativeSelect>
+            <Select value={scopeKind} onValueChange={(v) => setScopeKind(v as TaskScopeRow["kind"])}>
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                <SelectItem value="root_domain">根域名</SelectItem>
+                <SelectItem value="subdomain">子域名</SelectItem>
+                <SelectItem value="ip">IP</SelectItem>
+                <SelectItem value="cidr">网段</SelectItem>
+                <SelectItem value="icp">ICP</SelectItem>
+                <SelectItem value="keyword">关键词</SelectItem>
+                <SelectItem value="company">公司</SelectItem>
+              </SelectContent>
+            </Select>
             <Input
               className="h-7 w-56 text-sm"
               placeholder={
@@ -1189,17 +1192,27 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
       <CardContent className="flex flex-col gap-3">
         {/* 新增表单 */}
         <div className="flex flex-wrap items-center gap-2">
-          <NativeSelect size="sm" value={newAction} onChange={(e) => setNewAction(e.target.value as "block" | "allow")}>
-            <NativeSelectOption value="block">拦截</NativeSelectOption>
-            <NativeSelectOption value="allow">允许</NativeSelectOption>
-          </NativeSelect>
-          <NativeSelect size="sm" value={newKind} onChange={(e) => setNewKind(e.target.value as AssetInterceptKind)}>
-            {TASK_RULE_KIND_OPTIONS.map((o) => (
-              <NativeSelectOption key={o.value} value={o.value}>
-                {o.label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+          <Select value={newAction} onValueChange={(v) => setNewAction(v as "block" | "allow")}>
+            <SelectTrigger size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="block">拦截</SelectItem>
+              <SelectItem value="allow">允许</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={newKind} onValueChange={(v) => setNewKind(v as AssetInterceptKind)}>
+            <SelectTrigger size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              {TASK_RULE_KIND_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Input
             className="h-7 min-w-56 flex-1 text-sm"
             placeholder={placeholder}
@@ -1228,25 +1241,27 @@ function TaskInterceptRulesCard({ taskId }: { taskId: string }) {
             {rules.map((r) =>
               editId === r.id ? (
                 <div key={r.id} className="flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5">
-                  <NativeSelect
-                    size="sm"
-                    value={editAction}
-                    onChange={(e) => setEditAction(e.target.value as "block" | "allow")}
-                  >
-                    <NativeSelectOption value="block">拦截</NativeSelectOption>
-                    <NativeSelectOption value="allow">允许</NativeSelectOption>
-                  </NativeSelect>
-                  <NativeSelect
-                    size="sm"
-                    value={editKind}
-                    onChange={(e) => setEditKind(e.target.value as AssetInterceptKind)}
-                  >
-                    {TASK_RULE_KIND_OPTIONS.map((o) => (
-                      <NativeSelectOption key={o.value} value={o.value}>
-                        {o.label}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
+                  <Select value={editAction} onValueChange={(v) => setEditAction(v as "block" | "allow")}>
+                    <SelectTrigger size="sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      <SelectItem value="block">拦截</SelectItem>
+                      <SelectItem value="allow">允许</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={editKind} onValueChange={(v) => setEditKind(v as AssetInterceptKind)}>
+                    <SelectTrigger size="sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      {TASK_RULE_KIND_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Input
                     className="h-7 min-w-56 flex-1 text-sm"
                     value={editPattern}
@@ -1560,19 +1575,19 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
             {selected.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
                 <span className="font-medium">已选 {selected.length} 项</span>
-                <NativeSelect
-                  size="sm"
-                  value={assignTo}
-                  onChange={(e) => setAssignTo(e.target.value)}
-                  className="max-w-[22rem]"
-                >
-                  <NativeSelectOption value="0">任务级（不归属漏洞）</NativeSelectOption>
-                  {findingOptions.map((f) => (
-                    <NativeSelectOption key={f.id} value={f.id}>
-                      {f.label}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
+                <Select value={assignTo} onValueChange={(v) => setAssignTo(v)}>
+                  <SelectTrigger size="sm" className="max-w-[22rem]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    <SelectItem value="0">任务级（不归属漏洞）</SelectItem>
+                    {findingOptions.map((f) => (
+                      <SelectItem key={f.id} value={f.id}>
+                        {f.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Button size="sm" disabled={assigning} onClick={() => void applyAssignment()}>
                   {assigning ? "保存中…" : "应用归属"}
                 </Button>

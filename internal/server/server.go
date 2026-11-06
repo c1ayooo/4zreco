@@ -3366,7 +3366,8 @@ func (s *Server) getTraffic(w http.ResponseWriter, r *http.Request) {
 	}, page, size)
 	count, _ := tr.Count() // global total, for the stat card
 	writeJSON(w, 200, map[string]any{
-		"enabled":   s.m.TrafficEnabled(), // reflect the capture toggle
+		"enabled":   s.m.TrafficEnabled(),      // reflect the capture toggle
+		"alive":     s.m.TrafficProxyAlive(),   // 录制代理是否真的在监听（端口被占等启动失败时 false）
 		"proxy":     s.m.ProxyAddr(),
 		"count":     count,   // total recorded (unfiltered)
 		"total":     matched, // rows matching the current filter (for pagination)
@@ -3538,6 +3539,7 @@ func (s *Server) settingsPayload() map[string]any {
 	ib := intentBudgetFromPG(s.m.pg)
 	return map[string]any{
 		"traffic_capture":       s.m.TrafficEnabled(),
+		"traffic_proxy_alive":   s.m.TrafficProxyAlive(), // 录制代理是否真的在监听（端口被占时为 false，UI 据此告警）
 		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
 		"llm_record":            s.m.LLMRecordEnabled(),
 		"web_search_enabled":    on,
