@@ -50,6 +50,25 @@ type Hub struct {
 	ctx     context.Context
 	mu      sync.Mutex
 	cancels map[string]context.CancelFunc
+	// sessLocks：(platform,chatID) → *sync.Mutex。同一 chat 的建会话/轮换互斥——
+	// 修复 4zrec 固有的「首条并发消息双建会话」竞态（2026-11-06 评审既定方案）。
+	// 锁条目常驻不回收：chat 数量有界，map 膨胀可忽略。
+	sessLocks sync.Map
+}
+
+// lockChat 取该 chat 的互斥锁并加锁，返回解锁函数。
+func (h *Hub) lockChat(platform, chatID string) func() {
+	v, _ := h.sessLocks.LoadOrStore(platform+"\x00"+chatID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// sessionConversationLocked = sessionConversation + 同 chat 互斥：并发首条消息只建一个会话。
+func (h *Hub) sessionConversationLocked(platform, chatID, userID string, cfg Config) *pgdb.Conversation {
+	unlock := h.lockChat(platform, chatID)
+	defer unlock()
+	return h.sessionConversation(platform, chatID, userID, cfg)
 }
 
 // New 构造网关。pg 为 nil 时 Start 是空操作（无 DB 不接 IM）。
@@ -139,7 +158,7 @@ func (h *Hub) HandleText(platform, chatID, userID, msgID, text string) {
 	pg := h.pg
 	cfg := h.LoadConfig()
 
-	conv := h.sessionConversation(platform, chatID, userID, cfg)
+	conv := h.sessionConversationLocked(platform, chatID, userID, cfg)
 	if conv == nil {
 		return // 开会话失败已回执
 	}
@@ -244,11 +263,16 @@ func (h *Hub) handleCommand(pg *pgdb.DB, platform, chatID, userID string, conv *
 	case "commands", "help":
 		return CommandHelp()
 	case "new":
+		// 轮换与建会话同锁：并发 /new 与并发首条消息互斥，映射不会互相覆盖。
+		unlock := h.lockChat(platform, chatID)
 		nc, err := CreateSuccessorConversation(pg, conv)
+		if err == nil {
+			_ = pg.UpsertIMSession(platform, chatID, nc.ID, userID)
+		}
+		unlock()
 		if err != nil {
 			return "创建新会话失败：" + err.Error()
 		}
-		_ = pg.UpsertIMSession(platform, chatID, nc.ID, userID)
 		note := SuccessorNote(pg, conv)
 		_, _ = pg.AppendConvActivity(nc.ID, pgdb.Activity{
 			Worker: nc.AgentKey, Kind: "text", Summary: FirstLine(note, 200), Detail: note})

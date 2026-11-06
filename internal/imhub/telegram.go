@@ -3,6 +3,8 @@ package imhub
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,24 +25,89 @@ const (
 	imTelegramRetryDelay     = 5 * time.Second
 )
 
+// imTelegramOffsetsKey 存 Telegram 轮询 offset（按 bot token 指纹分桶，不存原始
+// token）：进程/配置重启后从服务端保留窗口恢复，不重放已确认消息（2026-11-06 增强）。
+// 保存时机=每 30s 且有推进、以及循环退出（配置热更/停用）；硬崩溃最多重放 30s 窗口。
+const imTelegramOffsetsKey = "im_telegram_offsets"
+
+// imTokenFingerprint bot token 的 sha256 前 16 hex——settings 里不落原始凭据。
+func imTokenFingerprint(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:8])
+}
+
+func (h *Hub) loadTelegramOffset(fp string) int64 {
+	if h.pg == nil || fp == "" {
+		return 0
+	}
+	v, ok, err := h.pg.GetSetting(imTelegramOffsetsKey)
+	if err != nil || !ok {
+		return 0
+	}
+	var m map[string]int64
+	if json.Unmarshal([]byte(v), &m) != nil {
+		return 0
+	}
+	return m[fp]
+}
+
+func (h *Hub) saveTelegramOffset(fp string, offset int64) {
+	if h.pg == nil || fp == "" {
+		return
+	}
+	m := map[string]int64{}
+	if v, ok, err := h.pg.GetSetting(imTelegramOffsetsKey); err == nil && ok {
+		_ = json.Unmarshal([]byte(v), &m)
+	}
+	if m == nil {
+		m = map[string]int64{}
+	}
+	m[fp] = offset
+	buf, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = h.pg.SetSetting(imTelegramOffsetsKey, string(buf))
+}
+
 // imTelegramLoop 长轮询主循环；ctx 取消即退出（配置热更/停用）。
 func (h *Hub) imTelegramLoop(ctx context.Context, cfg Config) {
 	token := cfg.Telegram.BotToken
-	offset := int64(0)
+	fp := imTokenFingerprint(token)
+	offset := h.loadTelegramOffset(fp)
+	if offset > 0 {
+		log.Printf("[im telegram] 恢复轮询 offset=%d", offset)
+	}
+	dirty := false
+	save := func() {
+		if !dirty {
+			return
+		}
+		h.saveTelegramOffset(fp, offset)
+		dirty = false
+	}
+	defer save()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			save()
 			return
+		case <-ticker.C:
+			save()
 		default:
 		}
 		updates, err := h.imTelegramGetUpdates(ctx, token, offset)
 		if err != nil {
 			if ctx.Err() != nil {
+				save()
 				return
 			}
 			log.Printf("[im telegram] 拉取消息失败: %v", err)
 			select {
 			case <-ctx.Done():
+				save()
 				return
 			case <-time.After(imTelegramRetryDelay):
 			}
@@ -49,6 +116,7 @@ func (h *Hub) imTelegramLoop(ctx context.Context, cfg Config) {
 		for _, u := range updates {
 			if u.UpdateID >= offset {
 				offset = u.UpdateID + 1
+				dirty = true
 			}
 			if u.Message == nil || strings.TrimSpace(u.Message.Text) == "" {
 				continue

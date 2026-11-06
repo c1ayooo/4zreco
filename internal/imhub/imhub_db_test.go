@@ -7,8 +7,11 @@ package imhub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	pgdb "github.com/c1ayooo/4zreco/internal/db"
 )
@@ -150,3 +153,78 @@ func TestConfigLoadSavePayloadMasking(t *testing.T) {
 func boolPtr(v bool) *bool { return &v }
 
 func ptrStr(s string) *string { return &s }
+
+// TestSessionCreationSingleflight 同一 chat 并发首条消息只建一个会话（2026-11-06
+// 修复 4zrec 固有的双建竞态）：N 个 goroutine 并发走 sessionConversationLocked，
+// 全部拿到同一会话，且会话映射一致。
+func TestSessionCreationSingleflight(t *testing.T) {
+	d := imhubTestDB(t)
+	h := New(context.Background(), d, nil)
+	const platform = "feishu"
+	chatID := fmt.Sprintf("sf-%d", time.Now().UnixNano())
+
+	const n = 8
+	ids := make([]int64, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			conv := h.sessionConversationLocked(platform, chatID, "u1", Config{})
+			if conv == nil {
+				t.Errorf("goroutine %d: 开会话返回 nil", i)
+				return
+			}
+			ids[i] = conv.ID
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i := 1; i < n; i++ {
+		if ids[i] != ids[0] {
+			t.Fatalf("并发建会话分叉：ids[0]=%d ids[%d]=%d", ids[0], i, ids[i])
+		}
+	}
+	m, err := d.GetIMSession(platform, chatID)
+	if err != nil || m == nil {
+		t.Fatalf("会话映射缺失: %v", err)
+	}
+	if m.ConversationID != ids[0] {
+		t.Fatalf("映射指向 %d，与建会话 %d 不一致", m.ConversationID, ids[0])
+	}
+	// 清理：删会话级联掉 im_sessions
+	if err := d.DeleteConversation(ids[0]); err != nil {
+		t.Fatalf("清理会话: %v", err)
+	}
+}
+
+// TestTelegramOffsetPersistence Telegram 轮询 offset 的 settings 持久化：
+// 按 token 指纹分桶互不覆盖、未配置回落 0、save 后 load 往返一致。
+func TestTelegramOffsetPersistence(t *testing.T) {
+	d := imhubTestDB(t)
+	h := New(context.Background(), d, nil)
+	t.Cleanup(func() { _ = d.SetSetting(imTelegramOffsetsKey, "{}") })
+
+	const fp1, fp2 = "fp-aaaa", "fp-bbbb"
+	if got := h.loadTelegramOffset(fp1); got != 0 {
+		t.Fatalf("未配置应回落 0，got %d", got)
+	}
+	h.saveTelegramOffset(fp1, 4242)
+	h.saveTelegramOffset(fp2, 7)
+	if got := h.loadTelegramOffset(fp1); got != 4242 {
+		t.Fatalf("fp1 往返失败: got %d", got)
+	}
+	if got := h.loadTelegramOffset(fp2); got != 7 {
+		t.Fatalf("fp2 往返失败: got %d", got)
+	}
+	h.saveTelegramOffset(fp1, 4243)
+	if got := h.loadTelegramOffset(fp1); got != 4243 {
+		t.Fatalf("覆盖写失败: got %d", got)
+	}
+	if got := h.loadTelegramOffset(fp2); got != 7 {
+		t.Fatalf("覆盖写串桶: fp2 got %d", got)
+	}
+}
