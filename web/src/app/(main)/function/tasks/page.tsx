@@ -3183,10 +3183,20 @@ function CreateTaskSheet({
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [companies, setCompanies] = React.useState<Company[]>([]);
   const [projects, setProjects] = React.useState<Project[]>([]);
-  // 归属项目（可空）。打开面板默认挂全局当前项目；?create=1&project_id=N 深链预选。
+  const [projectsLoaded, setProjectsLoaded] = React.useState(false);
+  // 归属项目=全局当前项目（强绑定）：侧栏「全部」视图（projectId=0）不能创建任务。
+  // 项目页 ?create=1&project_id=N 深链会把全局 store 切过去（列表页顶部 effect 承接），这里只读全局。
   const globalProjectId = useProjectStore((s) => s.projectId);
   const globalProjectStatus = useProjectStore((s) => s.status);
-  const [projectId, setProjectId] = React.useState<number | null>(null);
+  const boundProjectId = globalProjectId > 0 ? globalProjectId : null;
+  const boundProject = React.useMemo(
+    () => projects.find((p) => p.id === boundProjectId && p.status === "active") ?? null,
+    [projects, boundProjectId],
+  );
+  // 新部署还没有任何项目：创建入口改为引导建项目（而不是禁死）。
+  const noProjectsAtAll = globalProjectStatus === "ready" && projectsLoaded && projects.length === 0;
+  const allViewBlocked =
+    globalProjectStatus === "ready" && projectsLoaded && projects.length > 0 && globalProjectId === 0;
   const [sourceTaskIDs, setSourceTaskIDs] = React.useState<string[]>([]);
   const [companyIDs, setCompanyIDs] = React.useState<number[]>([]);
   const [llmProfileIDs, setLLMProfileIDs] = React.useState<string[]>([]);
@@ -3224,22 +3234,15 @@ function CreateTaskSheet({
       .catch(() => setCompanies([]));
     api
       .projects()
-      .then(setProjects)
-      .catch(() => setProjects([]));
+      .then((rows) => {
+        setProjects(rows);
+        setProjectsLoaded(true);
+      })
+      .catch(() => {
+        setProjects([]);
+        setProjectsLoaded(true);
+      });
   }, []);
-
-  // 面板打开时默认挂全局当前项目（仅一次）；深链 project_id=N 优先。
-  React.useEffect(() => {
-    if (!open) return;
-    const deep = Number(new URLSearchParams(window.location.search).get("project_id") || "0");
-    if (deep > 0 && projects.some((p) => p.id === deep && p.status === "active")) {
-      setProjectId(deep);
-      return;
-    }
-    if (globalProjectStatus === "ready" && globalProjectId > 0) {
-      setProjectId((cur) => cur ?? globalProjectId);
-    }
-  }, [open, projects, globalProjectId, globalProjectStatus]);
 
   // ?create=1 深链直接打开创建面板（project_id=N 的预选由上面的归属项目 effect 承接）；用掉即清。
   const deepLinkRouter = useRouter();
@@ -3277,6 +3280,16 @@ function CreateTaskSheet({
       toast.error("请填写描述与目标");
       return;
     }
+    if (!boundProjectId) {
+      // 强绑定（2026-11-06）：任务必须挂项目；零项目新部署引导先建项目。
+      toast.error(
+        noProjectsAtAll
+          ? "还没有项目：任务必须挂在项目下——先创建项目，再回来新建任务"
+          : "请先在左上角选择具体项目（「全部」视图不能创建任务）",
+        { duration: 6000 },
+      );
+      return;
+    }
     if (profiles.length === 0) {
       // 冷启动防呆（体检 O1）：零 LLM 通道的任务必死——在创建前拦下并给出路。
       toast.error("尚未配置任何 LLM 通道——请先到「系统 → LLM」添加并设为激活，否则任务无法推进", { duration: 8000 });
@@ -3308,7 +3321,7 @@ function CreateTaskSheet({
         authConfig: authCfg.enabled
           ? { ...authCfg, login_url: authCfg.login_url.trim(), username: authCfg.username?.trim() }
           : undefined,
-        projectId: projectId ?? undefined,
+        projectId: boundProjectId,
       });
       toast.success("任务已创建");
       setName("");
@@ -3318,7 +3331,6 @@ function CreateTaskSheet({
       setSelectedTemplateID(null);
       setSourceTaskIDs([]);
       setCompanyIDs([]);
-      setProjectId(null);
       setLLMProfileIDs([]);
       setTimeoutMin("");
       setHeartbeatMin("10");
@@ -3340,9 +3352,14 @@ function CreateTaskSheet({
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button size="sm">
-          <PlusIcon /> 新建任务
-        </Button>
+        <span
+          title={allViewBlocked ? "请先在左上角选择具体项目（「全部」视图不能创建任务）" : undefined}
+          className={allViewBlocked ? "cursor-not-allowed" : undefined}
+        >
+          <Button size="sm" disabled={allViewBlocked}>
+            <PlusIcon /> 新建任务
+          </Button>
+        </span>
       </SheetTrigger>
       {/* 45vw 宽的右侧抽屉:整屏高度可滚动,长表单不再受弹窗高度限制。窄屏退化为全宽。
  内容为 flex 列:头/脚固定,中间字段区 flex-1 独立滚动。 */}
@@ -3453,30 +3470,27 @@ function CreateTaskSheet({
               </FieldDescription>
             </Field>
             <Field>
-              <FieldLabel htmlFor="task-project">归属项目（可选）</FieldLabel>
-              <Select
-                value={projectId ? String(projectId) : "none"}
-                onValueChange={(v) => setProjectId(v === "none" ? null : Number(v))}
-              >
-                <SelectTrigger id="task-project" className="w-full">
-                  <SelectValue placeholder="不挂项目" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="none">不挂项目</SelectItem>
-                    {projects
-                      .filter((p) => p.status === "active")
-                      .map((p) => (
-                        <SelectItem key={p.id} value={String(p.id)}>
-                          {p.name}
-                        </SelectItem>
-                      ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <FieldDescription>
-                挂到项目后：任务进入该项目的归集视图，项目范围（域名/网段）种成本任务的初始任务范围。
-              </FieldDescription>
+              <FieldLabel>归属项目</FieldLabel>
+              {noProjectsAtAll ? (
+                <div className="text-sm text-muted-foreground">
+                  还没有任何项目，任务必须挂在项目下。先
+                  <Link href="/function/projects?create=1" className="mx-1 underline underline-offset-2">
+                    创建项目
+                  </Link>
+                  ，再回来新建任务。
+                </div>
+              ) : boundProject ? (
+                <div className="text-sm">
+                  <span className="font-medium">{boundProject.name}</span>
+                  <FieldDescription>
+                    创建后自动挂到当前项目（不可改）；项目范围（域名/网段）种成本任务的初始任务范围。
+                  </FieldDescription>
+                </div>
+              ) : (
+                <div className="text-sm text-destructive">
+                  未选择项目——请先在左上角切换到具体项目，「全部」视图不能创建任务。
+                </div>
+              )}
             </Field>
             <Field>
               <FieldLabel htmlFor="task-companies">关联企业资产范围</FieldLabel>
@@ -3665,7 +3679,7 @@ function CreateTaskSheet({
           <SheetClose asChild>
             <Button variant="outline">取消</Button>
           </SheetClose>
-          <Button onClick={createTask} disabled={creating || uploading}>
+          <Button onClick={createTask} disabled={creating || uploading || !boundProjectId}>
             {creating && <Spinner data-icon="inline-start" />}
             {creating ? "创建中" : "创建"}
           </Button>
