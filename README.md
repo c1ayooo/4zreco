@@ -15,7 +15,6 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent 
 ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey)
 
 📦 **Docker**：`ghcr.io/c1ayooo/4zreco`
-🧠 **单技能版**：[4zreco-skill](https://github.com/c1ayooo/4zreco-skill)——4zreco 方法论的单 skill 版，任意 AI Agent 即装即用
 
 </div>
 
@@ -52,47 +51,13 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent 
 | **多 Agent 推进** | planner 唯一意图生成 + frontier 意图队列 CAS 领取 + worker 做完即停 + 图变更防抖唤醒；空转续跑、拆解墙钟、终态分流多层韧性 |
 | **漏洞情报运营** | NVD 全量/增量 + CISA KEV 在野 + GHSA 版本区间 + GitHub PoC 聚合 + 近期高危 30 分钟快通道 + 资产指纹→CVE 反向匹配 |
 | **红队作战** | TCP 回连接收器（逐会话留证）/ C2 出口三形态（direct/SSH 中继/manual）/ redteam-ops 后渗透方法论 / 宿主工具 60+ 件一键装齐 |
-| **项目管理** | 任务/对话挂载项目、project_scope 组织资产、侧栏切换器——多项目并行作战分区 |
+| **项目管理** | 任务/对话挂载项目、project_scope 组织资产、侧栏切换器、项目页直接发起任务——多项目并行作战分区 |
 | **安全与合规** | 登录防爆破 + 改密吊销会话 + 探活去指纹 + 认证面无产品名 + 蜜罐识别（内嵌签名库）——公网部署基线 |
 | **工具与交付** | MITM 全流量留证 / 证据版本化 sha256 / 公文级 Word 报告（OOXML 手写零依赖）/ Web·IM 通知 / 一键自更新（校验+回滚） |
 
----
-
-## 界面速览
-
-> 截图来自真实运行实例，敏感信息已脱敏。
-
-**入口与全局态势**
-
-| 控制台登录 | 总览：任务 / 漏洞 / 资产 / Token 消耗 |
-| :---: | :---: |
-| ![登录](assets/screenshots/4zreco-login.png) | ![总览](assets/screenshots/4zreco-dashboard.png) |
-
-**任务与资产**
-
-| 任务列表：进度与漏洞分布 | 资产覆盖图：已测节点高亮 |
-| :---: | :---: |
-| ![任务列表](assets/screenshots/4zreco-tasks.png) | ![资产覆盖图](assets/screenshots/4zreco-assets-graph.png) |
-
-**证据与报告**
-
-| 证据附件：自动归档、缩略图预览 | 漏洞详情：摘要 + 截图 + PoC + 复测入口 |
-| :---: | :---: |
-| ![证据附件](assets/screenshots/4zreco-evidence.png) | ![漏洞详情](assets/screenshots/4zreco-finding-detail.png) |
-
-| 现场截图：按漏洞归档，Word 报告自动嵌图 |
-| :---: |
-| ![现场截图](assets/screenshots/4zreco-finding-shots.png) |
-
-**平台配置**
-
-| Agent 清单：8 个内置角色 + 自定义 | 宿主环境：工具体检 + 一键装齐 |
-| :---: | :---: |
-| ![Agent](assets/screenshots/4zreco-agents.png) | ![宿主环境](assets/screenshots/4zreco-hostenv.png) |
-
-| LLM 配置：多通道轮询 / 熔断 / 按角色路由 |
-| :---: |
-| ![LLM](assets/screenshots/4zreco-llm.png) |
+**内置 skill**（随发行物分发，也可挂载覆盖）：`vuln-hunting` 漏洞挖掘方法论 ·
+`api-recon` API 侦察 · `redteam-ops` 后渗透六阶段 · `scopesentry` 范围哨兵 ·
+`playwright-cli` 浏览器自动化。
 
 ---
 
@@ -379,7 +344,8 @@ internal/
   llmpool/         LLM 多通道轮询池；llmrec/ 请求录制与计量
   report/          Word 报告（手写 OOXML 零依赖）；evidence/ 证据版本化
   hostd/ hosttools/ 特权助手与宿主工具清单；notify/ 通知推送；selfupdate/ 自更新
-skills/            内置 skill（vuln-hunting / redteam-ops / api-recon / …）
+skills/            内置 skill（vuln-hunting / api-recon / redteam-ops /
+                   scopesentry / playwright-cli）
 web/               Next.js 前端（静态导出后 go:embed 内嵌）
 docs/              设计文档（archive/ 为历史快照）
 scripts/           辅助脚本（devtest / 架构门禁 / 重置密码 / 基准 compose 等）
