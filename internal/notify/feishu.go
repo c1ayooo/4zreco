@@ -26,13 +26,44 @@ func (feishuChannel) Kind() string { return KindFeishu }
 // 飞书自定义机器人约 5 次/秒，折合 100 次/分钟。
 func (feishuChannel) DefaultRatePerMin() int { return 100 }
 
-// Webhook 地址末段即机器人唯一标识，属凭据。
-func (feishuChannel) SecretKeys() []string { return []string{"webhook", "secret"} }
+// Webhook 地址末段即机器人唯一标识，属凭据；app_secret 同理。
+func (feishuChannel) SecretKeys() []string { return []string{"webhook", "secret", "app_secret"} }
 
-// 同理：改 Webhook 地址必须对新地址重新表态签名密钥。
-func (feishuChannel) DestinationKeys() []string { return []string{"webhook"} }
+// 同理：改 Webhook 地址/接收者必须对新目标重新表态签名密钥。
+func (feishuChannel) DestinationKeys() []string { return []string{"webhook", "receive_id"} }
+
+// feishuAppMode 报告配置是否为应用机器人形态。缺省 mode 视为 webhook，
+// 兼容只有 webhook 字段的存量配置。
+func feishuAppMode(cfg map[string]any) bool { return cfgString(cfg, "mode") == "app" }
+
+var feishuReceiveIDTypes = map[string]bool{
+	"open_id": true, "user_id": true, "union_id": true, "email": true, "chat_id": true,
+}
+
+// feishuTokenStaleCodes 是「token 失效需重取」的飞书错误码。命中后强制刷新
+// 重试一次——缓存提前 5 分钟过期，正常不会走到，这是双机时钟漂移等的兜底。
+var feishuTokenStaleCodes = map[int]bool{99991663: true, 99991661: true, 99991679: true}
 
 func (feishuChannel) Validate(cfg map[string]any) error {
+	if feishuAppMode(cfg) {
+		for key, label := range map[string]string{
+			"app_id":     "App ID",
+			"app_secret": "App Secret",
+			"receive_id": "接收者 ID",
+		} {
+			if cfgString(cfg, key) == "" {
+				return errors.New("应用机器人模式缺少 " + label)
+			}
+		}
+		typ := cfgString(cfg, "receive_id_type")
+		if typ == "" {
+			typ = "open_id"
+		}
+		if !feishuReceiveIDTypes[typ] {
+			return fmt.Errorf("接收者 ID 类型无效: %s（可用 open_id/user_id/union_id/email/chat_id）", typ)
+		}
+		return nil
+	}
 	hook := cfgString(cfg, "webhook")
 	if hook == "" {
 		return errors.New("缺少 Webhook 地址")
@@ -47,6 +78,70 @@ func (c feishuChannel) Send(ctx context.Context, cfg map[string]any, m Message) 
 	if err := c.Validate(cfg); err != nil {
 		return 0, Permanent(err)
 	}
+	if feishuAppMode(cfg) {
+		return c.sendApp(ctx, cfg, m)
+	}
+	return c.sendWebhook(ctx, cfg, m)
+}
+
+// sendApp 是自建应用形态：换 token 后走 IM 消息 API，单聊/群发由 receive_id_type 决定。
+func (c feishuChannel) sendApp(ctx context.Context, cfg map[string]any, m Message) (int, error) {
+	card, kept := feishuCard(m)
+	content, err := json.Marshal(card)
+	if err != nil {
+		return 0, Permanent(fmt.Errorf("构造飞书卡片失败: %w", err))
+	}
+	typ := cfgString(cfg, "receive_id_type")
+	if typ == "" {
+		typ = "open_id"
+	}
+	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=" + typ
+	body := map[string]any{
+		"receive_id": cfgString(cfg, "receive_id"),
+		"msg_type":   "interactive",
+		// IM API 的 content 是「卡片 JSON 的字符串」，不是嵌套对象。
+		"content": string(content),
+	}
+	send := func(token string) (int, []byte, error) {
+		raw, serr := doJSON(ctx, "POST", url, map[string]string{"Authorization": "Bearer " + token}, body)
+		if serr != nil {
+			return 0, nil, serr
+		}
+		var res struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if uerr := json.Unmarshal(raw, &res); uerr != nil {
+			return 0, raw, fmt.Errorf("解析飞书响应失败: %w (%s)", uerr, snippet(raw))
+		}
+		return res.Code, raw, nil
+	}
+	token, err := feishuTenantToken(ctx, cfgString(cfg, "app_id"), cfgString(cfg, "app_secret"), false)
+	if err != nil {
+		return 0, err
+	}
+	code, raw, err := send(token)
+	if err != nil {
+		return 0, err
+	}
+	if feishuTokenStaleCodes[code] {
+		// token 意外失效：强制刷新后整条重发一次（卡片渲染无副作用）。
+		if token, err = feishuTenantToken(ctx, cfgString(cfg, "app_id"), cfgString(cfg, "app_secret"), true); err != nil {
+			return 0, err
+		}
+		if code, raw, err = send(token); err != nil {
+			return 0, err
+		}
+	}
+	if code != 0 {
+		// 凭据/参数/权限类错误重试无意义；频率限制（9499/230020）交由上层退避。
+		return 0, Permanent(fmt.Errorf("飞书应用消息发送失败（%d）: %s", code, snippet(raw)))
+	}
+	return kept, nil
+}
+
+// sendWebhook 是群自定义机器人形态：卡片 + 可选签名直投 Webhook。
+func (c feishuChannel) sendWebhook(ctx context.Context, cfg map[string]any, m Message) (int, error) {
 	card, kept := feishuCard(m)
 	payload := map[string]any{
 		"msg_type": "interactive",
