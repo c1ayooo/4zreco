@@ -21,24 +21,26 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent 
 
 ---
 
-## 这是什么
+## 4zreco 是什么
 
-4zreco 是一套 **LLM 多 Agent 自主渗透测试平台**：你给一句话目标，它自动完成
-「目标拆解 → 侦察 → 漏洞挖掘 → 利用 → 后渗透 → 报告」全流程，人随时可以插手纠偏。
+给一句话目标，它自动完成「**目标拆解 → 侦察 → 漏洞挖掘 → 利用 → 后渗透 →
+Word 报告**」全流程；人随时可以插手纠偏，每一步都有痕迹、有证据、有审计。
 
 三个底层事实决定了它和「套壳工具」的区别：
 
-1. **状态在图里，不在对话里**。资产与探索进度拆成两张由锚点缝合的图（资产图 ×
-   探索图），planner 每轮从图上读态势、往图上派意图——任务跑三天也不靠上下文续命。
-2. **推理有内核，判定不进内核**。Agent 循环跑在 [cloudwego/eino](https://github.com/cloudwego/eino)
-   ADK Runner 上（中断-检查点-恢复是框架能力）；而拦截规则、LLM 研判、范围匹配、
-   蜜罐签名、压缩决策全是普通 Go 包/纯函数——可独立单测、可被 CLI 复用，架构由
-   门禁脚本机检。
-3. **审批记录不可篡改**。审批三表 append-only + HMAC-SHA256 哈希链 + 触发器拒绝
-   改写，`/api/audit/verify` 逐行验链——「谁在什么时候放行了什么」有密码学答案。
+1. **状态在图里，不在对话里。** 资产与探索进度拆成两张由锚点缝合的图（资产图 ×
+   探索图），planner 每轮从图上读态势、往图上派意图——任务跑三天也不靠
+   上下文续命，换模型、断点恢复、事后复盘都是一等公民。
+2. **推理有内核，判定不进内核。** Agent 循环跑在 [cloudwego/eino](https://github.com/cloudwego/eino)
+   ADK Runner 上（中断-检查点-恢复是框架能力）；拦截规则、LLM 研判、范围匹配、
+   蜜罐签名、压缩决策全部是普通 Go 包/纯函数——可独立单测、可被 CLI 复用，
+   边界由 CI 门禁脚本机检。
+3. **审批记录不可篡改。** 审批三表 append-only + HMAC-SHA256 哈希链 + 触发器
+   拒绝改写，`/api/audit/verify` 逐行验链——「谁在什么时候放行了什么」有
+   密码学答案，不是一句日志。
 
-项目起始于已删除的原作者仓库（v0.3.15 定版），现为独立演进项目；内核已在
-2026-11 完成 norma → eino 迁移（四刀合入，行为等价验证），详见[来源声明](#与原作者版本的关系来源声明)。
+**2026-11：agent 内核完成 norma → eino 换代**（四刀合入、行为等价验证、架构
+门禁机检），审批升级为不可变审计 + checkpoint 断点续跑。
 
 ---
 
@@ -46,25 +48,25 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent 
 
 | 能力线 | 说明 |
 |---|---|
-| **Agent 内核（eino）** | cloudwego/eino ADK Runner：ReAct 循环、每轮可改写工具面（skill 中途解锁）、中断-检查点-恢复（审批型 HITL 的骨架）、12 种终态映射独立成包表驱动 |
-| **审批与不可变审计** | 三层拦截（规则 deny / 模型 judge / 人工 ask）+ 审批三表 append-only + HMAC 哈希链 + `decided_by` 身份落库 + `/api/audit/verify` 断链定位 |
-| **HITL 双轨** | `hitl_mode: channel \| eino` 灰度开关：eino 模式下审批等待 parked 在 PG checkpoint，进程重启（kill -9）后 decide 即从断点续跑、**不重审**；channel 模式保持经典语义，随时可切回 |
-| **多 Agent 推进** | planner 唯一意图生成 + frontier 意图队列 CAS 领取 + worker 做完即停 + 图变更防抖唤醒；空转续跑上移引擎（计数落库）、拆解墙钟、终态分流多层韧性 |
-| **漏洞情报运营** | NVD 全量/增量 + CISA KEV 在野 + GitHub Advisory/PoC 聚合 + 近期高危 30 分钟快通道 + 资产指纹→CVE 反向匹配 + 版本区间三态判定 |
-| **红队作战** | TCP 回连接收器（逐会话留证）/ C2 出口三形态（direct/SSH 中继/manual）/ redteam-ops 后渗透方法论 skill / 宿主工具 60+ 件一键装齐 |
-| **项目管理** | 任务/对话挂载项目、项目范围（project_scope）组织资产、侧栏切换器——多项目并行的作战分区内 |
+| **Agent 内核（eino）** | ADK Runner：ReAct 循环、每轮可改写工具面（skill 中途解锁）、StatefulInterrupt 中断-检查点-恢复、12 种终态映射独立成包表驱动 |
+| **审批与不可变审计** | 三层拦截（规则 deny / 模型 judge / 人工 ask）+ 审批三表 append-only + HMAC 哈希链 + `decided_by` 身份落库 + 断链定位 |
+| **HITL 双轨** | `hitl_mode: channel \| eino` 灰度开关：eino 模式下审批 parked 在 PG checkpoint，进程重启（kill -9）后 decide 即从断点续跑、**不重审**；channel 模式经典语义，随时切回 |
+| **多 Agent 推进** | planner 唯一意图生成 + frontier 意图队列 CAS 领取 + worker 做完即停 + 图变更防抖唤醒；空转续跑、拆解墙钟、终态分流多层韧性 |
+| **漏洞情报运营** | NVD 全量/增量 + CISA KEV 在野 + GHSA 版本区间 + GitHub PoC 聚合 + 近期高危 30 分钟快通道 + 资产指纹→CVE 反向匹配 |
+| **红队作战** | TCP 回连接收器（逐会话留证）/ C2 出口三形态（direct/SSH 中继/manual）/ redteam-ops 后渗透方法论 / 宿主工具 60+ 件一键装齐 |
+| **项目管理** | 任务/对话挂载项目、project_scope 组织资产、侧栏切换器——多项目并行作战分区 |
 | **安全与合规** | 登录防爆破 + 改密吊销会话 + 探活去指纹 + 认证面无产品名 + 蜜罐识别（内嵌签名库）——公网部署基线 |
-| **工具与交付** | MITM 全流量留证 / 证据版本化 sha256 / 公文级 Word 报告（OOXML 手写零依赖）/ Web/IM 通知 / 一键自更新（校验+回滚） |
+| **工具与交付** | MITM 全流量留证 / 证据版本化 sha256 / 公文级 Word 报告（OOXML 手写零依赖）/ Web·IM 通知 / 一键自更新（校验+回滚） |
 
 ---
 
 ## 界面速览
 
-> 以下截图来自真实运行实例，目标域名、主机地址、人员与凭据等敏感信息均已脱敏。
+> 以下截图来自真实运行实例，敏感信息均已脱敏。
 
 **入口与全局态势**
 
-| 控制台登录（首次启动初始化管理员） | 总览：任务 / 漏洞 / 资产 / Token 消耗 |
+| 控制台登录 | 总览：任务 / 漏洞 / 资产 / Token 消耗 |
 | :---: | :---: |
 | ![登录](assets/screenshots/4zreco-login.png) | ![总览](assets/screenshots/4zreco-dashboard.png) |
 
@@ -98,7 +100,7 @@ Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · eino 内核多 Agent 
 
 ## 核心设计
 
-### 双图架构：资产图 × 探索图（引擎层）
+### 双图架构：资产图 × 探索图
 
 渗透测试的全部状态拆成两张独立、由锚点缝合的图：
 
@@ -140,11 +142,11 @@ Agent 循环（模型→工具→事件流）跑在 cloudwego/eino ADK Runner �
 |---|---|
 | agent 循环 / ToolsNode 工具面 / 中断-检查点-恢复挂点 | eino（骨架） |
 | 拦截规则引擎、LLM judge、范围匹配、蜜罐签名、压缩决策 | 纯 Go 包（器官），eino 挂点里只留一行调用 |
-| guard 链、延迟工具门控、上下文压缩、steer 注入 | 自研中间件（4zrec 生产验证配方），不用官方 toolsearch/summarization |
+| guard 链、延迟工具门控、上下文压缩、steer 注入 | 自研中间件，挂进 eino 的 `BeforeModelRewriteState` / `WrapInvokableToolCall` |
 | 并发调度 | 工具读写分流：只读并行（共享信号量）、写互斥+全局独占——不搞全局锁串行化 |
 
-worker 间信息交换走 DB trace 检索，不用框架的 agent 间原语做调度通道；planner/
-worker 的角色分工、意图队列、终态分流全部留在引擎状态机。
+worker 间信息交换走 DB trace 检索，不用框架的 agent 间原语做调度通道；
+planner/worker 的角色分工、意图队列、终态分流全部留在引擎状态机。
 
 ### 多 Agent 自主推进
 
@@ -171,27 +173,6 @@ sequenceDiagram
 - **人在环路**：对话纠偏 / 意图暂停取消 / 人工审批 / `steer_work` 实时纠偏，
   每步 activity 在 UI 内联可见。
 
-### 漏洞情报运营（按时间流，不是静态知识库）
-
-多数同类产品的情报是「按组件查」；4zreco 做的是「**最近 7 天爆了什么 →
-匹配我的资产 → 排进任务**」：NVD 全量/增量 + **CISA KEV 在野利用** + GHSA
-版本区间 + GitHub PoC 聚合；**近期高危快通道**每 30 分钟拉 CVSS≥9.0 或 KEV；
-同步的 CVE 自动反向匹配资产 technologies 指纹，命中即向任务挂 hint；
-`search_vulns` 返回 `version_in_range` 三态判定（解析不出→保守「可能受影响」）。
-
-### 红队作战能力
-
-- **回连接收器**：接住反弹 shell / OOB 回连，逐会话记录来源、时间、捕获内容；
-  REST + agent 工具双入口；启停走人工审批。
-- **C2 出口三形态**：本机有公网→direct；无公网+公网中转机→SSH 反向隧道托管
-  （断线自动重连）；已有转发→manual。`listener_start` 返回解析后的回连地址，
-  agent 直接填 payload。
-- **redteam-ops skill**：后渗透六阶段方法论（落地稳定化→提权→权限保持→凭据
-  获取→横向移动→数据获取回传→收尾）+ 证据纪律。
-- **宿主工具一键装齐**：impacket/netexec/evil-winrm/chisel/ligolo-ng/proxychains/
-  socat/linpeas/pspy/responder/sqlmap/hydra/hashcat/nuclei/ffuf…全部在
-  「宿主环境」页一键安装（特权助手 4zreco-hostd 串行排队执行）。
-
 ### 审批 · 拦截 · 不可变审计 · HITL
 
 **三层闸门**：
@@ -217,11 +198,32 @@ sequenceDiagram
 
 **HITL 双轨**（`hitl_mode: channel | eino`，settings 可切，默认 channel 灰度）：
 
-- **eino 模式**：审批等待 parked 在 PG checkpoint（`tool.StatefulInterrupt`）——
-  进程重启（含 kill -9）后人工 decide，从断点精确续跑该工具调用，**不重审**；
-  恢复前验签（decision_row_id + HMAC 核对），伪造 resume 不可放行；同轮多工具
-  ask 聚合分发；指纹不匹配自动劣化回退（决定照落、运行侧收管控文本）。
+- **eino 模式**：审批等待 parked 在 PG checkpoint——进程重启（含 kill -9）后
+  人工 decide，从断点精确续跑该工具调用，**不重审**；恢复前验签
+  （decision_row_id + HMAC 核对），伪造 resume 不可放行；同轮多工具 ask 聚合
+  分发；指纹不匹配自动劣化回退（决定照落、运行侧收管控文本）。
 - **channel 模式**：经典阻塞语义，两模式共用同一张决定表，来回切不丢数据。
+
+### 漏洞情报运营（按时间流，不是静态知识库）
+
+多数同类产品的情报是「按组件查」；4zreco 做的是「**最近 7 天爆了什么 →
+匹配我的资产 → 排进任务**」：NVD 全量/增量 + **CISA KEV 在野利用** + GHSA
+版本区间 + GitHub PoC 聚合；**近期高危快通道**每 30 分钟拉 CVSS≥9.0 或 KEV；
+同步的 CVE 自动反向匹配资产 technologies 指纹，命中即向任务挂 hint；
+`search_vulns` 返回 `version_in_range` 三态判定（解析不出→保守「可能受影响」）。
+
+### 红队作战能力
+
+- **回连接收器**：接住反弹 shell / OOB 回连，逐会话记录来源、时间、捕获内容；
+  REST + agent 工具双入口；启停走人工审批。
+- **C2 出口三形态**：本机有公网→direct；无公网+公网中转机→SSH 反向隧道托管
+  （断线自动重连）；已有转发→manual。`listener_start` 返回解析后的回连地址，
+  agent 直接填 payload。
+- **redteam-ops skill**：后渗透六阶段方法论（落地稳定化→提权→权限保持→凭据
+  获取→横向移动→数据获取回传→收尾）+ 证据纪律。
+- **宿主工具一键装齐**：impacket/netexec/evil-winrm/chisel/ligolo-ng/proxychains/
+  socat/linpeas/pspy/responder/sqlmap/hydra/hashcat/nuclei/ffuf…全部在
+  「宿主环境」页一键安装（特权助手 4zreco-hostd 串行排队执行）。
 
 ### 全程证据链
 
@@ -229,12 +231,13 @@ sequenceDiagram
 - **发现绑定流量**：finding 可绑定 baseline/proof/verification/supporting 四类
   流量证据，快照版本化（sha256），报告引用可验证；
 - **数据回传**：本机文件内容外传类命令有专属拦截规则（judge 研判）；
-- **报告导出**：Word（OOXML 手写零依赖）按 19 类漏洞枚举折叠聚合；
+- **报告导出**：Word（OOXML 手写零依赖）按 19 类漏洞枚举折叠聚合，封面·目录·
+  页眉页脚·严重度着色·复测记录·修复路线图；
 - **对抗式自检**：换身份/换参数顺序/换客户端复现——「确认了才报」。
 
 ---
 
-## 安装
+## 快速开始
 
 > 依赖 **PostgreSQL**；探索需配置 **LLM**（UI 里配，支持 Anthropic / OpenAI /
 > 任意 OpenAI 兼容网关，多通道轮询 + 故障转移）。
@@ -249,7 +252,7 @@ sudo ./install.sh --mode=binary --with-tools   # 顺装常用渗透工具
 sudo ./install.sh --mode=docker      # Docker Compose
 ```
 
-幂等：重复执行 = 原地升级；`config.json` / `jwt.key` / 数据 / 数据库不动。
+幂等：重复执行 = 原地升级；`config.json` / 密钥 / 数据 / 数据库不动。
 卸载：`systemctl disable --now 4zreco 4zreco-hostd && rm -rf /opt/4zreco`。
 
 ### 方式二：下载预编译二进制
@@ -281,7 +284,7 @@ CGO_ENABLED=0 go build -o 4zreco-hostd ./cmd/4zreco-hostd   # 可选：特权安
 1. 浏览器打开 `http://<host>:8787` → 初始化管理员密码（≥8 位）
 2. 「LLM 配置」页配模型通道（≥2 个通道 + 开启轮询 = 实战推荐）
 3. 「宿主环境」页一键装齐缺失工具（或 `install.sh --with-tools`）
-4. （可选）系统页把 `hitl_mode` 切到 `eino`，体验断点续跑审批
+4. （可选）系统设置把 `hitl_mode` 切到 `eino`，体验断点续跑审批
 5. 新建项目 → 新建任务，给一句话目标
 
 ### 公网部署
@@ -293,8 +296,8 @@ CGO_ENABLED=0 go build -o 4zreco-hostd ./cmd/4zreco-hostd   # 可选：特权安
 ### 升级
 
 **页面一键更新**（系统配置 → 版本与更新）：下载 → SHA256 校验 → 冒烟测试 →
-原子换装 → 失败自动回滚到上一版。升级只换程序不动数据，schema 幂等迁移。
-`hitl_mode=eino` 的实例升级前无需任何操作——checkpoint 表随 schema 自动迁移。
+原子换装 → 失败自动回滚到上一版。升级只换程序不动数据，schema 幂等迁移；
+`hitl_mode=eino` 的实例 checkpoint 表随 schema 自动迁移，升级前无需任何操作。
 
 ---
 
@@ -368,7 +371,7 @@ internal/
     askernel/      eino 内核装配：中间件、会话、装配指纹、StatefulInterrupt 挂点
     termmap/       12 种终态映射（表驱动，引擎分流语义不变）
   acllm/           eino 转换层：schema.Message ↔ transcript DTO、工具桥接、并发分流
-  norma/           类型基座（transcript DTO 等，fork 内化——norma SDK 已退役）
+  norma/           transcript DTO 等类型基座
   db/              PostgreSQL 唯一存储：schema.sql（幂等迁移）+ 审批三表 + 哈希链
   server/          HTTP 面 + 引擎调度（全路由在 server.go）
   intercept/       三层拦截：规则匹配 → LLM 研判 → allow/ask/deny
@@ -393,31 +396,13 @@ scripts/           辅助脚本（devtest / 架构门禁 / 重置密码 / 基准
 | [docs/02-引擎与调度闭环.md](docs/02-引擎与调度闭环.md) | planner/worker 编排与生命周期 |
 | [docs/03-LLM接入层.md](docs/03-LLM接入层.md) | 通道选路、轮询池、熔断、录制计量 |
 | [docs/04-审批与拦截.md](docs/04-审批与拦截.md) | 三层规则、不可变审计（三表+哈希链）、HITL 双轨 |
-| [docs/Eino深度接入方案-2026-11-05.md](docs/Eino深度接入方案-2026-11-05.md) | 内核迁移定稿：红线 R1-R4、分期、门禁规格（当前权威） |
+| [docs/Eino深度接入方案-2026-11-05.md](docs/Eino深度接入方案-2026-11-05.md) | 内核迁移定稿：红线、分期、门禁规格（当前权威） |
 | [docs/项目管理与对话绑定改造-2026-11-04.md](docs/项目管理与对话绑定改造-2026-11-04.md) | 项目/任务/对话挂载模型 |
 | [docs/部署手册.md](docs/部署手册.md) | 部署 / 升级 / 排障（实测踩坑全记录） |
 | [docs/模型路由策略.md](docs/模型路由策略.md) | 按角色配模型：planner 强推理/worker 中推理/judge 便宜档 |
-| [docs/深度优化方案-2026-10-31.md](docs/深度优化方案-2026-10-31.md) | 报告质感×Agent 认知×攻击链路线图 |
 | [docs/红队能力建设-2026-10-30.md](docs/红队能力建设-2026-10-30.md) | 杀伤链能力矩阵 / 竞品对照 |
 | [docs/漏洞挖掘能力对比.md](docs/漏洞挖掘能力对比.md) | 与开源同类逐项对比 |
 | [docs/archive/](docs/archive/) | 历史快照（公网加固基线、体检报告、优化清单等） |
-
-## 与原作者版本的关系（来源声明）
-
-原作者 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)（百度“Agent+”攻防
-挑战赛冠军项目）于 2026-10 删除了仓库，原链接 / Release / Docker 源全部失效。
-本仓库在其**最终定版 v0.3.15**（git 历史 462 提交完整保留）基础上接手维护：
-
-- **保留**：双图架构、planner/worker 编排、MITM 流量代理、审批门框架、基础
-  工具集——原作者的架构设计是优秀的，git 历史向其致意；
-- **重建**：全部设计文档（原作者删除过 docs）、CI 门禁、Docker 源；
-- **演进**：v0.3.16 以来的 160+ 提交——情报运营 / 红队作战 / 安全加固 / 工程可靠性
-  / 工具与交付整条能力线由本仓库维护者完成；
-- **内核换代**：2026-11 完成 norma → cloudwego/eino 内核迁移（四刀合入，行为等价
-  验证 + 架构门禁机检），审批升级为不可变审计 + checkpoint 续跑；norma SDK 退役，
-  类型基座内化于 `internal/norma/`。
-
-换言之：**起点是别人的，现在是我们的。**
 
 ---
 
@@ -445,5 +430,4 @@ scripts/           辅助脚本（devtest / 架构门禁 / 重置密码 / 基准
 ## 参考
 
 - [cloudwego/eino](https://github.com/cloudwego/eino) — Agent 内核（ADK Runner，Apache-2.0）
-- [Cairn](https://github.com/oritera/Cairn) — 黑板架构参考
 - [SecLists](https://github.com/danielmiessler/SecLists) / [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) — 语料与模板
