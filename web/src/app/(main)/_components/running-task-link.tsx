@@ -3,13 +3,15 @@
 import Link from "next/link";
 import React from "react";
 
+import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import type { Task } from "@/lib/types";
 
 const POLL_MS = 5000;
 
-// 头部「在跑任务」入口：有 running 任务时显示可点击胶囊直达任务详情，无则不占位。
-// 5s 轮询任务列表（头部组件轻量，不接 SSE）。
+// 头部「在跑任务」入口：有 running 任务时显示可点击入口直达任务详情，无则不占位。
+// 5s 轮询任务列表（头部组件轻量，不接 SSE）。不放任务名——任务详情页头部已有，
+// 重复展示两头维护；入口只承担「快速到达」。
 export function RunningTaskLink() {
   const [running, setRunning] = React.useState<Task[]>([]);
 
@@ -32,23 +34,24 @@ export function RunningTaskLink() {
 
   if (running.length === 0) return null;
   const first = running[0]!;
-  const label = first.name?.trim() || first.description.trim().slice(0, 40) || `任务 ${first.id}`;
+  const title = `当前在跑的任务（${first.name?.trim() || first.description.trim().slice(0, 30) || `任务 ${first.id}`}），点击查看详情`;
   return (
-    <Link
-      href={`/function/tasks/detail?id=${encodeURIComponent(first.id)}`}
-      title={`当前在跑的任务，点击查看详情${running.length > 1 ? `（共 ${running.length} 个）` : ""}`}
-      className="flex max-w-[28rem] items-center gap-2 rounded-full border bg-background/60 px-3 py-1 text-xs transition-colors hover:bg-accent"
+    <Button
+      asChild
+      size="sm"
+      variant="outline"
+      className="h-7 gap-2 rounded-full px-3 font-normal text-muted-foreground"
     >
-      <span className="relative flex size-2 shrink-0">
-        <span className="absolute inline-flex size-2 animate-ping rounded-full bg-emerald-400 opacity-60" />
-        <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
-      </span>
-      <span className="truncate text-muted-foreground">{label}</span>
-      {running.length > 1 && (
-        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-          +{running.length - 1}
+      <Link href={`/function/tasks/detail?id=${encodeURIComponent(first.id)}`} title={title}>
+        <span className="relative flex size-2 shrink-0">
+          <span className="absolute inline-flex size-2 animate-ping rounded-full bg-success opacity-60" />
+          <span className="relative inline-flex size-2 rounded-full bg-success" />
         </span>
-      )}
-    </Link>
+        在跑任务
+        {running.length > 1 && (
+          <span className="font-mono tabular-nums text-muted-foreground">×{running.length}</span>
+        )}
+      </Link>
+    </Button>
   );
 }
