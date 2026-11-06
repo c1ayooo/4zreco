@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### 修复：并行工具调用在 eino 折叠时炸裂（DeepSeek Responses 实测触发）
+
+- 症状：DeepSeek 官方 API（`openai-responses` 格式）下 planner/主 Agent 一轮返回
+  **两个**并行 function_call 时任务直接失败：
+  `cannot concat ToolCalls with different tool id: 'call_00_…' 'call_01_…'`。
+- 根因（norma fork 内偏差，已登记 `internal/norma/README.md`）：上游 v0.4.4 的
+  Responses 适配器给所有工具事件发零值 `ToolIndex`，Chat Completions 适配器给
+  `tool_input` 事件漏带 index——多个并行调用经 `acllm.BridgeModel` 落到同一 eino
+  Index，`schema.ConcatMessages` 按 Index 分组折叠即拒绝。桥侧无法区分
+  （`ToolIndex==0` 与"未设"不可分辨），只能在 provider 源头锚定。
+- 修复：Responses 按 `output_index`/`item_id` 锚定（DeepSeek 实测报文均携带），
+  Chat Completions 参数分片按 `tool_calls[].index` 路由。
+- 回归测试：`internal/acllm/parallel_tool_stream_test.go`（含 eino 折叠端到端，
+  修复前必红、错误串与线上一致）。
+
 ### eino 内核迁移收官（P0–P4）——内核切换 eino Runner，norma 退役，hitl_mode 双轨
 
 按 `docs/Eino深度接入方案-2026-11-05.md` 分期落地，feat/eino-migration 分支：

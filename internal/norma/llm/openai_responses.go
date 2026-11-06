@@ -147,6 +147,9 @@ func (p *openaiResponsesProvider) Stream(ctx context.Context, req CompletionRequ
 		}
 		defer resp.Body.Close()
 		scan := newSSEScanner(resp.Body)
+		// toolState anchors parallel function_call items across this stream — see
+		// responsesToolState.
+		toolState := newResponsesToolState()
 		for {
 			event, data, serr := scan.next()
 			if serr == io.EOF {
@@ -159,7 +162,7 @@ func (p *openaiResponsesProvider) Stream(ctx context.Context, req CompletionRequ
 			if data == "" {
 				continue
 			}
-			ev, ok, perr := parseResponsesFrame(event, data)
+			ev, ok, perr := parseResponsesFrame(event, data, toolState)
 			if perr != nil {
 				yield(StreamEvent{}, perr)
 				return
@@ -174,10 +177,61 @@ func (p *openaiResponsesProvider) Stream(ctx context.Context, req CompletionRequ
 	}
 }
 
+// responsesToolState anchors function_call items across one Responses stream.
+// Parallel tool calls must carry DISTINCT StreamEvent.ToolIndex values: the
+// neutral events feed acllm.BridgeModel, whose chunks eino's
+// schema.ConcatMessages folds BY INDEX — two calls anchored on the same index
+// surface as "cannot concat ToolCalls with different tool id" and kill the
+// run. The item's output_index is the primary anchor (unique per output item,
+// and not necessarily 0-based: reasoning/message items occupy earlier slots);
+// the item id learned at output_item.added, then the most recent call, cover
+// gateways that omit it. [fork fix — upstream norma v0.4.4 leaves ToolIndex at
+// the zero value on every Responses tool event.]
+type responsesToolState struct {
+	itemIdx map[string]int // output item id → ToolIndex, learned at output_item.added
+	lastIdx int
+	seen    bool
+}
+
+func newResponsesToolState() *responsesToolState {
+	return &responsesToolState{itemIdx: map[string]int{}}
+}
+
+// added anchors a newly announced function_call item and returns its index.
+func (s *responsesToolState) added(outputIndex *int, itemID string) int {
+	idx := 0
+	if outputIndex != nil {
+		idx = *outputIndex
+	} else if len(s.itemIdx) > 0 {
+		idx = s.lastIdx + 1 // no wire index: take the next free slot
+	}
+	if itemID != "" {
+		s.itemIdx[itemID] = idx
+	}
+	s.lastIdx, s.seen = idx, true
+	return idx
+}
+
+// anchor resolves the item a delta event belongs to.
+func (s *responsesToolState) anchor(outputIndex *int, itemID string) int {
+	if outputIndex != nil {
+		return *outputIndex
+	}
+	if itemID != "" {
+		if idx, ok := s.itemIdx[itemID]; ok {
+			return idx
+		}
+	}
+	if s.seen {
+		return s.lastIdx
+	}
+	return 0
+}
+
 // parseResponsesFrame maps one named Responses SSE event to a neutral
 // StreamEvent. Unrecognized events (response.created, *.in_progress, item.done,
 // content_part.*, etc.) return ok=false and are skipped.
-func parseResponsesFrame(event, data string) (StreamEvent, bool, error) {
+func parseResponsesFrame(event, data string, tools *responsesToolState) (StreamEvent, bool, error) {
 	// The event name is authoritative; some gateways omit the SSE `event:` line
 	// and put the discriminator only in the JSON `type` field, so fall back to it.
 	var f struct {
@@ -185,12 +239,15 @@ func parseResponsesFrame(event, data string) (StreamEvent, bool, error) {
 		// output_item.added: item carries the function_call id/name.
 		Item struct {
 			Type      string `json:"type"`
+			ID        string `json:"id"`
 			CallID    string `json:"call_id"`
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 		} `json:"item"`
-		Delta    string `json:"delta"` // *_text.delta / function_call_arguments.delta
-		Response struct {
+		ItemID      string `json:"item_id"` // *.delta: the item the delta belongs to
+		OutputIndex *int   `json:"output_index"`
+		Delta       string `json:"delta"` // *_text.delta / function_call_arguments.delta
+		Response    struct {
 			Status            string `json:"status"`
 			IncompleteDetails *struct {
 				Reason string `json:"reason"`
@@ -211,7 +268,7 @@ func parseResponsesFrame(event, data string) (StreamEvent, bool, error) {
 	switch kind {
 	case "response.output_item.added":
 		if f.Item.Type == "function_call" {
-			return StreamEvent{Type: SEToolUseStart, ToolID: f.Item.CallID, ToolName: f.Item.Name}, true, nil
+			return StreamEvent{Type: SEToolUseStart, ToolID: f.Item.CallID, ToolName: f.Item.Name, ToolIndex: tools.added(f.OutputIndex, f.Item.ID)}, true, nil
 		}
 	case "response.output_text.delta":
 		if f.Delta != "" {
@@ -223,7 +280,7 @@ func parseResponsesFrame(event, data string) (StreamEvent, bool, error) {
 		}
 	case "response.function_call_arguments.delta":
 		if f.Delta != "" {
-			return StreamEvent{Type: SEToolInputJSON, Text: f.Delta}, true, nil
+			return StreamEvent{Type: SEToolInputJSON, Text: f.Delta, ToolIndex: tools.anchor(f.OutputIndex, f.ItemID)}, true, nil
 		}
 	case "response.completed", "response.incomplete":
 		ev := StreamEvent{Type: SEMessageDelta, StopReason: "end_turn"}

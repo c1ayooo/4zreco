@@ -38,12 +38,14 @@ type StreamEvent struct {
 	ToolID     string // tool_use_start
 	ToolName   string // tool_use_start
 	StopReason string // message_delta
-	// ToolIndex is the provider-assigned tool_calls[] index, carried on
-	// SEToolUseStart and SEToolUseSignature so a signature can be matched to the
-	// call it belongs to rather than to whichever call started last. Only the
-	// OpenAI Chat Completions adapter populates it (that wire format indexes
-	// parallel calls); elsewhere it is 0 and consumers fall back to the most
-	// recently started call.
+	// ToolIndex is the provider-assigned index of the call among the turn's
+	// parallel tool calls, carried on SEToolUseStart, SEToolInputJSON and
+	// SEToolUseSignature so every fragment lands on the call it belongs to
+	// rather than on whichever call started last. The OpenAI Chat Completions
+	// adapter takes it from tool_calls[].index; the Responses adapter from the
+	// item's output_index. Adapters whose wire format has no such field
+	// (Anthropic) leave it 0 and consumers fall back to the most recently
+	// started call.
 	ToolIndex int
 	// Usage arrives on message_start and message_delta. For FormatAnthropic the
 	// two ECHO the input side (input_tokens, cache read/creation) rather than

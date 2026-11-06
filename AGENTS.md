@@ -40,6 +40,31 @@ ZRECO_SKIP_FRONTEND=1 ZRECO_SKIP_NPM_CI=1 ZRECO_COMPRESS=0 ZRECO_PACKAGE=0 \
   ZRECO_OUTPUT=/abs/path/4zreco ./build.sh --target linux/amd64
 ```
 
+## 1.5 本机开发环境速查（2026-11-06 启动时记录）
+
+本机 **系统 PostgreSQL 18**（`127.0.0.1:5432`，systemd 管理）上建了本项目专用角色与库；
+DSN 已落 `config.json`（.gitignore 已覆盖该文件），启动**不需要**再 export `ZRECO_PG_DSN`：
+
+- 库/角色：`4zreco`（名字以数字开头，SQL 里必须双引号包裹，见 §1 末尾的坑）
+- 连接密码：**不入库**（本机 dev 库凭据只落 `config.json` 与本地密码记录；2026-11-06
+  关联远端时已按下方警示从本节移除明文）
+- 本机无 Docker、无 sudo 常规可用（sudo 密码属用户本人，勿写入任何文件）；
+  全量测试连库方案（按需三选一）：(a) 系统 PG 上的 `4zreco_ci` 库（角色无 CREATEDB，
+  需用户本人手工建）；(b) `/usr/lib/postgresql/18/bin` 的 initdb 在 /tmp 起一次性
+  trust 集群（15432 端口，测完即删，不碰系统 PG）；(c) §1 的 Docker 容器（有 Docker 时）。
+- ⚠️ 任何本机凭据（PG 密码、API key）一律不得写入本文件或任何入库文件。
+
+开发模式启动（后端 :8787 读 config.json，代理 :8788，前端 dev :3000）：
+
+```bash
+./dev.sh          # 或分开跑：go run ./cmd/4zreco -addr :8787 -proxy 127.0.0.1:8788
+                   #             cd web && npm run dev
+```
+
+注意：`go run`（无 `-tags embedui`）的 :8787 页面是「前端未内嵌」stub 提示——**这不是构建故障**，
+开发时请访问 :3000（`next.config.mjs` 自动把 /api 反代到 :8787）。内嵌前端的单二进制见 §4
+（`NEXT_EXPORT=1 npx next build` → 拷 `web/out` → `internal/server/webui/dist` → `-tags embedui`）。
+
 ## 2. 测试基线（判定 FAIL 是否与你有关）
 
 - **已知负载性 flaky**（单跑必过，全量偶发，勿当回归）：

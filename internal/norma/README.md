@@ -30,3 +30,14 @@ noa 实验功能退化为告警+内置 compaction 回退，见 `internal/agent/n
 - fork 不带上游测试（部分上游测试依赖未 fork 的 agentcore 生态）；本仓库
   `internal/acllm`、`internal/llmrec`、`internal/agent` 的测试覆盖其行为面。
 - 升级 eino / 改 DTO 字段时，落盘 JSON 形状（llm.Message 等）不变仍是硬约束。
+
+## fork 内偏差登记（改行为前已确认无法在 eino/acllm 侧修复）
+
+- `llm/openai_responses.go` / `llm/openai.go`（2026-11-06）：并行工具调用修复。
+  上游 v0.4.4 的 Responses 适配器给所有工具事件发零值 ToolIndex、Chat Completions
+  适配器给 tool_input 事件漏带 index，多个并行 function_call 经 acllm.BridgeModel
+  落到同一 eino Index 上，`schema.ConcatMessages` 报 "cannot concat ToolCalls with
+  different tool id"（DeepSeek 实测触发）。桥侧无法区分（ToolIndex==0 与"未设"不可
+  分辨），故在 provider 源头锚定：Responses 按 output_index/item_id，Chat
+  Completions 按tool_calls[].index。回归测试 `internal/acllm/parallel_tool_stream_test.go`。
+  仅新增运行时事件字段取值，落盘 DTO JSON 形状不变。

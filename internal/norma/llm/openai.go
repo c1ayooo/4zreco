@@ -599,7 +599,11 @@ func parseOpenAIFrame(data string, started map[int]bool) (evs []StreamEvent, sto
 			evs = append(evs, StreamEvent{Type: SEToolUseStart, ToolID: tc.ID, ToolName: tc.Function.Name, ToolIndex: tc.Index})
 		}
 		if tc.Function.Arguments != "" {
-			evs = append(evs, StreamEvent{Type: SEToolInputJSON, Text: tc.Function.Arguments})
+			// ToolIndex rides the args too: parallel calls stream interleaved-by-
+			// call chunks, and folding by "most recent start" (eino's concat groups
+			// chunks by Index) merges call 1's fragments onto call 0. [fork fix —
+			// upstream norma v0.4.4 leaves it at 0.]
+			evs = append(evs, StreamEvent{Type: SEToolInputJSON, Text: tc.Function.Arguments, ToolIndex: tc.Index})
 		}
 		// Gemini attaches thought_signature to the delta that completes this
 		// tool call, after its arguments — mirrors how SEThinkingSignature
