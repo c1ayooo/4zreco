@@ -51,6 +51,15 @@ export default function ProjectsPage() {
     },
     [setProject, router],
   );
+  // 新建任务 = 切到该项目并直接拉起任务页的创建面板（?create=1 打开面板，
+  // &project_id= 预选归属项目——深链语义见 tasks/page.tsx 的两个 effect）。
+  const newTaskIn = React.useCallback(
+    (id: number) => {
+      setProject(id);
+      void router.push(`/function/tasks?create=1&project_id=${id}`);
+    },
+    [setProject, router],
+  );
 
   const [list, setList] = React.useState<Project[]>([]);
   const [loaded, setLoaded] = React.useState(false);
@@ -184,14 +193,23 @@ export default function ProjectsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-semibold text-2xl tracking-tight">项目</h1>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="font-semibold text-2xl tracking-tight">项目</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => void router.push("/function/tasks?create=1")}
+              title="跳转到任务页并打开创建面板（默认挂当前项目）"
+            >
+              <ListTodoIcon className="size-4" /> 新建任务
+            </Button>
+            <Button onClick={openCreate}>
+              <PlusIcon className="size-4" /> 新建项目
+            </Button>
+          </div>
         </div>
-        <Button onClick={openCreate}>
-          <PlusIcon className="size-4" /> 新建项目
-        </Button>
-      </div>
 
       {!loaded ? (
         <div className="text-muted-foreground py-16 text-center text-sm">加载中…</div>
@@ -251,6 +269,18 @@ export default function ProjectsPage() {
                 <CalendarIcon className="size-3" />
                 {new Date(p.created_at).toLocaleDateString()}
                 <span className="ml-auto flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    title={`在「${p.name}」下新建任务（切换到此项目并打开创建面板）`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      newTaskIn(p.id);
+                    }}
+                  >
+                    <PlusIcon className="size-3.5" /> 新建任务
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
