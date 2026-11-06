@@ -1685,6 +1685,19 @@ export interface InterceptDetail extends InterceptApprovalRow {
   audit: InterceptAudit | null;
 }
 
+// AuditChainStatus：/api/audit/verify 响应（P0-3 审批决定哈希链逐行校验）。
+// seq 为空的「历史区」行（legacy 回填/归档恢复）只计数、不逐行校验；
+// broken_at_seq 定位首个不一致（0 = 锚行本身）。
+export interface AuditChainStatus {
+  ok: boolean;
+  chain_id: string;
+  last_seq: number;
+  checked: number;
+  history_rows: number;
+  broken_at_seq: number;
+  reason?: string;
+}
+
 export type TrafficEvidenceRole = "baseline" | "proof" | "verification" | "supporting";
 export interface TrafficEvidenceRef {
   traffic_id: string;

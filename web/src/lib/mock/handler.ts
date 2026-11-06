@@ -2444,7 +2444,7 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       detail.execution_status = b.decision === "allowed" ? "unknown" : "not_executed";
       detail.output = b.decision === "allowed" ? "演示模式未执行工具。" : "";
     }
-    return { ok: true };
+    return { ok: true, resumed: false, requires_rerun: true }; // 演示按 channel 模式语义
   }
   if (seg[0] === "intercept" && seg[1] === "history" && seg.length === 3) {
     const row = mockInterceptHistory.find((r) => r.id === Number(seg[2]));
@@ -2481,6 +2481,8 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     };
   }
   if (path === "/intercept/tool-config") return { enabled_tools: ["bash"] };
+  if (path === "/audit/verify" && m === "GET")
+    return { ok: true, chain_id: "demo", last_seq: 3, checked: 3, history_rows: 0, broken_at_seq: 0 };
   if (path === "/intercept/judge" && m === "GET")
     return {
       enabled: false,

@@ -243,9 +243,12 @@ function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: n
     if (step.inherited || !pendingId || deciding) return;
     setDeciding(true);
     try {
-      await api.interceptDecide(pendingId, decision);
+      const res = await api.interceptDecide(pendingId, decision);
       setDecided(decision);
-      toast.success(decision === "allowed" ? "已允许执行" : "已拒绝执行");
+      // resumed=true（hitl_mode=eino）：停靠运行已接手，从检查点续跑。
+      toast.success(
+        `${decision === "allowed" ? "已允许执行" : "已拒绝执行"}${res.resumed ? "，运行将从检查点续跑" : ""}`,
+      );
     } catch (e) {
       toast.error((e as Error).message);
     } finally {

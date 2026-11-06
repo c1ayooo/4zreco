@@ -1397,12 +1397,16 @@ export const api = {
   interceptPending: () => get<{ pending: InterceptPending[] }>("/intercept/pending").then((r) => arr(r.pending)),
   interceptGetOne: (id: number) => get<InterceptPending>(`/intercept/pending/${id}`),
   interceptDecide: (id: number, decision: "allowed" | "denied") =>
-    post<{ ok: boolean }>(`/intercept/pending/${id}/decide`, { decision }),
+    // P2：resumed=true = 停靠运行已接手，将从检查点续跑；requires_rerun=true =
+    // 无停靠运行接手（channel 模式本无检查点路径 / eino 劣化需重跑）。
+    post<{ ok: boolean; resumed: boolean; requires_rerun: boolean }>(`/intercept/pending/${id}/decide`, { decision }),
   interceptExecution: (id: number, conversationId?: number) =>
     get<import("@/lib/types").InterceptExecution>(
       `/intercept/history/${id}/execution${conversationId ? `?conversation=${conversationId}` : ""}`,
     ),
   interceptDetail: (id: number) => get<InterceptDetail>(`/intercept/history/${id}`),
+  // 审计链校验（P0-3）：逐行重算审批决定哈希链，区分历史区与断链。
+  auditVerify: () => get<import("@/lib/types").AuditChainStatus>("/audit/verify"),
   interceptHistory: () => get<{ items: InterceptApprovalRow[] }>("/intercept/history").then((r) => arr(r.items)),
   interceptHistoryPage: (page = 1, size = 20, filter: InterceptApprovalFilter = {}) =>
     get<{ items: InterceptApprovalRow[]; total?: number }>(

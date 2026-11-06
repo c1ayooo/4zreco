@@ -11,6 +11,7 @@ import {
   CopyIcon,
   RefreshCwIcon,
   ShieldAlertIcon,
+  ShieldCheckIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -28,6 +29,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api } from "@/lib/api";
 import { listenMedia } from "@/lib/media-query";
 import type {
+  AuditChainStatus,
   InterceptApprovalFilter,
   InterceptApprovalRow,
   InterceptAudit,
@@ -53,6 +55,22 @@ function fmtTime(value?: string) {
 function source(row: InterceptApprovalRow) {
   return row.ask_source || "unknown";
 }
+
+// judge=模型判定（新数据）；model=模型判定（旧数据迁移值）。
+function isModelSource(row: InterceptApprovalRow) {
+  return source(row) === "judge" || source(row) === "model";
+}
+
+// 决定来源（P0-6）：human=人工；auto=规则/模型即时裁决观测行；timeout=审批超时；
+// auto_cancel=任务取消连坐；legacy/archive=迁移与恢复。
+const decisionSourceLabels: Record<string, string> = {
+  human: "人工",
+  auto: "自动裁决",
+  timeout: "超时兜底",
+  auto_cancel: "取消收尾",
+  legacy: "迁移数据",
+  archive: "归档恢复",
+};
 
 function originLabel(row: InterceptApprovalRow) {
   if (row.task_id) return row.task_id;
@@ -113,7 +131,7 @@ function MatchCell({ row, showReason = true }: { row: InterceptApprovalRow; show
   const reason = row.reason?.replace(/^\[模型\]\s*/, "");
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      {source(row) === "model" ? (
+      {isModelSource(row) ? (
         <Badge variant="outline">
           <BotIcon />
           模型判定
@@ -265,6 +283,59 @@ function ModelReviewContext({ input }: { input: InterceptReviewInput }) {
 
 type Decide = (id: number, decision: "allowed" | "denied") => Promise<void>;
 
+// AuditChainBadge：审批决定哈希链校验状态（P0-3，/api/audit/verify）。
+// 挂载时校验一次，revision 变化（手动刷新/新决定落库）时重校验；只在
+// 平台级审批中心展示（链是全局一条，任务内嵌视图不重复）。
+function AuditChainBadge({ revision }: { revision: number }) {
+  const [status, setStatus] = React.useState<AuditChainStatus | null>(null);
+  const [error, setError] = React.useState("");
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision drives re-verification on refresh.
+  React.useEffect(() => {
+    let cancelled = false;
+    api
+      .auditVerify()
+      .then((next) => {
+        if (cancelled) return;
+        setStatus(next);
+        setError("");
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError((e as Error).message || "校验失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [revision]);
+
+  let label = "审计链…";
+  let tone = "";
+  const title: string[] = [];
+  if (error) {
+    label = "审计链校验失败";
+    tone = "border-destructive/50 text-destructive";
+  } else if (status) {
+    if (status.ok) {
+      label = status.history_rows > 0 ? `正常 · 历史区 ${status.history_rows} 行` : "审计链正常";
+      tone = "text-success";
+      title.push(`已逐行校验 ${status.checked} 行`);
+      if (status.history_rows > 0) title.push(`历史区 ${status.history_rows} 行未纳入逐行校验`);
+    } else {
+      label = status.broken_at_seq > 0 ? `断链@${status.broken_at_seq}` : "链异常";
+      tone = "border-destructive/50 text-destructive";
+      if (status.reason) title.push(status.reason);
+      title.push(`已校验 ${status.checked} 行`);
+    }
+  }
+  return (
+    <Badge variant="outline" className={cn("gap-1 font-normal", tone)} title={title.join("；")}>
+      <ShieldCheckIcon />
+      <span className="tabular-nums">{label}</span>
+    </Badge>
+  );
+}
+
 function DecisionActions({ row, busy, decide }: { row: InterceptApprovalRow; busy: boolean; decide: Decide }) {
   if (row.status !== "pending") return null;
   return (
@@ -334,30 +405,52 @@ export function ApprovalDetail({
   if (row.status === "pending") execution = "尚未执行";
   if (audit && audit.correlation !== "exact" && audit.effective_action === "allow") execution = "未关联执行结果";
   const command = typeof row.tool_input?.command === "string" ? row.tool_input.command : undefined;
-  let initialLabel = source(row) === "model" ? "模型初判" : "规则初判";
+  let initialLabel = isModelSource(row) ? "模型初判" : "规则初判";
   if (audit?.model_fallback) initialLabel = "模型异常回退";
+  const decided = current.status !== "pending";
 
   return (
     <div className="flex min-w-0 flex-col gap-4 p-3 sm:p-5">
       <div className="grid min-w-0 gap-5 rounded-xl border bg-muted/20 p-4 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-3">
-          <CodeBlock
-            label={`${current.agent_name || current.conv_agent_key || "Agent"} · 工具请求`}
-            text={JSON.stringify(row.tool_input ?? {}, null, 2)}
-          />
-          {command ? (
-            <Collapsible>
-              <CollapsibleTrigger asChild>
-                <Button variant="ghost" size="sm">
-                  <ChevronDownIcon data-icon="inline-start" />
-                  查看命令内容
-                </Button>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="pt-2">
-                <CodeBlock label="命令内容" text={command} />
-              </CollapsibleContent>
-            </Collapsible>
-          ) : null}
+          {isModelSource(current) ? (
+            <CodeBlock
+              label={`${current.agent_name || current.conv_agent_key || "Agent"} · 工具请求`}
+              text={JSON.stringify(row.tool_input ?? {}, null, 2)}
+            />
+          ) : (
+            <>
+              {current.rule_name ? (
+                <p className="text-muted-foreground text-xs">
+                  命中规则 <span className="text-foreground">{current.rule_name}</span>
+                </p>
+              ) : null}
+              {command ? (
+                <>
+                  <CodeBlock
+                    label={`${current.agent_name || current.conv_agent_key || "Agent"} · 命令`}
+                    text={command}
+                  />
+                  <Collapsible>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm">
+                        <ChevronDownIcon data-icon="inline-start" />
+                        查看完整工具请求
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-2">
+                      <CodeBlock label="工具请求 JSON" text={JSON.stringify(row.tool_input ?? {}, null, 2)} />
+                    </CollapsibleContent>
+                  </Collapsible>
+                </>
+              ) : (
+                <CodeBlock
+                  label={`${current.agent_name || current.conv_agent_key || "Agent"} · 工具请求`}
+                  text={JSON.stringify(row.tool_input ?? {}, null, 2)}
+                />
+              )}
+            </>
+          )}
           <p className="text-muted-foreground text-xs">
             执行结果：<span className="text-foreground">{detail ? execution : "加载中…"}</span>
           </p>
@@ -384,6 +477,14 @@ export function ApprovalDetail({
             <dd>{fmtTime(row.created_at)}</dd>
             <dt className="text-muted-foreground">决定时间</dt>
             <dd>{fmtTime(current.decided_at)}</dd>
+            {decided ? (
+              <>
+                <dt className="text-muted-foreground">决定者</dt>
+                <dd className="break-words">{current.decided_by || "—"}</dd>
+                <dt className="text-muted-foreground">决定来源</dt>
+                <dd className="break-words">{decisionSourceLabels[current.decision_source ?? ""] ?? "—"}</dd>
+              </>
+            ) : null}
             {audit?.rule_name ? (
               <>
                 <dt className="text-muted-foreground">规则快照</dt>
@@ -748,7 +849,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
     decisionLock.current = true;
     setDeciding(true);
     try {
-      await api.interceptDecide(id, decision);
+      const res = await api.interceptDecide(id, decision);
       // Invalidate a list request started before this decision.
       request.current++;
       // Optimistically drop the decided item from the independent pending queue
@@ -758,7 +859,12 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
       );
       setPendingRows((prev) => prev.filter((row) => row.id !== id));
       setRevision((v) => v + 1);
-      toast.success(decision === "allowed" ? "已允许执行" : "已拒绝执行");
+      // resumed=true（hitl_mode=eino）：停靠运行已接手，从检查点续跑。
+      // requires_rerun=true 在 channel 模式（默认）同样返回——无检查点路径是常态
+      // 而非异常，此处不断言「需重跑」，避免默认部署误报。
+      toast.success(
+        `${decision === "allowed" ? "已允许执行" : "已拒绝执行"}${res.resumed ? "，运行将从检查点续跑" : ""}`,
+      );
       // Re-fetch counts and rows: a decided item may no longer match the filter.
       await latestLoad.current(true);
     } catch (e) {
@@ -788,13 +894,13 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
           <ClipboardListIcon className="size-5 text-muted-foreground" />
           <h1 className="font-semibold text-xl">{title}</h1>
           {pending.length ? <Badge variant="secondary">{pending.length} 待审批</Badge> : null}
+          {!taskId ? <AuditChainBadge revision={revision} /> : null}
         </div>
         <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading || refreshing}>
           <RefreshCwIcon data-icon="inline-start" className={cn(refreshing && "animate-spin")} />
           刷新
         </Button>
       </div>
-      <p className="text-muted-foreground text-sm">展开记录查看工具请求和审批裁决，以及当时的上下文与执行结果。</p>
       <FieldGroup className="flex-row flex-wrap items-end gap-3" aria-label="审批记录筛选">
         <Field className="w-full sm:w-40">
           <FieldLabel htmlFor={`${filterID}-status`}>审批状态</FieldLabel>
@@ -866,7 +972,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
         <section className="overflow-hidden rounded-xl border">
           <div className="flex items-center gap-2 border-b bg-muted/40 px-4 py-3 font-medium text-sm">
             <ShieldAlertIcon className="size-4" />
-            待处理（{pending.length}）<span className="text-muted-foreground text-xs">展开后允许或拒绝</span>
+            待处理（{pending.length}）
           </div>
           <ApprovalTable rows={pending} busy={deciding} decide={decide} revision={revision} label="待处理审批" />
         </section>
