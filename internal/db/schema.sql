@@ -1203,7 +1203,75 @@ CREATE TABLE IF NOT EXISTS intercept_decisions (
     row_hash        TEXT NOT NULL DEFAULT '',
     UNIQUE (pending_id)
 );
+
+-- 升级残留的旧触发器先摘（无放行口，会拦掉本文件的调和 UPDATE 与回填 INSERT）；
+-- 文件尾统一重建三表触发器，摘挂窗口在单事务内不可见。
+DROP TRIGGER IF EXISTS trg_intercept_pending_immutable ON intercept_pending;
+DROP TRIGGER IF EXISTS trg_intercept_decisions_immutable ON intercept_decisions;
+DROP TRIGGER IF EXISTS trg_intercept_executions_immutable ON intercept_executions;
+-- 升级残留的野生触发器（失败尝试遗留，本 schema 不重建）：迁移后其函数体
+-- 引用的旧列已被删（如 pending.status），不摘会在每次 decide 写入时炸。
+DROP TRIGGER IF EXISTS trg_intercept_decisions_sync ON intercept_decisions;
+
+-- 中间形态调和（升级残留）：早前失败的升级尝试可能已按旧版 schema 建出
+-- decisions 表（有 prev_hash/row_hash，无 seq/action/decision_reason/
+-- decision_source/decided_at，列名 source/reason 为旧口径）。CREATE TABLE
+-- IF NOT EXISTS 不补列，按 information_schema 逐列守卫补齐并把旧值搬进新口径；
+-- 旧行 seq 保持 NULL 落历史区不接链（旧链状态不可信，与旧库回填同口径）。
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = current_schema() AND table_name = 'intercept_decisions'
+                 AND column_name = 'prev_hash')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = current_schema() AND table_name = 'intercept_decisions'
+                 AND column_name = 'seq') THEN
+        ALTER TABLE intercept_decisions ADD COLUMN action TEXT NOT NULL DEFAULT '';
+        ALTER TABLE intercept_decisions ADD COLUMN decision_reason TEXT NOT NULL DEFAULT '';
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = current_schema() AND table_name = 'intercept_decisions'
+                     AND column_name = 'reason') THEN
+            UPDATE intercept_decisions SET decision_reason = reason;
+        END IF;
+        ALTER TABLE intercept_decisions ADD COLUMN decision_source TEXT NOT NULL DEFAULT 'legacy';
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = current_schema() AND table_name = 'intercept_decisions'
+                     AND column_name = 'source') THEN
+            UPDATE intercept_decisions SET decision_source =
+                CASE source WHEN 'web' THEN 'human' WHEN 'auto_cancel' THEN 'auto_cancel' ELSE 'legacy' END;
+        END IF;
+        ALTER TABLE intercept_decisions ADD COLUMN decided_at TIMESTAMPTZ;
+        UPDATE intercept_decisions SET decided_at = COALESCE(created_at, NOW());
+        ALTER TABLE intercept_decisions ALTER COLUMN decided_at SET NOT NULL;
+        ALTER TABLE intercept_decisions ALTER COLUMN decided_at SET DEFAULT NOW();
+        ALTER TABLE intercept_decisions ADD COLUMN seq BIGINT;
+        -- 旧口径列的默认值补齐：prev_hash/row_hash/created_at 在旧尝试里是
+        -- NOT NULL 无默认，后续 INSERT（回填/锚行）不带这些列会被拒。
+        ALTER TABLE intercept_decisions ALTER COLUMN prev_hash SET DEFAULT '';
+        ALTER TABLE intercept_decisions ALTER COLUMN row_hash SET DEFAULT '';
+        ALTER TABLE intercept_decisions ALTER COLUMN created_at SET DEFAULT NOW();
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_intercept_decisions_seq ON intercept_decisions(seq) WHERE seq IS NOT NULL;
+
+-- decision 枚举调和：升级残留的旧 CHECK 缺 anchor（Go 启动写锚行会被拒）→
+-- 换现行枚举（新装由 CREATE TABLE 内联 CHECK 同名创建，删了重加幂等）。
+ALTER TABLE intercept_decisions DROP CONSTRAINT IF EXISTS intercept_decisions_decision_check;
+ALTER TABLE intercept_decisions ADD CONSTRAINT intercept_decisions_decision_check
+    CHECK (decision IN ('allowed', 'denied', 'timeout', 'anchor'));
+-- decide-once 唯一约束补齐（升级残留表可能没有）：同 pending_id 保留最大 id。
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid = 'intercept_decisions'::regclass AND contype = 'u') THEN
+        DELETE FROM intercept_decisions a
+             USING intercept_decisions b
+              WHERE a.pending_id = b.pending_id AND a.id < b.id;
+        ALTER TABLE intercept_decisions
+            ADD CONSTRAINT intercept_decisions_pending_key UNIQUE (pending_id);
+    END IF;
+END $$;
 
 -- 执行结果表（append-only：每次结果一条新行，等价原 CompleteIntercept 语义；
 -- 视图取最后一行）。awaiting_result 由决定时预插，终态由工具结果回调追加。
@@ -1220,6 +1288,19 @@ CREATE TABLE IF NOT EXISTS intercept_executions (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_intercept_executions_pending ON intercept_executions(pending_id, id DESC);
+-- 升级残留调和：旧尝试建的 executions 缺 created_at（Go 插入显式带该列）。
+ALTER TABLE intercept_executions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- execution_status 枚举 CHECK 补齐（升级残留表可能没有）。
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid = 'intercept_executions'::regclass AND contype = 'c'
+                     AND pg_get_constraintdef(oid) LIKE '%execution_status%') THEN
+        ALTER TABLE intercept_executions
+            ADD CONSTRAINT intercept_executions_execution_status_check
+            CHECK (execution_status IN ('not_started', 'not_executed', 'awaiting_result', 'succeeded', 'failed', 'unknown'));
+    END IF;
+END $$;
 
 -- 哈希链链头：写决定行前以 pg_advisory_xact_lock(hashtext('intercept_chain'))
 -- 串行化，读链头 → seq=last_seq+1 → INSERT → 回写链头，同事务完成。
@@ -1775,6 +1856,13 @@ CREATE TABLE IF NOT EXISTS runner_checkpoints (
     fingerprint   TEXT NOT NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- 升级残留调和：早前失败的 P2 升级尝试建出的 runner_checkpoints 只有
+-- checkpoint_id/payload/created_at/updated_at 四列（session_id/agent_key/
+-- fingerprint 后补）。CREATE TABLE IF NOT EXISTS 不补列，这里守卫补齐；
+-- 残留行（若有）session_id 保持 NULL（Go 插入显式带值）。
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS session_id TEXT;
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS agent_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS fingerprint TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_runner_checkpoints_session
     ON runner_checkpoints(session_id, created_at DESC);
 -- P2 加列（幂等）：checkpoint 载荷 + 版本 + 任务归属 + 复写时刻。
