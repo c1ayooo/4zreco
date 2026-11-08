@@ -250,8 +250,10 @@ func (l *loginLimiter) recordSuccess(ip string) {
 	delete(l.lockedUntil, ip)
 }
 
-// loginGuard 统一包住 login/init 的防爆破语义：超限直接 429，失败记一笔并
-// 人为拖慢响应。返回 false 表示已写响应、调用方直接 return。
+// loginGuard 统一包住 login/init/change-password 的防爆破语义：超限直接 429，
+// action 以 -fail 结尾时记一笔失败并人为拖慢响应。失败与 login 共池——借有效
+// token 暴破旧密码的请求会同时把自己锁在登录之外，全局兜底照常防 XFF 伪造。
+// 返回 false 表示已写响应、调用方直接 return。
 func loginGuard(w http.ResponseWriter, r *http.Request, action string) bool {
 	ip := clientIP(r)
 	if ok, wait := loginLimit.allow(ip); !ok {
@@ -259,9 +261,9 @@ func loginGuard(w http.ResponseWriter, r *http.Request, action string) bool {
 		writeErr(w, http.StatusTooManyRequests, "尝试过于频繁，请稍后再试")
 		return false
 	}
-	if action == "login-fail" {
+	if strings.HasSuffix(action, "-fail") {
 		loginLimit.recordFail(ip)
-		log.Printf("[auth] 登录失败 ip=%s", ip)
+		log.Printf("[auth] %s 失败 ip=%s", action, ip)
 		time.Sleep(loginFailureMinDelay)
 	}
 	return true
@@ -434,7 +436,10 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 	// 这期间别的请求完全可能先把密码设好，而读检查本身也可能因故障而失效。
 	inserted, err := pg.InsertSettingIfAbsent(authPassKey, string(hash))
 	if err != nil {
-		writeErr(w, 500, "保存失败: "+err.Error())
+		// 错误原文只进日志：本端点未认证可达，响应里带 PG 错误串等于把表结构/
+		// 主机细节送给扫描器。
+		log.Printf("[auth] 初始化密码写入失败: %v", err)
+		writeErr(w, 500, "保存失败，请稍后重试")
 		return
 	}
 	if !inserted {
@@ -451,8 +456,13 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/auth/change-password — changes the admin password. Requires a valid
 // token (this route is under /api/auth/* which requireAuth exempts, so the token
-// is validated here) AND the current password.
+// is validated here) AND the current password. 旧密码猜错与登录失败共池计数：
+// token 是可能被偷的（7 天有效期），密码不该能猜——持 token 暴破旧密码是攻击
+// 者改锁门（换掉密码建立持久化）的唯一路径，不能因为"已登录"就敞着不限流。
 func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
+	if !loginGuard(w, r, "change-password") {
+		return
+	}
 	pg := s.pg(w)
 	if pg == nil {
 		return
@@ -487,6 +497,7 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.OldPassword)); err != nil {
+		loginGuard(w, r, "change-password-fail")
 		writeErr(w, 401, "当前密码错误")
 		return
 	}
@@ -496,9 +507,12 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := pg.SetSetting(authPassKey, string(newHash)); err != nil {
-		writeErr(w, 500, "保存失败: "+err.Error())
+		// 错误原文只进日志，同 authInit。
+		log.Printf("[auth] 改密码写入失败: %v", err)
+		writeErr(w, 500, "保存失败，请稍后重试")
 		return
 	}
+	loginLimit.recordSuccess(clientIP(r)) // 证明掌握旧密码，成功即清本 IP 失败窗
 	// 轮换签名 key：旧密码可能已经泄露（改密码本身往往就是怀疑泄露的动作），
 	// 不轮换的话用旧 token 的会话全部存活到自然过期。
 	if err := s.rotateJWTKey(); err != nil {

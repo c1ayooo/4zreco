@@ -2,6 +2,24 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### 安全：auth 审计落地——改密码防爆破 + 注册失效性钉死
+
+- `POST /api/auth/change-password` 旧密码校验接入登录防爆破：猜错与 login 失败
+  共池计数（每 IP 5 次/10min 锁 15min + 全局兜底），成功改密清零本 IP 失败窗。
+  堵住「持有效 token 全速暴破旧密码换锁建立持久化」的路径；`loginGuard` 失败
+  动作改按 `-fail` 后缀识别，后续端点接入防爆破只需取对 action 名。
+  （TestAuthChangePasswordOldPasswordBruteForceLocksOut /
+  TestLoginGuardRecordsFailForFailSuffixedActions 回归）
+- `/api/auth/init` 与 change-password 的 DB 写失败响应不再回传 PG 错误原文
+  （表结构/主机细节不外泄给未认证方），原文只进日志。
+- 注册失效性（已有账号时注册入口必须失效）补直接测试：重放 init 必须 403、
+  不签发 token、库中哈希逐字节不被覆盖（快速失败路径）；
+  `InsertSettingIfAbsent` 主键约束兜底（并发 race 输家 inserted=false 且不覆盖）
+  单独钉死。（TestAuthInitRejectedWhenPasswordAlreadySet /
+  TestInsertSettingIfAbsentKeepsExistingValue 回归）
+
 ## [0.3.17] - 2026-11-07
 
 ### 新增：任务创建强绑定当前项目

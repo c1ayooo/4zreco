@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // GetSetting 对"键不存在"和"读取出错"的返回值只差一个 error：两种情况 value 都是
@@ -181,5 +183,155 @@ func TestSecurityHeadersApplied(t *testing.T) {
 	}
 	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("不应再放行任意跨域读取（ACAO 已移除）")
+	}
+}
+
+// ---------- 注册失效性：已有账号时 init 必须失败 ----------
+
+// 「仅首次可设」的最终兜底是 settings 主键约束：InsertSettingIfAbsent 的重复
+// 插入（并发 init 的失败者）拿到 inserted=false 且绝不覆盖已有值。authInit 的
+// race 输家走的就是这条腿。键带时间戳——共享库重跑不撞唯一约束（§1 的坑）。
+func TestInsertSettingIfAbsentKeepsExistingValue(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Skipf("postgres unavailable (%v)", err)
+	}
+	defer m.Close()
+
+	key := fmt.Sprintf("auth.test.insert_if_absent.%d", time.Now().UnixNano())
+	inserted, err := m.pg.InsertSettingIfAbsent(key, "first")
+	if err != nil || !inserted {
+		t.Fatalf("首次插入应成功: inserted=%v err=%v", inserted, err)
+	}
+	inserted, err = m.pg.InsertSettingIfAbsent(key, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted {
+		t.Fatal("重复插入应返回 inserted=false")
+	}
+	v, ok, err := m.pg.GetSetting(key)
+	if err != nil || !ok || v != "first" {
+		t.Fatalf("已有值不得被覆盖: v=%q ok=%v err=%v", v, ok, err)
+	}
+}
+
+// 已有账号后注册入口必须失效：预置密码（SetSetting 幂等，共享库重跑安全）后
+// 重放 init 必须 403、不签发 token、库中哈希原样保留。快速失败路径（GetSetting
+// 命中）由本用例钉死；主键约束兜底由 TestInsertSettingIfAbsentKeepsExistingValue
+// 钉死。预置哈希用 MinCost——本用例不走比对，只是占位。
+func TestAuthInitRejectedWhenPasswordAlreadySet(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Skipf("postgres unavailable (%v)", err)
+	}
+	defer m.Close()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct horse battery"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.pg.SetSetting(authPassKey, string(hash)); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{m: m}
+	w := httptest.NewRecorder()
+	s.authInit(w, httptest.NewRequest("POST", "/api/auth/init",
+		strings.NewReader(`{"password":"a different pass phrase"}`)))
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("已有密码时 init 应 403，得到 %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "token") {
+		t.Fatalf("重放 init 不得签发 token: %s", w.Body.String())
+	}
+	// 防的是覆盖，不只是拒绝：库中哈希必须与预置值逐字节一致。
+	stored, ok, err := m.pg.GetSetting(authPassKey)
+	if err != nil || !ok || stored != string(hash) {
+		t.Fatalf("已有哈希不得被覆盖: ok=%v err=%v", ok, err)
+	}
+}
+
+// ---------- change-password 旧密码防爆破 ----------
+
+// loginGuard 的失败动作按 -fail 后缀识别：端点接入防爆破只需取个 -fail 后缀的
+// action 名。回归点：change-password 接入时若忘了记失败，限流就是摆设。
+func TestLoginGuardRecordsFailForFailSuffixedActions(t *testing.T) {
+	prev := loginLimit
+	loginLimit = &loginLimiter{fails: map[string][]time.Time{}, lockedUntil: map[string]time.Time{}}
+	defer func() { loginLimit = prev }()
+
+	r := httptest.NewRequest("POST", "/api/auth/change-password", nil) // RemoteAddr=192.0.2.1
+	w := httptest.NewRecorder()
+	if !loginGuard(w, r, "change-password-fail") {
+		t.Fatal("未锁定时应放行并记失败")
+	}
+	if n := len(loginLimit.fails["192.0.2.1"]); n != 1 {
+		t.Fatalf("-fail 后缀 action 应记失败，实际 %d 笔", n)
+	}
+	// 补满阈值后，同 action 的请求应被 429 拦下。
+	for i := 0; i < loginMaxFailsPerIP-1; i++ {
+		loginLimit.recordFail("192.0.2.1")
+	}
+	w2 := httptest.NewRecorder()
+	if loginGuard(w2, r, "change-password-fail") {
+		t.Fatal("达到阈值后应拦截")
+	}
+	if w2.Code != http.StatusTooManyRequests {
+		t.Fatalf("应回 429，得到 %d", w2.Code)
+	}
+}
+
+// 旧密码暴破必须与登录同池限流：token 是可能被偷的（7 天有效期），密码不该能
+// 猜——持有效 token 的攻击者连错旧密码达阈值后，不再进入比对、直接 429，且
+// 锁定期内猜测正确同样被拦（锁定不看猜测对错，与登录语义一致）。
+func TestAuthChangePasswordOldPasswordBruteForceLocksOut(t *testing.T) {
+	m, err := NewManager(t.TempDir(), "")
+	if err != nil {
+		t.Skipf("postgres unavailable (%v)", err)
+	}
+	defer m.Close()
+
+	// 隔离全局限流器：失败计数不泄漏给其他用例，也不被它们污染。
+	prev := loginLimit
+	loginLimit = &loginLimiter{fails: map[string][]time.Time{}, lockedUntil: map[string]time.Time{}}
+	defer func() { loginLimit = prev }()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct horse battery"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.pg.SetSetting(authPassKey, string(hash)); err != nil {
+		t.Fatal(err)
+	}
+
+	key := []byte("0123456789abcdef0123456789abcdef")
+	s := &Server{m: m}
+	s.jwtKey.Store(key)
+	tok, err := signJWT(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(oldPass string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/auth/change-password",
+			strings.NewReader(`{"old_password":"`+oldPass+`","new_password":"brand-new-passphrase"}`))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		w := httptest.NewRecorder()
+		s.authChangePassword(w, req)
+		return w
+	}
+
+	for i := 0; i < loginMaxFailsPerIP; i++ {
+		if w := call("wrong-guess"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("第 %d 次错误旧密码应 401，得到 %d: %s", i+1, w.Code, w.Body.String())
+		}
+	}
+	if w := call("wrong-guess"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("阈值后应 429（不再进入旧密码比对），得到 %d: %s", w.Code, w.Body.String())
+	}
+	if w := call("correct horse battery"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("锁定期内正确密码也应 429，得到 %d: %s", w.Code, w.Body.String())
 	}
 }
