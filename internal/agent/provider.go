@@ -353,15 +353,29 @@ func IsQuotaExhaustedMessage(message string) bool {
 // retry loop treats every 429 as transient; normalizing only that response to
 // 402 lets a task router fail over immediately while retaining the original
 // response body for provider-specific classification and audit logs.
+//
+// gov, when set, is the adaptive rate governor (adaptiverate.go): every outbound
+// request waits for its spacing slot first, 429 rejections tighten the spacing,
+// success streaks ease it. Nil governor = legacy behavior (no adaptive layer);
+// direct struct constructions in tests rely on that.
 type quotaAwareTransport struct {
 	base http.RoundTripper
 	// sessionHeaderKey, when non-empty, is the HTTP header name each request
 	// carries; its value is the session id read from the request context. Empty
 	// disables it. See Config.SessionHeaderKey.
 	sessionHeaderKey string
+	gov              *adaptiveGovernor
 }
 
 func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Adaptive spacing before anything else: the request only "starts" once it
+	// actually goes out, so SDK/task-llm retries queue here instead of hammering
+	// a rate-limited gateway.
+	if t.gov != nil {
+		if err := t.gov.wait(req.Context()); err != nil {
+			return nil, err
+		}
+	}
 	// Custom session-id header: name is user-configured, value is THIS run's
 	// session id (norma stashes it on the context via transcript.WithSessionID).
 	// Stable across a session's turns and distinct across sessions — exactly what
@@ -386,6 +400,18 @@ func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// 429 branch below reads through this wrapper, so its body lands in the
 	// capture before being replaced.
 	resp.Body = capt.TeeResponse(resp.StatusCode, resp.Body)
+
+	// Adaptive classification: 429 (RPM- or quota-flavored alike) tightens the
+	// spacing — Retry-After floors it; 2xx/3xx count toward easing. Other
+	// statuses are neutral (neither evidence of rate pressure nor of headroom).
+	if t.gov != nil {
+		switch {
+		case resp.StatusCode == http.StatusTooManyRequests:
+			t.gov.onRejected(parseRetryAfter(resp.Header))
+		case resp.StatusCode < 300:
+			t.gov.onAccepted()
+		}
+	}
 
 	if resp.StatusCode != http.StatusTooManyRequests {
 		return resp, nil
@@ -442,7 +468,11 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) 
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
-	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey)}}, nil
+	return &http.Client{Transport: quotaAwareTransport{
+		base:             transport,
+		sessionHeaderKey: strings.TrimSpace(sessionHeaderKey),
+		gov:              newAdaptiveGovernor(nil), // 每 provider 一个调节器（即每 profile 一个）
+	}}, nil
 }
 
 // logTestConnection prints the raw HTTP status code(s) and response body of a

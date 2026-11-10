@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
 )
@@ -127,5 +128,101 @@ func TestProviderDoesNotRetryExplicitQuota429(t *testing.T) {
 	}
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("explicit quota request retried %d times, want exactly one request", got)
+	}
+}
+
+func TestQuotaAwareTransportAdaptiveThrottle(t *testing.T) {
+	t.Parallel()
+
+	// 场景：首发 429(RPM)，其后全部 200。第二发必须被自适应闸延迟 ≥ gapStart。
+	var reqs atomic.Int64
+	base := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		n := reqs.Add(1)
+		st := http.StatusOK
+		if n == 1 {
+			st = http.StatusTooManyRequests
+		}
+		return &http.Response{
+			StatusCode: st, Status: http.StatusText(st),
+			Body:   io.NopCloser(strings.NewReader(`{"error":{"message":"group requests-per-minute limit exceeded"}}`)),
+			Header: make(http.Header),
+		}, nil
+	})
+	tr := quotaAwareTransport{base: base, gov: newAdaptiveGovernor(nil)}
+	tr.gov.params = adaptiveParams{start: 120 * time.Millisecond, max: 300 * time.Millisecond, ease: 8}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.invalid", nil)
+
+	if _, err := tr.RoundTrip(req); err != nil { // 首发：429，触发收紧
+		t.Fatalf("first trip: %v", err)
+	}
+	start := time.Now()
+	if _, err := tr.RoundTrip(req); err != nil { // 第二发：应等待 ~gapStart
+		t.Fatalf("second trip: %v", err)
+	}
+	if el := time.Since(start); el < 100*time.Millisecond {
+		t.Fatalf("second request must be throttled to ≥120ms, elapsed %v", el)
+	}
+
+	// 成功连胜 → 间距减半直至解除；解除后请求不再被延迟
+	for i := 0; i < 2*adaptiveOkToEase; i++ {
+		if _, err := tr.RoundTrip(req); err != nil {
+			t.Fatalf("ease trip %d: %v", i, err)
+		}
+	}
+	if tr.gov.gap() != 0 {
+		t.Fatalf("sustained success must fully lift the gap, got %v", tr.gov.gap())
+	}
+	start = time.Now()
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatalf("post-ease trip: %v", err)
+	}
+	if el := time.Since(start); el > 20*time.Millisecond {
+		t.Fatalf("lifted governor must not delay, elapsed %v", el)
+	}
+}
+
+func TestQuotaAwareTransportRetryAfterFloor(t *testing.T) {
+	t.Parallel()
+	base := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		h := make(http.Header)
+		h.Set("Retry-After", "1")
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests, Status: "429",
+			Body: io.NopCloser(strings.NewReader(`{"error":{"message":"rate limit exceeded"}}`)), Header: h,
+		}, nil
+	})
+	tr := quotaAwareTransport{base: base, gov: newAdaptiveGovernor(nil)}
+	tr.gov.params = adaptiveParams{start: 10 * time.Millisecond, max: time.Minute, ease: 8}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.invalid", nil)
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatalf("first trip: %v", err)
+	}
+	if got := tr.gov.gap(); got != time.Second {
+		t.Fatalf("Retry-After must floor the gap to 1s, got %v", got)
+	}
+}
+
+func TestQuotaAwareTransportQuota429AlsoThrottles(t *testing.T) {
+	t.Parallel()
+	// 余额耗尽型 429（会被归一成 402）同样要收紧自适应间距
+	base := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests, Status: "429",
+			Body:   io.NopCloser(strings.NewReader(`{"error":{"code":"insufficient_quota"}}`)),
+			Header: make(http.Header),
+		}, nil
+	})
+	tr := quotaAwareTransport{base: base, gov: newAdaptiveGovernor(nil)}
+	tr.gov.params = adaptiveParams{start: 120 * time.Millisecond, max: time.Second, ease: 8}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.invalid", nil)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("trip: %v", err)
+	}
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("quota 429 must normalize to 402, got %d", resp.StatusCode)
+	}
+	if tr.gov.gap() != 120*time.Millisecond {
+		t.Fatalf("quota-style rejection must tighten the governor, got %v", tr.gov.gap())
 	}
 }
