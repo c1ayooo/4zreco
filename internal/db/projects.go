@@ -99,10 +99,13 @@ func (s *ProjectStore) ListProjects() ([]Project, error) {
 		if err != nil {
 			return nil, err
 		}
-		s.enrich(&p)
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.enrichBatch(out)
+	return out, nil
 }
 
 // enrich fills counts and scope best-effort: display metadata must never fail
@@ -113,6 +116,55 @@ func (s *ProjectStore) enrich(p *Project) {
 	rules, err := s.ProjectScopeRules(p.ID)
 	if err == nil {
 		p.Scope = rules
+	}
+}
+
+// enrichBatch fills counts and scope for a whole listing in three aggregate
+// queries instead of three per project (N+1 on the listing endpoint). Same
+// best-effort contract as enrich; per-project scope order (ORDER BY id) is
+// preserved by the global ORDER BY project_id, id.
+func (s *ProjectStore) enrichBatch(ps []Project) {
+	if len(ps) == 0 {
+		return
+	}
+	taskCounts := map[int64]int64{}
+	if rows, err := s.db.Query(`SELECT project_id, count(*) FROM tasks
+WHERE project_id IS NOT NULL AND deleted_at IS NULL GROUP BY project_id`); err == nil {
+		for rows.Next() {
+			var id, n int64
+			if rows.Scan(&id, &n) == nil {
+				taskCounts[id] = n
+			}
+		}
+		rows.Close()
+	}
+	convCounts := map[int64]int64{}
+	if rows, err := s.db.Query(`SELECT project_id, count(*) FROM conversations
+WHERE project_id IS NOT NULL GROUP BY project_id`); err == nil {
+		for rows.Next() {
+			var id, n int64
+			if rows.Scan(&id, &n) == nil {
+				convCounts[id] = n
+			}
+		}
+		rows.Close()
+	}
+	scopeByProject := map[int64][]ProjectScope{}
+	if rows, err := s.db.Query(`SELECT id, project_id, kind, COALESCE(domain,''),
+COALESCE(net::text,''), COALESCE(value,''), raw, COALESCE(reason,''), created_at
+FROM project_scope ORDER BY project_id, id`); err == nil {
+		for rows.Next() {
+			var r ProjectScope
+			if err := rows.Scan(&r.ID, &r.ProjectID, &r.Kind, &r.Domain, &r.Net, &r.Value, &r.Raw, &r.Reason, &r.CreatedAt); err == nil {
+				scopeByProject[r.ProjectID] = append(scopeByProject[r.ProjectID], r)
+			}
+		}
+		rows.Close()
+	}
+	for i := range ps {
+		ps[i].TaskCount = taskCounts[ps[i].ID]
+		ps[i].ConvCount = convCounts[ps[i].ID]
+		ps[i].Scope = scopeByProject[ps[i].ID]
 	}
 }
 

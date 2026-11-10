@@ -34,7 +34,8 @@ func TestConversationPinOrderingAndPatch(t *testing.T) {
 		t.Fatalf("pin first = %+v, %v", first, err)
 	}
 	firstPinnedAt := *first.PinnedAt
-	time.Sleep(5 * time.Millisecond)
+	// 无需 sleep：ListConversations 的排序 pinned_at 同刻时由 id DESC 决胜，
+	// 后 pin 的 second（id 更大）必然排前。
 	second, err = d.UpdateConversation(second.ID, ConversationPatch{Pinned: &pinned})
 	if err != nil || second == nil || !second.Pinned {
 		t.Fatalf("pin second = %+v, %v", second, err)

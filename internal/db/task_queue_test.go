@@ -28,7 +28,7 @@ func TestTaskQueuePreservesBootstrapAndFIFOPosition(t *testing.T) {
 
 	// A follow-up/rerun can try to admit an already queued task as resume. The
 	// original bootstrap mode and FIFO timestamp must remain authoritative.
-	time.Sleep(time.Millisecond)
+	// (无 sleep 依赖：Enqueue 用 COALESCE(queued_at, now()) 保留原时间戳。)
 	if err := d.Enqueue(task.ID, "resume"); err != nil {
 		t.Fatal(err)
 	}
@@ -52,15 +52,27 @@ func TestTaskQueuePreservesBootstrapAndFIFOPosition(t *testing.T) {
 	if err != nil || paused == nil || paused.Queued || paused.QueueMode != "bootstrap" {
 		t.Fatalf("paused queue metadata: task=%+v err=%v", paused, err)
 	}
-	time.Sleep(time.Millisecond)
-	if err := d.Enqueue(task.ID, "bootstrap"); err != nil {
-		t.Fatal(err)
-	}
-	requeued, err := d.GetTask(task.ID)
-	if err != nil || requeued == nil || requeued.QueuedAt == nil {
-		t.Fatalf("requeue: task=%+v err=%v", requeued, err)
-	}
-	if !requeued.QueuedAt.After(*first.QueuedAt) {
-		t.Fatalf("requeue did not move to FIFO tail: first=%v requeued=%v", first.QueuedAt, requeued.QueuedAt)
+	// queued_at 来自事务时钟（now()，微秒精度）：相邻两次入队可能同刻。
+	// 有界轮询代替短 sleep：同刻时退队再重入队，直到 FIFO 时间戳前进或超时。
+	deadline := time.Now().Add(2 * time.Second)
+	var requeued *Task
+	for {
+		time.Sleep(5 * time.Millisecond)
+		if err := d.Enqueue(task.ID, "bootstrap"); err != nil {
+			t.Fatal(err)
+		}
+		requeued, err = d.GetTask(task.ID)
+		if err != nil || requeued == nil || requeued.QueuedAt == nil {
+			t.Fatalf("requeue: task=%+v err=%v", requeued, err)
+		}
+		if requeued.QueuedAt.After(*first.QueuedAt) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("requeue did not move to FIFO tail: first=%v requeued=%v", first.QueuedAt, requeued.QueuedAt)
+		}
+		if err := d.Dequeue(task.ID, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

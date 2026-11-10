@@ -1273,6 +1273,13 @@ BEGIN
     END IF;
 END $$;
 
+-- 锚行（seq=0，decision='anchor'）的 pending_id 必须可为 NULL：ensureAuditAnchorTx
+-- 以 pending_id=NULL 插锚行。P0 改造前建表的老库该列 NOT NULL（CREATE TABLE
+-- IF NOT EXISTS 不改已存在的表），首个 decide/观测行写锚行即被拒（23502 null
+-- value in column "pending_id"——2026-11-10 本机 dev 库首例，HITL 测试批量失败）。
+-- DROP NOT NULL 幂等。
+ALTER TABLE intercept_decisions ALTER COLUMN pending_id DROP NOT NULL;
+
 -- 执行结果表（append-only：每次结果一条新行，等价原 CompleteIntercept 语义；
 -- 视图取最后一行）。awaiting_result 由决定时预插，终态由工具结果回调追加。
 CREATE TABLE IF NOT EXISTS intercept_executions (
@@ -1863,6 +1870,31 @@ CREATE TABLE IF NOT EXISTS runner_checkpoints (
 ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS session_id TEXT;
 ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS agent_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS fingerprint TEXT NOT NULL DEFAULT '';
+-- 残留表可能连自增主键 id 都没有（四列建表），而 LatestRunnerCheckpoint 按
+-- id DESC 取最新行（42703 column "id" does not exist——2026-11-10 本机 dev 库
+-- 首例）；更糟的是残留表可能带旧形态主键 PRIMARY KEY(checkpoint_id)：装配
+-- 留痕行 checkpoint_id=''（允许多行，由上方部分唯一索引排除 ''），checkpoint_id
+-- 上的全列主键把所有 '' 行坍缩成一行——第二次装配留痕 upsert 会覆盖上一行的
+-- fingerprint（2026-11-10 首例：TestRunnerCheckpointRoundTrip 的 fp-abc 行被
+-- fp-other 覆盖后查无行）。守卫补列、摘旧主键、补 id 主键（幂等）。
+ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+DO $$
+DECLARE
+    pk_cols text;
+BEGIN
+    SELECT string_agg(a.attname, ',' ORDER BY u.ord) INTO pk_cols
+    FROM pg_constraint c
+    CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+    WHERE c.conrelid = 'runner_checkpoints'::regclass AND c.contype = 'p';
+    IF pk_cols = 'checkpoint_id' THEN
+        EXECUTE 'ALTER TABLE runner_checkpoints DROP CONSTRAINT runner_checkpoints_pkey';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid = 'runner_checkpoints'::regclass AND contype = 'p') THEN
+        ALTER TABLE runner_checkpoints ADD PRIMARY KEY (id);
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_runner_checkpoints_session
     ON runner_checkpoints(session_id, created_at DESC);
 -- P2 加列（幂等）：checkpoint 载荷 + 版本 + 任务归属 + 复写时刻。
@@ -1871,6 +1903,13 @@ ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAU
 ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 0;
 ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS task_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE runner_checkpoints ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- payload 必须可为 NULL：装配留痕行（RecordRunnerCheckpoint）只写
+-- fingerprint/session/agent 字段，payload 由 SetCheckpoint 后补（两个写者
+-- 互不覆盖，见 runner_checkpoint.go）。早前失败的 P2 升级尝试建表时
+-- payload NOT NULL，装配留痕 INSERT 即被拒（23502，2026-11-10 本机 dev 库
+-- 首例：TestHitlResumeSeedFingerprintGate）。下方 CHECK 约束同口径允许 NULL。
+-- DROP NOT NULL 幂等。
+ALTER TABLE runner_checkpoints ALTER COLUMN payload DROP NOT NULL;
 -- checkpoint 行的唯一键：装配留痕行（checkpoint_id=''）不参与；ON CONFLICT 目标。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_runner_checkpoints_checkpoint_id
     ON runner_checkpoints(checkpoint_id) WHERE checkpoint_id <> '';

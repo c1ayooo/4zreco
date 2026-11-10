@@ -51,11 +51,16 @@ type hitlPark struct {
 	done chan struct{}
 }
 
-// parks 以 pendingID 为键的停靠注册表。惰性初始化（Engine 字面量不设它）。
+// parks 以 pendingID 为键的停靠注册表。NewEngine 预初始化（任务 worker 与 chat
+// 轮两条并发路径都会首次进入）；&Engine{} 字面量（测试）经 sync.Once 兜底——
+// 原无锁 check-then-set 在并发首次调用时会各建一个 sync.Map，先 Store 的停靠
+// 注册丢失，这里用 Once 消除竞态。
 func (e *Engine) parksMap() *sync.Map {
-	if e.parks == nil {
-		e.parks = &sync.Map{}
-	}
+	e.parksOnce.Do(func() {
+		if e.parks == nil {
+			e.parks = &sync.Map{}
+		}
+	})
 	return e.parks
 }
 

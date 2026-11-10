@@ -338,13 +338,25 @@ func TestQueuedTaskCanPauseAndResumeAtFIFOTail(t *testing.T) {
 	if !task.Paused || task.Queued || task.QueuedAt != 0 {
 		t.Fatalf("pause did not leave queue: %+v", task)
 	}
-	time.Sleep(2 * time.Millisecond)
-	second, err := s.applyTaskControl(task, "resume")
-	if err != nil || !second.Queued {
-		t.Fatalf("second resume: result=%+v task=%+v err=%v", second, task, err)
-	}
-	if task.QueuedAt <= firstQueuedAt {
-		t.Fatalf("resumed task did not move to FIFO tail: first=%d second=%d", firstQueuedAt, task.QueuedAt)
+	// FIFO 时间戳来自时钟：相邻两次 resume 可能同刻。有界轮询代替短 sleep：
+	// 同刻时退队再重入队，直到时间戳前进或超时。进入循环时任务处于暂停态，
+	// pause 只在 resume（入队）之后触发，避免对已暂停任务重复 pause。
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		second, err := s.applyTaskControl(task, "resume")
+		if err != nil || !second.Queued {
+			t.Fatalf("second resume: result=%+v task=%+v err=%v", second, task, err)
+		}
+		if task.QueuedAt > firstQueuedAt {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("resumed task did not move to FIFO tail: first=%d second=%d", firstQueuedAt, task.QueuedAt)
+		}
+		time.Sleep(5 * time.Millisecond)
+		if _, err := s.applyTaskControl(task, "pause"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

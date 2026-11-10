@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+### 新增：LLM 出站自适应限速（AIMD）——429 学习式收敛，无需人工配额度
+
+- 中转/网关按分组限 RPM（实证 inferaichat "group requests-per-minute limit
+  exceeded"），静态 rate_per_minute 需要知道额度才能配。新增
+  `internal/agent/adaptiverate.go` 自适应调节器挂 `quotaAwareTransport`（每
+  profile 一个共享实例 = 全站出站唯一咽喉）：平时不限速直通；遇 429 发车间距
+  收紧（首次 2s → 翻倍 → 封顶 30s，`Retry-After` 头作下限，quota 型 429 同样
+  参与收紧）；连续 8 次 2xx 间距减半、低于 1s 归零解除。收紧/解除各打一行
+  `[llm-adaptive]` 观测日志。
+- 生效面：worker/planner/chat/llmpool 轮询链/任务钉链/审批裁决全部调用方共享
+  一个调节器，SDK 与 task-llm 层的重试在发车前过闸——429 重试风暴（重试预算
+  烧尽 → 意图 model_error blocked 的空转根因）自然变本地排队。与 norma 静态
+  限速独立两层叠加；判定逻辑纯 Go 普通函数（骨架/器官分层约束不破）。
+- 测试：governor 单测注入时钟零 sleep（票号制并发预约、翻倍/封顶/Retry-After
+  下限/连胜解除/失败打断）；传输层集成测试（429 后下一发被延迟、连胜后解除、
+  quota 型 429 归一 402 同时收紧）。参数构造时快照，并行测试互不污染。
+
+### 修复：4zrec 生产库首例问题批量清偿
+
+- schema 残留调和第二例：`intercept_decisions.pending_id` 锚行（seq=0）必须
+  可 NULL（P0 前老库 NOT NULL，首个 decide 写锚行即 23502）；`runner_checkpoints`
+  残留表可能连自增 id 都没有（四列建表）且带旧形态 `PRIMARY KEY(checkpoint_id)`
+  ——`LatestRunnerCheckpoint` 按 id DESC 取行直接 42703，且装配留痕行
+  （checkpoint_id=''）被旧主键坍缩成一行互相覆盖。守卫补 id 列、摘旧主键、
+  补新主键（幂等）。
+- `Engine.parks` 并发首次初始化竞态：原无锁 check-then-set 在任务 worker 与
+  chat 轮并发首入时各建一个 sync.Map，先 Store 的审批停靠注册丢失。NewEngine
+  预初始化 + `sync.Once` 兜底。
+- 项目/企业列表 scope 装配 N+1 消除：逐公司查询改单条批量查询按 company_id
+  分组（含 test 回归）。
+
 ### 安全：auth 审计落地——改密码防爆破 + 注册失效性钉死
 
 - `POST /api/auth/change-password` 旧密码校验接入登录防爆破：猜错与 login 失败

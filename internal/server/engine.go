@@ -150,8 +150,9 @@ type Engine struct {
 	// parks 是 HITL 审批挂起的停靠注册表（pendingID → *hitlPark，P2 §4-P2 第
 	// 3 条；hitl_mode=eino 时经 DeliverHitlDecision 投递签名决定，停靠中的 run
 	// 从 checkpoint 精确续跑；决定先于停靠注册到达的由停靠轮询自查库补投）。
-	// 惰性初始化（engine_hitl.go parksMap）。
-	parks *sync.Map
+	// NewEngine 预初始化；&Engine{} 字面量经 parksMap 的 sync.Once 兜底。
+	parks     *sync.Map
+	parksOnce sync.Once
 
 	plannerRound sync.Map // taskID -> int, planner round counter (for UI round separators)
 
@@ -416,7 +417,7 @@ func NewEngine(m *Manager) *Engine {
 	return &Engine{m: m, debounce: 800 * time.Millisecond, bc: NewBroadcaster(),
 		execCancel: map[string]context.CancelCauseFunc{}, execCtx: map[string]context.Context{},
 		work: map[int64]*workExecution{}, steerBox: map[int64][]string{},
-		runtimes: map[string]*taskRuntime{}}
+		runtimes: map[string]*taskRuntime{}, parks: &sync.Map{}}
 }
 
 // registerWork records the cancel for the work currently running intentID.

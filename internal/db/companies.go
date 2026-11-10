@@ -283,11 +283,32 @@ ORDER BY c.name`)
 		return nil, err
 	}
 
-	// fetch scope rules for each company
-	for _, cws := range out {
-		cws.Scope, err = s.GetScope(cws.ID)
-		if err != nil {
+	// Scope rules for all companies in one query (N+1 avoidance). ORDER BY
+	// company_id, id preserves GetScope's per-company ORDER BY id.
+	scopeByCompany := map[int64][]ScopeRule{}
+	scopeRows, err := s.db.Query(`
+SELECT id, company_id, kind,
+       COALESCE(domain,''), COALESCE(net::text,''), COALESCE(value,''), raw, COALESCE(reason,'')
+FROM company_scope
+ORDER BY company_id, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer scopeRows.Close()
+	for scopeRows.Next() {
+		var r ScopeRule
+		if err := scopeRows.Scan(&r.ID, &r.CompanyID, &r.Kind, &r.Domain, &r.Net, &r.Value, &r.Raw, &r.Reason); err != nil {
 			return nil, err
+		}
+		scopeByCompany[r.CompanyID] = append(scopeByCompany[r.CompanyID], r)
+	}
+	if err := scopeRows.Err(); err != nil {
+		return nil, err
+	}
+	for _, cws := range out {
+		cws.Scope = scopeByCompany[cws.ID]
+		if cws.Scope == nil {
+			cws.Scope = []ScopeRule{}
 		}
 	}
 	return out, nil

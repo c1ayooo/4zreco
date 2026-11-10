@@ -6,7 +6,6 @@ import (
 	"iter"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
@@ -17,12 +16,18 @@ type scriptedProvider struct {
 	calls []int
 	// replies[i] 是第 i 次调用的回复文本；用完后重复最后一个。
 	replies []string
+	// afterCall 在每次调用记录后同步触发（测试注入，如取消 ctx）——
+	// 代替 goroutine+短 sleep 的时序赌注。
+	afterCall func()
 }
 
 func (p *scriptedProvider) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
 		idx := len(p.calls)
 		p.calls = append(p.calls, req.MaxTokens)
+		if p.afterCall != nil {
+			p.afterCall()
+		}
 		reply := ""
 		if len(p.replies) > 0 {
 			if idx < len(p.replies) {
@@ -41,6 +46,9 @@ func (p *scriptedProvider) Stream(ctx context.Context, req llm.CompletionRequest
 func (p *scriptedProvider) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
 	idx := len(p.calls)
 	p.calls = append(p.calls, req.MaxTokens)
+	if p.afterCall != nil {
+		p.afterCall()
+	}
 	reply := ""
 	if len(p.replies) > 0 {
 		if idx < len(p.replies) {
@@ -118,12 +126,9 @@ func TestJudgeAllEmptyReturnsEmptyWithoutError(t *testing.T) {
 // ctx 取消后不再重试（重试要挤在同一个超时窗口里，不能把时间耗在注定失败的调用上）。
 func TestJudgeStopsRetryingWhenContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &scriptedProvider{replies: []string{""}}
-	// 第一次调用后取消
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
+	defer cancel()
+	// 第一次调用记录后立即取消（同步钩子，不用 goroutine+短 sleep 赌时序）。
+	p := &scriptedProvider{replies: []string{""}, afterCall: cancel}
 	_, _ = streamCollectText(ctx, p, "sys", "user")
 	// 不做精确断言：只要求调用次数有限（不会无限重试）
 	if len(p.calls) > 8 {
