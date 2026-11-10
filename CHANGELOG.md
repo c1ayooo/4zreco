@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-11-11
+
 ### 新增：LLM 出站自适应限速（AIMD）——429 学习式收敛，无需人工配额度
 
 - 中转/网关按分组限 RPM（实证 inferaichat "group requests-per-minute limit
