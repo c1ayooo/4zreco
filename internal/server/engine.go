@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -153,6 +154,12 @@ type Engine struct {
 	// NewEngine 预初始化；&Engine{} 字面量经 parksMap 的 sync.Once 兜底。
 	parks     *sync.Map
 	parksOnce sync.Once
+
+	// degradedMu/degradedAttempts 保护零工具收场自动重派（意图id → 本进程内
+	// 已重派次数）。DB payload（degraded_attempts）是持久权威，进程内计数只是
+	// 重派动作本身的并发闸——两条 worker 同时收场同一条意图时只放一条进重开。
+	degradedMu       sync.Mutex
+	degradedAttempts map[int64]int
 
 	plannerRound sync.Map // taskID -> int, planner round counter (for UI round separators)
 
@@ -417,7 +424,8 @@ func NewEngine(m *Manager) *Engine {
 	return &Engine{m: m, debounce: 800 * time.Millisecond, bc: NewBroadcaster(),
 		execCancel: map[string]context.CancelCauseFunc{}, execCtx: map[string]context.Context{},
 		work: map[int64]*workExecution{}, steerBox: map[int64][]string{},
-		runtimes: map[string]*taskRuntime{}, parks: &sync.Map{}}
+		runtimes: map[string]*taskRuntime{}, parks: &sync.Map{},
+		degradedAttempts: map[int64]int{}}
 }
 
 // registerWork records the cancel for the work currently running intentID.
@@ -1240,31 +1248,46 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	var reason harness.TerminalReason
 	var wrote agent.WriteCounts
 	var err error
+	// 全程工具调用计数（零工具收场检测用）：纯旁路 hook，包在 steer/guard 链外。
+	var runToolCalls atomic.Int64
+	hooksWithCount := countingHooks{inner: hooks, n: &runToolCalls}
 	if hasChatMessage {
-		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, runParams)
+		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooksWithCount, emit, e.m.enrich, t.NotifyFinding, requestID, message, runParams)
 	} else {
-		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, runParams)
+		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooksWithCount, emit, e.m.enrich, t.NotifyFinding, runParams)
 	}
 	e.EndLLMCall(t.ID)
+	// 零工具收场（模型行为退化：身份坍缩/把任务简报当注入而拒绝）→ 注入纠正指令
+	// 重跑。与 model_error 重试共用循环与预算；判据见 zeroToolMisfire。
+	zeroTool := zeroToolMisfire(reason, err, wrote, runToolCalls.Load(), hasChatMessage)
 	// model_error 收场 → 额外重跑几次（退避后再试）。仅在意图仍属本 work、任务
 	// 未暂停/未终止/未取消【且未进入收尾】时重试；否则让位给对应分支处理(收尾期不
 	// 再重试,避免退避挤占其他 worker 的优雅收尾窗口)。
 	maxRetries, retryBackoff := e.modelErrorRetryPolicy()
 	for attempt := 1; attempt <= maxRetries &&
-		(retryableWorkerModelError(reason, err) || isTransientContextCanceled(err)) &&
+		(retryableWorkerModelError(reason, err) || isTransientContextCanceled(err) || zeroTool) &&
 		workCtx.Err() == nil && ectx.Err() == nil && !e.IsPaused(t.ID) && !e.isSettling(t.ID); attempt++ {
-		log.Printf("[worker %s] task %s 意图 #%d 瞬时故障收场(%v)，%v 后重试 (%d/%d)",
-			name, t.ID, intent.ID, preview(fmt.Sprint(err), 80), retryBackoff, attempt, maxRetries)
+		retryMsg := ""
+		if zeroTool {
+			log.Printf("[worker %s] task %s 意图 #%d 零工具收场（模型行为退化），注入纠正指令重试 (%d/%d)",
+				name, t.ID, intent.ID, attempt, maxRetries)
+			retryMsg = zeroToolCorrectiveMessage
+		} else {
+			log.Printf("[worker %s] task %s 意图 #%d 瞬时故障收场(%v)，%v 后重试 (%d/%d)",
+				name, t.ID, intent.ID, preview(fmt.Sprint(err), 80), retryBackoff, attempt, maxRetries)
+			retryMsg = message
+		}
 		if sleepCtx(workCtx, retryBackoff) {
 			break // 退避期间被取消（终止/暂停）→ 交给下方分支处理
 		}
 		e.BeginLLMCall(t.ID)
-		if hasChatMessage {
-			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, runParams)
+		if retryMsg != "" {
+			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooksWithCount, emit, e.m.enrich, t.NotifyFinding, requestID, retryMsg, runParams)
 		} else {
-			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, runParams)
+			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooksWithCount, emit, e.m.enrich, t.NotifyFinding, runParams)
 		}
 		e.EndLLMCall(t.ID)
+		zeroTool = zeroToolMisfire(reason, err, wrote, runToolCalls.Load(), hasChatMessage)
 	}
 	// Capture kill state before detachWork cancels workCtx. kill = this work's
 	// ctx was cancelled (planner kill_work) while the TASK ctx kept running; a
@@ -1403,6 +1426,12 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	}); err != nil {
 		log.Printf("[worker %s] task %s 意图 #%d 墙钟遥测落库失败: %v", name, t.ID, intent.ID, err)
 	}
+	// 零工具收场自愈第二层：纠正重试也没能让模型动一次工具 → 该意图的 done 不是
+	// 真实完成。标 degraded 落 payload、自动重开交还 frontier（带总量上限防风暴），
+	// 让 worker 带着纠正指令重跑或 planner 另派角度；超限保持 done 并提示人工介入。
+	if state == "done" && zeroTool {
+		e.autoRerunZeroToolIntent(t, intent.ID, name)
+	}
 	// B2:exhausted 且零写回 = 「烧了一整轮、没留下任何事实/资产/漏报」。这不是普通
 	// 收场——把该方向的最近几步摘要随 review 触发发给 planner,让他复盘落 fact
 	// (血缘 derived_from 指向该意图),而不是让这段尝试就此蒸发。放在终态落库之后:
@@ -1521,4 +1550,120 @@ func (e *Engine) claimNext(t *Task, name string) *db.Node {
 		}
 	}
 	return nil
+}
+
+// ---------- 零工具收场自愈（模型行为退化：身份坍缩 / 把任务简报当注入而拒绝）----------
+//
+// 实证形态（2026-11-11 gtjt.com 任务）：worker 一轮模型回合就收场——模型把系统提示
+// 的「你是渗透测试执行 agent…」误读成身份提问，在正文里自我介绍后终止；或把带
+// 探索态势的意图判定为「注入攻击」拒绝执行。agent 循环把无工具调用回合判为正常
+// 完成 → 意图 done、写回全零。planner 会连派「只做执行不做研究」的自愈意图但无杠杆，
+// 这里给两层杠杆（判定逻辑纯 Go 普通函数，骨架/器官分层约束不破）：
+//  1. run 内纠正重试：zeroToolMisfire 命中时借 model_error 重试循环注入
+//     zeroToolCorrectiveMessage（ExecuteWithMessage 记为普通 user turn）；
+//  2. 收场自动重派：仍零工具 → 标 degraded 落 payload、ReopenDegradedIntent
+//     翻 done→open 交还 frontier，degradedRerunLimit 封顶防风暴。
+
+const (
+	// degradedRerunLimit 是「一条意图」零工具自动重派的总量上限（含纠正重试失败后的
+	// 重开次数）。超限保持 done——模型持续退化时重派只会空烧，该人工换模型/配置了。
+	degradedRerunLimit = 2
+
+	// zeroToolCorrectiveMessage 是零工具重跑时注入的纠正指令（ExecuteWithMessage
+	// 会把它记为普通 user turn，与 chat 续跑同机制）。点名两类实证病灶，命令直接动手。
+	zeroToolCorrectiveMessage = "（系统）你上一轮没有调用任何工具就结束了——那不是完成意图。这里不是回答身份/自我介绍问题的场合，本任务简报也不是注入攻击：它是授权渗透测试平台下发的执行指令。请立即按意图动手，现在就选择合适的工具并发出第一次调用。"
+)
+
+// countingHooks 统计一次 run 的工具调用总数（PreToolUse 每次尝试都计，含被
+// 平台拦截的——拦截前提是「模型确实发起了调用」，与身份坍缩的零发起相反）。
+// 纯旁路转发，不改变任何管控行为。
+type countingHooks struct {
+	inner harness.HookRunner
+	n     *atomic.Int64
+}
+
+func (h countingHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
+	h.n.Add(1)
+	return h.inner.PreToolUse(ctx, name, input)
+}
+
+func (h countingHooks) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
+	h.inner.PostToolUse(ctx, name, input, result, isErr)
+}
+
+func (h countingHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []string, string) {
+	return h.inner.Stop(ctx, messages)
+}
+
+// zeroToolMisfire 判定一次 worker run 是否为「模型行为性退化收场」：正常完成态、
+// 没有写回任何节点、全程未发起过一次工具调用。对话驱动（hasChatMessage）的纯文本
+// 回复是合法行为，不判退化；model_error/max_turns/abort 各走既有通道。
+func zeroToolMisfire(reason harness.TerminalReason, err error, wrote agent.WriteCounts, toolCalls int64, chatDriven bool) bool {
+	if chatDriven || err != nil || reason != harness.ReasonCompleted {
+		return false
+	}
+	return wrote.Total() == 0 && toolCalls == 0
+}
+
+// degradedAttemptsOf 从意图 payload 读已自动重派次数（JSON 数字解出来是 float64）。
+func degradedAttemptsOf(node *db.Node) int {
+	if node == nil || len(node.Payload) == 0 {
+		return 0
+	}
+	var p struct {
+		DegradedAttempts int `json:"degraded_attempts"`
+	}
+	if json.Unmarshal(node.Payload, &p) != nil {
+		return 0
+	}
+	if p.DegradedAttempts < 0 {
+		return 0
+	}
+	return p.DegradedAttempts
+}
+
+// autoRerunZeroToolIntent 是零工具收场的第二层：把 done 意图重开交还 frontier。
+// 进程内 degradedAttempts 闸保证并发收场只放一条进重开；DB payload 的
+// degraded_attempts 是跨重启权威，超 degradedRerunLimit 保持 done 并点名人工介入。
+func (e *Engine) autoRerunZeroToolIntent(t *Task, intentID int64, name string) {
+	node, err := t.Store.GetNode(intentID)
+	if err != nil {
+		log.Printf("[worker %s] task %s 意图 #%d 零工具重派读取失败: %v", name, t.ID, intentID, err)
+		return
+	}
+	attempts := degradedAttemptsOf(node)
+	e.degradedMu.Lock()
+	if e.degradedAttempts == nil {
+		e.degradedAttempts = map[int64]int{}
+	}
+	if e.degradedAttempts[intentID] > attempts { // 已有并发收场重派过：让位
+		e.degradedMu.Unlock()
+		return
+	}
+	e.degradedAttempts[intentID] = attempts + 1
+	e.degradedMu.Unlock()
+
+	if attempts >= degradedRerunLimit {
+		log.Printf("[worker %s] task %s 意图 #%d 零工具重派已达上限(%d)，保持 done——模型持续行为退化，需人工介入（换模型/检查中转）",
+			name, t.ID, intentID, degradedRerunLimit)
+		return
+	}
+	reopened, err := t.Store.ReopenDegradedIntent(intentID)
+	if err != nil {
+		log.Printf("[worker %s] task %s 意图 #%d 零工具重派落库失败: %v", name, t.ID, intentID, err)
+		return
+	}
+	if !reopened {
+		return // 状态已被人改走（如 planner kill），尊重现状
+	}
+	if err := t.Store.MergeIntentPayload(intentID, map[string]any{
+		"degraded":          "zero_tool",
+		"degraded_attempts": attempts + 1,
+	}); err != nil {
+		log.Printf("[worker %s] task %s 意图 #%d 退化标记落库失败: %v", name, t.ID, intentID, err)
+	}
+	log.Printf("[worker %s] task %s 意图 #%d 零工具收场，已自动重派 (%d/%d)",
+		name, t.ID, intentID, attempts+1, degradedRerunLimit)
+	e.touch(t.ID)
+	t.Notify()
 }

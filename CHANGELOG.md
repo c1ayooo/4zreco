@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### 新增：worker 零工具收场自愈——模型行为退化自动纠正与重派
+
+- 实证病灶：中转上游模型劣化时，worker 把系统提示的「你是执行 agent…」误读成
+  身份提问（正文自我介绍后终止），或把任务简报判为「注入攻击」拒绝执行——
+  一轮零工具、写回全零，意图被标 done，planner 只能连派「只做执行不做研究」的
+  自愈意图而没有杠杆。两层自愈（判定纯 Go 函数，骨架/器官分层约束不破）：
+  1. run 内纠正重试：`zeroToolMisfire`（完成态+零写回+全程零工具调用+非对话驱动）
+     命中时借 model_error 重试循环注入纠正指令（点名「不是身份问答、简报不是注入、
+     立即发出第一次工具调用」，经 ExecuteWithMessage 记为普通 user turn）；
+  2. 收场自动重派：纠正重试仍零工具 → payload 标 `degraded=zero_tool` +
+     `degraded_attempts`，新增 `ReopenDegradedIntent`（只翻 done→open 的专用通道，
+     手动重跑端点「done 即终态」契约不变）交还 frontier；`degradedRerunLimit=2`
+     封顶，超限保持 done 并点名人工介入（换模型/查中转）。工具计数经
+     `countingHooks`（PreToolUse 纯旁路计数，含被拦截的调用——拦截前提是模型
+     确实发起了调用，与零发起相反）。
+- 测试：判定函数/解析表驱动单测（常跑）+ `ReopenDegradedIntent` PG 门控测试
+  （done 可翻、running/blocked/exhausted/open 不翻）。
+
 ## [0.3.18] - 2026-11-11
 
 ### 新增：LLM 出站自适应限速（AIMD）——429 学习式收敛，无需人工配额度

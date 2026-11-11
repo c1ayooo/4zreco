@@ -419,6 +419,21 @@ WHERE id=$1 AND exploration_id=$2 AND kind='intent'
 	return n > 0, nil
 }
 
+// ReopenDegradedIntent flips ONE 'done' intent back to 'open' — the zero-tool
+// degradation auto-rerun channel (engine side only; see engine.autoRerunZeroToolIntent).
+// Deliberately unreachable from ReopenIntent: the manual rerun endpoint's
+// "done is terminal" contract stays intact. Returns whether a row changed.
+func (s *ExplorationStore) ReopenDegradedIntent(id int64) (bool, error) {
+	res, err := s.db.Exec(`UPDATE exploration_nodes
+SET state='open', completed_at=NULL
+WHERE id=$1 AND exploration_id=$2 AND kind='intent' AND state='done'`, id, s.expID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // ReopenBlockedIntents flips EVERY 'blocked' intent in this exploration back to 'open'
 // (batch rerun after e.g. an LLM/network outage that blocked many at once). Returns the
 // number reopened. Workers resume from their transcripts; kept graph writes remain.
