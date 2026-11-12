@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### 新增：流量 ID 完整展示/复制/按 ID 搜索——ARTEX 移植 A6
+
+- **后端**（`internal/traffic/traffic.go`）：`Page` 通用搜索框的元数据 LIKE
+  分支补上 `id LIKE`（流量 ID 不在 trigram FTS 列，此前粘完整 ID 搜不到）；
+  `traffic_get` 工具描述对齐 ARTEX guidance——强调「ID 须完整保留，不是列表
+  行号，已知 ID 直接读取无需重新搜索」。分页排序的 `id DESC` 稳定兜底本地
+  早已具备（traffic.go:1028），本次仅核对未改动。
+- **前端**（`web/src/app/(main)/function/traffic/page.tsx`）：新增 `TrafficID`
+  组件（对齐 ARTEX traffic-history.tsx）——列表新增 ID 列、详情抽屉头部展示
+  完整 ID，点击即复制（成功/失败 toast，文案硬编码中文）；搜索框占位提示补
+  「ID」。
+- 测试：`internal/traffic/traffic_id_test.go`（对齐 ARTEX traffic_id_test.go）——
+  完整/尾部部分 ID 在 FTS 开关两种状态下均可经搜索框命中、ID 可直接交
+  `traffic_get` 取回原文、ID 搜索仍受 host 等过滤约束。
+
 ### 新增：任务详情只读文件浏览——ARTEX 移植 A5
 
 - **后端**（`internal/server/task_files.go`）：任务详情页新增 6 条只读路由

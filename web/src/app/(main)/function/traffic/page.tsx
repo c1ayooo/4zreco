@@ -7,6 +7,7 @@ import {
   ArrowUpNarrowWideIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CopyIcon,
   EraserIcon,
   FilterXIcon,
   ListChecksIcon,
@@ -48,7 +49,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api } from "@/lib/api";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import type { TrafficDetail, TrafficExchange, TrafficHost, TrafficResp } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 
 function fmtTime(ts: string) {
   return new Date(ts).toLocaleString("zh-CN", {
@@ -80,6 +81,31 @@ function statusTone(status: number) {
 
 function MethodBadge({ method }: { method: string }) {
   return <Badge className="shrink-0 font-mono">{method}</Badge>;
+}
+
+// TrafficID 完整展示流量 ID 并一键复制（A6，对齐 ARTEX traffic-history.tsx）：
+// ID 是完整字符串（时间戳-序号），可粘回搜索框直接定位，或交给报告 Agent。
+function TrafficID({ id }: { id: string }) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 gap-1 px-1 font-mono text-xs"
+      title="复制流量 ID，可用于搜索或交给报告 Agent"
+      aria-label={`复制流量 ID ${id}`}
+      onClick={async (event) => {
+        event.stopPropagation();
+        if (await copyText(id)) {
+          toast.success("已复制流量 ID");
+        } else {
+          toast.error("复制失败，请手动选择流量 ID");
+        }
+      }}
+    >
+      {id}
+      <CopyIcon className="size-3 shrink-0" />
+    </Button>
+  );
 }
 
 // Older captures may predate Host persistence because net/http keeps Host
@@ -500,7 +526,7 @@ export default function TrafficPage() {
         <div className="relative max-w-sm flex-1">
           <SearchIcon className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="搜索全部（URL / 方法 / 类型 / 状态码…）"
+            placeholder="搜索全部（ID / URL / 方法 / 类型 / 状态码…）"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="h-8 pl-8"
@@ -654,6 +680,7 @@ export default function TrafficPage() {
                       }
                     />
                   </TableHead>
+                  <TableHead className="w-40">ID</TableHead>
                   <SortableHead
                     field="ts"
                     label="时间"
@@ -707,6 +734,9 @@ export default function TrafficPage() {
                         }
                       />
                     </TableCell>
+                    <TableCell>
+                      <TrafficID id={e.id} />
+                    </TableCell>
                     <TableCell className="text-muted-foreground text-xs tabular-nums">{fmtTime(e.ts)}</TableCell>
                     <TableCell className="font-mono text-xs">{e.host}</TableCell>
                     <TableCell>
@@ -728,14 +758,14 @@ export default function TrafficPage() {
                   Array.from({ length: 8 }).map((_, i) => (
                     // biome-ignore lint/suspicious/noArrayIndexKey: 骨架行无数据语义，按索引渲染
                     <TableRow key={i}>
-                      <TableCell colSpan={8} className="py-1.5">
+                      <TableCell colSpan={9} className="py-1.5">
                         <Skeleton className="h-4 w-full" />
                       </TableCell>
                     </TableRow>
                   ))}
                 {traffic !== null && exchanges.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="p-0">
+                    <TableCell colSpan={9} className="p-0">
                       <Empty>
                         <EmptyHeader>
                           <EmptyMedia variant="icon">
@@ -777,6 +807,10 @@ export default function TrafficPage() {
                 </div>
                 <SheetTitle className="break-all font-mono">{selected.host}</SheetTitle>
                 <SheetDescription className="break-all font-mono">{selected.url}</SheetDescription>
+                <div className="flex items-center gap-1 text-muted-foreground text-xs">
+                  流量 ID：
+                  <TrafficID id={selected.id} />
+                </div>
               </SheetHeader>
               <Tabs defaultValue="request" className="min-h-0 flex-1 gap-0">
                 <TabsList className="mx-5 mt-4 grid w-auto grid-cols-2">
