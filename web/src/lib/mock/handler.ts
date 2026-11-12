@@ -2465,18 +2465,39 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const status = q.get("status") || "";
     const askSource = q.get("ask_source") || "";
     const decisionSource = q.get("decision_source") || "";
+    const searchQ = (q.get("q") || "").trim();
+    const createdFrom = q.get("from") || "";
+    const createdTo = q.get("to") || "";
     if (status && !["pending", "allowed", "denied", "timeout"].includes(status)) throw new Error("无效审批状态");
     if (askSource && !["rule", "judge", "model", "unknown"].includes(askSource)) throw new Error("无效判定来源");
     if (decisionSource && !["human", "auto", "timeout", "auto_cancel", "legacy", "archive"].includes(decisionSource))
       throw new Error("无效决定来源");
-    const filtered = mockInterceptHistory.filter(
-      (row) =>
-        (seg[1] !== "task" || row.task_id === decodeURIComponent(seg[2])) &&
-        (!status || row.status === status) &&
-        (!askSource || (row.ask_source || "unknown") === askSource) &&
-        (!decisionSource || row.decision_source === decisionSource),
-    );
-    if (!q.has("page") && !q.has("size") && !status && !askSource && !decisionSource)
+    // B3 检索参数与后端同款校验：#编号必须为正整数，日期严格 YYYY-MM-DD。
+    if (searchQ.length > 200) throw new Error("q 不能超过 200 个字符");
+    if (searchQ.startsWith("#") && !/^[1-9]\d*$/.test(searchQ.slice(1))) throw new Error("审批编号必须为 # 后接正整数");
+    for (const [name, value] of [["from", createdFrom], ["to", createdTo]] as const) {
+      if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`${name} 必须是 YYYY-MM-DD 日期`);
+    }
+    if (createdFrom && createdTo && createdFrom > createdTo) throw new Error("from 不能晚于 to");
+    // 关键词按 JSON 序列化行做子串匹配（与后端检索列覆盖 tool_input/reason 等列近似）。
+    const needle = searchQ.startsWith("#") ? "" : searchQ.toLowerCase();
+    const wantId = searchQ.startsWith("#") ? Number(searchQ.slice(1)) : 0;
+    const filtered = mockInterceptHistory.filter((row) => {
+      if (seg[1] === "task" && row.task_id !== decodeURIComponent(seg[2])) return false;
+      if (status && row.status !== status) return false;
+      if (askSource && (row.ask_source || "unknown") !== askSource) return false;
+      if (decisionSource && row.decision_source !== decisionSource) return false;
+      const day = (row.created_at || "").slice(0, 10);
+      if (createdFrom && day < createdFrom) return false;
+      if (createdTo && day > createdTo) return false;
+      if (wantId) return row.id === wantId;
+      if (needle) {
+        const haystack = JSON.stringify(row).toLowerCase();
+        if (!haystack.includes(needle)) return false;
+      }
+      return true;
+    });
+    if (!q.has("page") && !q.has("size") && !status && !askSource && !decisionSource && !searchQ && !createdFrom && !createdTo)
       return { items: filtered, total: filtered.length };
     const page = Math.max(1, Number(q.get("page")) || 1);
     const size = Math.min(100, Math.max(1, Number(q.get("size")) || 20));

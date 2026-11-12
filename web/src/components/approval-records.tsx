@@ -10,6 +10,7 @@ import {
   ClipboardListIcon,
   CopyIcon,
   RefreshCwIcon,
+  SearchIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
   XIcon,
@@ -23,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -795,6 +797,9 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   const [pageSize, setPageSize] = React.useState(20);
   const [total, setTotal] = React.useState(0);
   const [filter, setFilter] = React.useState<InterceptApprovalFilter>({});
+  const [searchText, setSearchText] = React.useState("");
+  const [fromDate, setFromDate] = React.useState("");
+  const [toDate, setToDate] = React.useState("");
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -804,7 +809,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   const request = React.useRef(0);
   const decisionLock = React.useRef(false);
   const filterID = React.useId();
-  const filtered = Boolean(filter.status || filter.ask_source || filter.decision_source);
+  const filtered = Boolean(filter.status || filter.ask_source || filter.decision_source || filter.q || filter.from || filter.to);
 
   // A task can stay mounted while the user switches between task details.
   // Reset the cursor so the new scope always starts at its newest records.
@@ -874,12 +879,40 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
     // An in-flight response for the old filter must not repopulate the table.
     request.current++;
     setFilter(next);
+    setSearchText(next.q ?? "");
+    setFromDate(next.from ?? "");
+    setToDate(next.to ?? "");
     setPage(1);
     setRows([]);
     setTotal(0);
     setError("");
     setLoading(true);
   };
+
+  const submitSearch = () => {
+    const q = searchText.trim();
+    changeFilter({ ...filter, q: q || undefined });
+  };
+
+  const changeDate = (key: "from" | "to", value: string) => {
+    changeFilter({ ...filter, [key]: value || undefined });
+  };
+
+  // 关键词输入 300ms 防抖后自动应用；日期字段改变即应用（changeDate）。
+  React.useEffect(() => {
+    const q = searchText.trim();
+    if (q === (filter.q ?? "")) return;
+    const timer = setTimeout(() => {
+      request.current++;
+      setFilter((previous) => ({ ...previous, q: q || undefined }));
+      setPage(1);
+      setRows([]);
+      setTotal(0);
+      setError("");
+      setLoading(true);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchText, filter.q]);
 
   const decide: Decide = async (id, decision) => {
     if (decisionLock.current) return;
@@ -939,6 +972,49 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
         </Button>
       </div>
       <FieldGroup className="flex-row flex-wrap items-end gap-3" aria-label="审批记录筛选">
+        <Field className="w-full sm:min-w-80 sm:flex-1">
+          <FieldLabel htmlFor={`${filterID}-search`}>关键词 / #审批编号</FieldLabel>
+          <div className="flex gap-2">
+            <div className="relative min-w-0 flex-1">
+              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id={`${filterID}-search`}
+                className="pl-8"
+                value={searchText}
+                maxLength={200}
+                placeholder="工具、理由、任务等，#编号精确定位"
+                onChange={(event) => setSearchText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    submitSearch();
+                  }
+                }}
+              />
+            </div>
+            <Button type="button" variant="outline" onClick={submitSearch}>
+              搜索
+            </Button>
+          </div>
+        </Field>
+        <Field className="w-full sm:w-40">
+          <FieldLabel htmlFor={`${filterID}-from`}>创建日期从</FieldLabel>
+          <Input
+            id={`${filterID}-from`}
+            type="date"
+            value={fromDate}
+            onChange={(event) => changeDate("from", event.target.value)}
+          />
+        </Field>
+        <Field className="w-full sm:w-40">
+          <FieldLabel htmlFor={`${filterID}-to`}>到</FieldLabel>
+          <Input
+            id={`${filterID}-to`}
+            type="date"
+            value={toDate}
+            onChange={(event) => changeDate("to", event.target.value)}
+          />
+        </Field>
         <Field className="w-full sm:w-40">
           <FieldLabel htmlFor={`${filterID}-status`}>审批状态</FieldLabel>
           <Select
@@ -1017,6 +1093,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
       <section className="overflow-hidden rounded-xl border">
         <div className="border-b px-4 py-3 font-medium text-sm">
           {filtered ? "筛选结果" : "全部记录"}（{total}）
+          {filter.q ? <span className="ml-2 break-all font-normal text-muted-foreground text-xs">关键词：{filter.q}</span> : null}
         </div>
         {loading ? (
           <div className="flex flex-col gap-3 p-4">
@@ -1034,7 +1111,7 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
               <EmptyTitle>{filtered ? "没有符合筛选条件的审批记录" : "暂无审批记录"}</EmptyTitle>
               <EmptyDescription>
                 {filtered
-                  ? "请调整审批状态或判定来源，或清除筛选查看全部记录。"
+                  ? "请调整关键词、日期或状态筛选，或清除筛选查看全部记录。"
                   : "规则或模型作出审批决定后，记录将显示在这里。"}
               </EmptyDescription>
             </EmptyHeader>

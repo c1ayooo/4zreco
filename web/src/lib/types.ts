@@ -1617,6 +1617,11 @@ export interface InterceptApprovalFilter {
   ask_source?: "rule" | "judge" | "model" | "unknown";
   // 决定来源（正交维度）：human | auto | timeout | auto_cancel | legacy | archive。
   decision_source?: string;
+  // 关键词检索（B3）：`#123` 精确定位审批编号，其余为子串匹配。
+  q?: string;
+  // 创建日边界（YYYY-MM-DD，双端含当日）。
+  from?: string;
+  to?: string;
 }
 
 // InterceptApprovalRow enriches InterceptPending with conversation/task and rule context.

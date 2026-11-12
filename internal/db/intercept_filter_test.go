@@ -2,7 +2,9 @@ package db
 
 import (
 	"slices"
+	"strconv"
 	"testing"
+	"time"
 )
 
 // insertApprovalFixture 写一条审批行（可选决定行）用于过滤/分页测试：
@@ -191,5 +193,59 @@ func TestInterceptApprovalFilters(t *testing.T) {
 		if r.RuleID != nil || r.AskSource != "rule" {
 			t.Fatal("deleted rule lost its source")
 		}
+	}
+
+	// --- B3 审批记录检索增强：关键词 / #编号 / 日期含端 ---
+	// 关键词子串检索命中检索列（tool_name='Bash' 全部 36 条命中），大小写不敏感。
+	got, total, err = d.ListTaskInterceptsPage(scope, 1, 100, InterceptApprovalFilter{Search: "bash"})
+	if err != nil || total != 36 || len(got) != 36 {
+		t.Fatalf("keyword search count=%d rows=%d err=%v", total, len(got), err)
+	}
+	// LIKE 元字符按字面量处理：'_' 不是单字符通配（本地夹具数据无下划线），'%' 无命中。
+	for _, meta := range []string{"_", "%"} {
+		got, total, err = d.ListTaskInterceptsPage(scope, 1, 100, InterceptApprovalFilter{Search: meta})
+		if err != nil || total != 0 || len(got) != 0 {
+			t.Fatalf("metachar %q treated as wildcard: count=%d err=%v", meta, total, err)
+		}
+	}
+	// #编号精确定位：命中且仅命中该行；非法 # 输入报错。
+	first := rows[len(rows)-1].ID
+	got, total, err = d.ListTaskInterceptsPage(scope, 1, 100, InterceptApprovalFilter{Search: "#" + strconv.FormatInt(first, 10)})
+	if err != nil || total != 1 || len(got) != 1 || got[0].ID != first {
+		t.Fatalf("#id search: total=%d err=%v", total, err)
+	}
+	for _, bad := range []string{"#abc", "#0", "#-1", "#"} {
+		if _, _, err = d.ListTaskInterceptsPage(scope, 1, 100, InterceptApprovalFilter{Search: bad}); err == nil {
+			t.Fatalf("invalid approval id %q accepted", bad)
+		}
+	}
+	// 日期含端边界：夹具 created_at=now()。from/to=今天（UTC 日历日）双端都应含当日
+	// 全部 36 条；from=明天、to=昨天都应为 0。
+	today := time.Now().UTC().Format("2006-01-02")
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	for _, tc := range []struct {
+		name   string
+		filter InterceptApprovalFilter
+		want   int
+	}{
+		{"from-today", InterceptApprovalFilter{CreatedFrom: today}, 36},
+		{"to-today", InterceptApprovalFilter{CreatedTo: today}, 36},
+		{"from-tomorrow", InterceptApprovalFilter{CreatedFrom: tomorrow}, 0},
+		{"to-yesterday", InterceptApprovalFilter{CreatedTo: yesterday}, 0},
+		{"range-today", InterceptApprovalFilter{CreatedFrom: today, CreatedTo: today}, 36},
+		{"search-and-date", InterceptApprovalFilter{Search: "bash", CreatedFrom: tomorrow}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, total, err := d.ListTaskInterceptsPage(scope, 1, 100, tc.filter)
+			if err != nil || total != tc.want || len(got) != tc.want {
+				t.Fatalf("date filter count=%d rows=%d err=%v", total, len(got), err)
+			}
+		})
+	}
+	// 无搜索的 COUNT 不做 join：通过组合日期+状态仍走 v_intercept 单表计数。
+	_, total, err = d.ListAllInterceptsPage(1, 100, InterceptApprovalFilter{CreatedFrom: today, Status: "denied"})
+	if err != nil {
+		t.Fatalf("date+status count err=%v", err)
 	}
 }

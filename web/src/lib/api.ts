@@ -279,6 +279,9 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
   if (filter.status) query.set("status", filter.status);
   if (filter.ask_source) query.set("ask_source", filter.ask_source);
   if (filter.decision_source) query.set("decision_source", filter.decision_source);
+  if (filter.q) query.set("q", filter.q);
+  if (filter.from) query.set("from", filter.from);
+  if (filter.to) query.set("to", filter.to);
   return query.toString();
 }
 

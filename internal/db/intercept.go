@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -330,10 +331,16 @@ func (d *DB) ListAllIntercepts(limit int) ([]InterceptApprovalRow, error) {
 // InterceptApprovalFilter combines exact status, ask-source (rule/judge, 旧值
 // model/unknown) and decide-source (human/auto/timeout/…) filters. The two
 // source dimensions are orthogonal since P0-6. Empty fields include all values.
+// Search 为关键词检索：`#123` 形式精确定位审批编号，其余按子串 ILIKE 扫检索列
+// （SQL 元字符按字面量处理）；CreatedFrom/CreatedTo 为创建日边界（YYYY-MM-DD，
+// 双端含当日）。B3 审批记录检索增强。
 type InterceptApprovalFilter struct {
 	Status         string
 	AskSource      string
 	DecisionSource string
+	Search         string
+	CreatedFrom    string // 含端 UTC 日历日，YYYY-MM-DD
+	CreatedTo      string // 含端 UTC 日历日，YYYY-MM-DD
 }
 
 // ListAllInterceptsPage returns one 1-based page and the total matching count.
@@ -388,12 +395,60 @@ func (d *DB) listInterceptsPage(taskID string, page, size int, filter InterceptA
 	add("v.status", filter.Status)
 	add("v.ask_source", filter.AskSource)
 	add("v.decision_source", filter.DecisionSource)
+	// 日期含端语义（UTC 日历日）：created_at 先钉到 UTC 再取日历日比较，避免
+	// 会话时区（本地 dev 库为 Asia/Shanghai）漂移边界。
+	if filter.CreatedFrom != "" {
+		args = append(args, filter.CreatedFrom)
+		conditions = append(conditions, "(v.created_at AT TIME ZONE 'UTC')::date >= $"+fmt.Sprint(len(args))+"::date")
+	}
+	if filter.CreatedTo != "" {
+		args = append(args, filter.CreatedTo)
+		conditions = append(conditions, "(v.created_at AT TIME ZONE 'UTC')::date <= $"+fmt.Sprint(len(args))+"::date")
+	}
+	// 关键词检索：#编号精确定位，否则对检索列做 ILIKE 子串匹配（元字符转义为字面量）。
+	// 检索列集合按本地 v_intercept 视图列适配（本地比 ARTEX 多 decision/action/
+	// decided_by 等列，取交集+本地独有列）。
+	search := strings.TrimSpace(filter.Search)
+	if strings.HasPrefix(search, "#") {
+		id, err := strconv.ParseInt(strings.TrimPrefix(search, "#"), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, 0, fmt.Errorf("审批编号必须为 # 后接正整数")
+		}
+		add("v.id", strconv.FormatInt(id, 10))
+	} else if search != "" {
+		pattern := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(search)
+		args = append(args, "%"+pattern+"%")
+		like := "$" + fmt.Sprint(len(args))
+		conditions = append(conditions, `(
+      v.id::text ILIKE `+like+`
+      OR v.conversation_id::text ILIKE `+like+`
+      OR COALESCE(v.task_id, '') ILIKE `+like+`
+      OR COALESCE(v.agent_name, '') ILIKE `+like+`
+      OR COALESCE(v.tool_name, '') ILIKE `+like+`
+      OR COALESCE(v.tool_input::text, '') ILIKE `+like+`
+      OR COALESCE(v.reason, '') ILIKE `+like+`
+      OR COALESCE(v.audit::text, '') ILIKE `+like+`
+      OR COALESCE(v.decision_reason, '') ILIKE `+like+`
+      OR COALESCE(v.effective_action, '') ILIKE `+like+`
+      OR COALESCE(v.decided_by, '') ILIKE `+like+`
+      OR COALESCE(v.decision_source, '') ILIKE `+like+`
+      OR COALESCE(c.title, '') ILIKE `+like+`
+      OR COALESCE(c.agent_key, '') ILIKE `+like+`
+      OR COALESCE(ir.name, '') ILIKE `+like+`
+    )`)
+	}
 	where := ""
 	if len(conditions) > 0 {
 		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
+	// COUNT 无搜索不做 join：status/ask_source/decision_source/日期/#编号都只落
+	// v_intercept 自身列，子串检索才需要 conversations/intercept_rules 的列。
 	var total int
-	if err := d.QueryRow("SELECT COUNT(*) FROM v_intercept v"+where, args...).Scan(&total); err != nil {
+	countFrom := "FROM v_intercept v"
+	if search != "" && !strings.HasPrefix(search, "#") {
+		countFrom = approvalRowJoins
+	}
+	if err := d.QueryRow("SELECT COUNT(*) "+countFrom+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 

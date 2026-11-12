@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### 新增：审批记录关键词/#编号/日期检索——ARTEX 移植 B3
+
+- **行为**：审批记录列表支持关键词检索（`q` 参数，工具/理由/任务/会话/规则名/决定侧
+  等检索列 ILIKE 子串，SQL 元字符按字面量处理；`#123` 形式精确定位审批编号，非法
+  `#x` 直接 400）与创建日期范围筛选（`from`/`to`，YYYY-MM-DD 双端含当日，边界按
+  UTC 日历日计算、不随会话时区漂移）。COUNT 无搜索不做 join 的性能设计保留——
+  只有子串检索才需要 conversations/intercept_rules 的 join。
+- **落点**：`internal/db/intercept.go` 的 `InterceptApprovalFilter` 扩
+  `Search`/`CreatedFrom`/`CreatedTo` 三字段（检索列集合按本地 `v_intercept` 视图列
+  适配，取 ARTEX 14 列交集+本地独有的 decision_reason/effective_action/decided_by/
+  decision_source）；`internal/server/intercept.go` 的 `interceptFilterParams` 负责参数
+  校验（200 字符上限、# 语法、日期格式与 from≤to 顺序）。decision_source 派生列逻辑
+  不随迁（本地为 append-only 实列）。
+- **前端**：审批记录页筛选区新增「关键词 / #审批编号」搜索框（300ms 防抖+回车/按钮
+  立即检索）与「创建日期从/到」范围选择，文案硬编码中文；mock 层同款校验与过滤。
+- **测试**：`intercept_filter_test.go`（db）扩关键词命中、元字符转义、#编号定位与
+  非法输入报错、日期含端边界、检索+日期组合用例；`intercept_filter_test.go`（server）
+  扩参数解析纯函数用例与 HTTP 400/检索命中用例。
+
 ### 新增：审批脚本审查快照与不完整强制转人工——ARTEX 移植 B1
 
 - **行为**：Bash/内联 Shell 类调用进入 LLM 兜底研判时，静态解析命令树，把待执行

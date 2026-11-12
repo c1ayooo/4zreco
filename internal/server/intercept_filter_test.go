@@ -4,11 +4,44 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 )
+
+// TestInterceptSearchFilterParams 覆盖 B3 检索参数解析（纯函数，无 DSN 也可跑）：
+// q 去空白与长度上限、#编号语法、日期格式与含端顺序校验。
+func TestInterceptSearchFilterParams(t *testing.T) {
+	filter, err := interceptFilterParams(url.Values{"q": []string{"  https://example.test/a?x=1  "}})
+	if err != nil || filter.Search != "https://example.test/a?x=1" {
+		t.Fatalf("search=%q err=%v", filter.Search, err)
+	}
+	if _, err := interceptFilterParams(url.Values{"q": []string{"#0"}}); err == nil {
+		t.Fatal("zero approval id accepted")
+	}
+	if _, err := interceptFilterParams(url.Values{"q": []string{"#abc"}}); err == nil {
+		t.Fatal("non-numeric approval id accepted")
+	}
+	if _, err := interceptFilterParams(url.Values{"q": []string{strings.Repeat("x", 201)}}); err == nil {
+		t.Fatal("overlong search accepted")
+	}
+	filter, err = interceptFilterParams(url.Values{"from": []string{"2026-10-01"}, "to": []string{"2026-10-12"}})
+	if err != nil || filter.CreatedFrom != "2026-10-01" || filter.CreatedTo != "2026-10-12" {
+		t.Fatalf("date filter=%+v err=%v", filter, err)
+	}
+	for _, values := range []url.Values{
+		{"from": []string{"2026-10-1"}},
+		{"to": []string{"not-a-date"}},
+		{"from": []string{"2026-10-13"}, "to": []string{"2026-10-12"}},
+	} {
+		if _, err := interceptFilterParams(values); err == nil {
+			t.Fatalf("invalid date filter accepted: %v", values)
+		}
+	}
+}
 
 func TestInterceptFilterHTTP(t *testing.T) {
 	dsn, _, err := db.DSN()
@@ -62,7 +95,7 @@ func TestInterceptFilterHTTP(t *testing.T) {
 		if rec := do(base+"?status=denied&ask_source=judge", false); rec.Code != 401 {
 			t.Fatalf("unprotected list: %d", rec.Code)
 		}
-		for _, query := range []string{"?status=invalid", "?ask_source=invalid", "?decision_source=invalid", "?page=1&status=denied%27+OR+1%3D1--", "?size=20&ask_source=MODEL"} {
+		for _, query := range []string{"?status=invalid", "?ask_source=invalid", "?decision_source=invalid", "?page=1&status=denied%27+OR+1%3D1--", "?size=20&ask_source=MODEL", "?q=%23abc", "?q=%230", "?from=2026-10-13&to=2026-10-12", "?from=2026-10-1"} {
 			if rec := do(base+query, true); rec.Code != 400 {
 				t.Fatalf("invalid filter %s: %d %s", query, rec.Code, rec.Body.String())
 			}
@@ -99,6 +132,13 @@ func TestInterceptFilterHTTP(t *testing.T) {
 		{"?page=2&size=1&status=denied&ask_source=judge", 1, 0, 2},
 		{"?status=denied&ask_source=unknown", 0, 0, 1},
 		{"?page=0&size=0&status=pending", 1, 1, 1},
+		// B3 检索：关键词命中 reason/tool_name/task_id 检索列；非法 # 编号 400 已在上loop覆盖。
+		// 检索参数触发分页路径（legacy 快路径只认空 filter），page 恒为 1。
+		{"?q=fixture", 4, 4, 1},
+		{"?q=bash", 4, 4, 1},
+		{"?q=approval-http-filter", 4, 4, 1},
+		{"?q=nomatch-keyword", 0, 0, 1},
+		{"?q=fixture&from=2099-01-01", 0, 0, 1},
 	} {
 		rec := do("/api/intercept/task/"+scope+tc.query, true)
 		var body struct {
