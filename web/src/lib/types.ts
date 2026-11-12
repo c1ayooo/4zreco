@@ -41,6 +41,12 @@ export interface Task {
   company_ids?: number[]; // associated company scopes; current company assets join the task at creation
   project_id?: number; // 归属项目(创建时定;未挂=undefined)
   coverage_enabled?: boolean; // 资产覆盖度功能开关(创建时定,默认开)；false=不计算/不展示覆盖度
+  // A8 无成果止损：任务级配置(创建时定)。stop_reason 仅 timeout 终态且原因为
+  // 'no_result' 时非空。
+  no_result_seconds?: number;
+  no_result_min_findings?: number;
+  no_result_min_severity?: string;
+  stop_reason?: string;
   // 任务级登录凭据（脱敏视图；未配置为省略）
   auth_config?: TaskAuthConfigView;
 }

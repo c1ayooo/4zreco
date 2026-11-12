@@ -781,7 +781,7 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 		name := fmt.Sprintf("work#%d", i+1)
 		runTaskRoutine(rt, func(loopCtx context.Context) { e.workerLoop(loopCtx, t, name) })
 	}
-	e.startDeadlineCoordinator(ctx, t) // 任务级超时定时器(仅 timeout>0;去重)
+	e.startDeadlineCoordinator(ctx, t) // 任务级超时/无成果止损定时器(去重)
 	// 仅在「完全没有活动意图(open+running)」时才 kick 首轮规划。带种子意图的任务:种子已
 	// 是 open,或已被上面刚起的 worker 抢先 claim 成 running——两种都算「有活干」,一律跳过
 	// 首轮 planner,worker 直接领种子意图开跑,跑完由 NotifyDone/心跳唤醒 planner。
@@ -898,9 +898,11 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 	runRound := func(src string) {
 		// 有挂起收尾：先尝试收尾；未满足（goal_met 仍在跑意图）就等下一次唤醒，
 		// 不再跑规划——否则 goal_met 之后又派新意图，任务永远停不下来。
-		// 例外：用户刚新增目标/提示 → 撤销非硬上限的收尾并继续规划（max_rounds 是硬上限）。
+		// 例外：用户刚新增目标/提示 → 撤销非硬上限的收尾并继续规划（max_rounds
+		// 是硬上限）。no_result（A8）与 auto_rounds 同属硬上限：检查点已落库，
+		// 新目标不能撤销已提交的止损判定（协调器会兜底收场）。
 		if reason, _ := t.peekSettle(); reason != "" {
-			if reason != "auto_rounds" && t.hasPendingFreshDirection() {
+			if reason != "auto_rounds" && reason != "no_result" && t.hasPendingFreshDirection() {
 				t.clearSettle()
 				if err := e.m.pg.ResetTaskProgress(t.ID); err != nil {
 					log.Printf("[auto-finish] task %s 新目标重置进度失败: %v", t.ID, err)
@@ -963,7 +965,8 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			return
 		}
 		defer e.decInflight(t.ID)
-		e.stampFirstRun(t) // 首次真正规划 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
+		e.m.StartTaskRunSegment(t.ID) // A8 活跃计时：真正开跑才计段(幂等,paused/queued 拒开)
+		e.stampFirstRun(t)            // 首次真正规划 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 		e.touch(t.ID)
 		emit := func(r db.Activity) { e.emitActivity(t, r) }
 		ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false, "") // cancellable by Pause; 带任务 deadline
@@ -1136,7 +1139,8 @@ func (e *Engine) runWorkerStep(ctx context.Context, t *Task, name string, worker
 // cannot observe quiescence between the LLM return and the final DB writes.
 func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *agent.Worker, intent *db.Node, requestID, message string) bool {
 	hasChatMessage := message != ""
-	e.stampFirstRun(t) // 首次真正执行 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
+	e.m.StartTaskRunSegment(t.ID) // A8 活跃计时：真正开跑才计段(幂等,paused/queued 拒开)
+	e.stampFirstRun(t)            // 首次真正执行 → 盖 first_run_at + 算 deadline(仅带 timeout 的任务)
 	e.touch(t.ID)
 	emit := func(r db.Activity) { e.emitActivity(t, r) }
 	ectx := e.clockCtx(e.execContextFor(ctx, t.ID), t, false, "") // cancellable by Pause; 带任务 deadline

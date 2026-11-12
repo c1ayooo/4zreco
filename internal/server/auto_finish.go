@@ -172,6 +172,9 @@ func (e *Engine) recordAndEvaluateAutoFinish(t *Task, round int64, triggers []ag
 	}
 	reason, detail, ok := evaluateAutoFinish(round, idle, active, coveragePct, cfg)
 	if !ok {
+		// 第四种判定（A8 无成果止损）：任务级 no_result 预算到点才做一次性 DB 检查，
+		// 与上面三种全局设置判据互不影响；未触发则按既有三种收场判定走。
+		e.evaluateNoResultAutoFinish(t)
 		return
 	}
 	log.Printf("[auto-finish] task %s 触发收尾：%s（round=%d idle=%d active=%v coverage=%d%%）",
@@ -180,8 +183,8 @@ func (e *Engine) recordAndEvaluateAutoFinish(t *Task, round int64, triggers []ag
 }
 
 // maybePendingSettle 在 plannerLoop 中执行挂起的收尾。返回 true 表示已进入收尾。
-// goal_met / auto_rounds 可在有在跑意图时收（先 drain）；idle/coverage 已由
-// 判定保证 active=false，这里再校验一次以防并发新增意图。
+// goal_met / auto_rounds / no_result 可在有在跑意图时收（先 drain）；idle/coverage
+// 已由判定保证 active=false，这里再校验一次以防并发新增意图。
 func (e *Engine) maybePendingSettle(ctx context.Context, t *Task) bool {
 	reason, detail := t.peekSettle()
 	if reason == "" {
@@ -193,7 +196,7 @@ func (e *Engine) maybePendingSettle(ctx context.Context, t *Task) bool {
 	if isTerminalStatus(t.lifecycleSnapshot().Status) {
 		return false
 	}
-	if reason != "auto_rounds" {
+	if reason != "auto_rounds" && reason != "no_result" {
 		active, err := t.Store.HasActiveIntent()
 		if err != nil || active {
 			return false

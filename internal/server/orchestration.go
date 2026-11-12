@@ -254,6 +254,9 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"timeout_seconds":        map[string]any{"type": "integer", "description": "可选：任务级超时(秒)。到点后触发优雅收尾并进入 timeout 终态；留空或 0 = 不限时"},
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "可选：planner 心跳触发间隔(秒)。距上轮规划结束/任务开始满该值且期间无触发 → 触发一轮规划(兜底死锁 + 唤醒去监督飞行中的 worker)。留空或 0 = 默认 600(10min)；"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "可选：对于简单任务可开启，创建时直接下发一条种子意图(内容=描述+目标)让 worker 免等首轮 planner 直接开跑测试；默认 false(走标准先规划再执行)。"},
+			"no_result_seconds":      map[string]any{"type": "integer", "description": "可选：无成果止损(秒)。任务活跃运行(排除暂停/排队)满该秒数且达标漏洞数低于 no_result_min_findings 时,任务按 timeout 终态自动收场；留空或 0 = 关闭。低于 60 的值一律抬到 60。"},
+			"no_result_min_findings": map[string]any{"type": "integer", "description": "可选：无成果止损的达标漏洞数下限(默认 1)。低于 no_result_min_severity 等级的漏洞不计入。"},
+			"no_result_min_severity": map[string]any{"type": "string", "description": "可选：无成果止损的漏洞等级阈值 low|medium|high|critical(默认空=不限等级)。"},
 		}, "description", "goal"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
@@ -265,6 +268,9 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				TimeoutSeconds       int             `json:"timeout_seconds"`
 				PlanHeartbeatSeconds int             `json:"plan_heartbeat_seconds"`
 				SeedFirstIntent      bool            `json:"seed_first_intent"`
+				NoResultSeconds      int             `json:"no_result_seconds"`
+				NoResultMinFindings  int             `json:"no_result_min_findings"`
+				NoResultMinSeverity  string          `json:"no_result_min_severity"`
 			}
 			_ = json.Unmarshal(in, &a)
 			if strings.TrimSpace(a.Description) == "" {
@@ -275,6 +281,13 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			}
 			if a.TimeoutSeconds < 0 {
 				a.TimeoutSeconds = 0
+			}
+			if err := db.NormalizeNoResultOptions(&db.TaskCreateOptions{
+				NoResultSeconds:     a.NoResultSeconds,
+				NoResultMinFindings: a.NoResultMinFindings,
+				NoResultMinSeverity: a.NoResultMinSeverity,
+			}); err != nil {
+				return actool.Errorf("no_result 参数无效: " + err.Error()), nil
 			}
 			// 只读继承来源任务：数量上限 + 每个 id 有效/去重/存在，校验规则与 HTTP 建任务一致。
 			if len(a.SourceTaskIDs) > db.MaxTaskSourceCount {
@@ -321,6 +334,9 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				LLMProfileIDs:        llmIDs,
 				TimeoutSeconds:       a.TimeoutSeconds,
 				PlanHeartbeatSeconds: a.PlanHeartbeatSeconds,
+				NoResultSeconds:      a.NoResultSeconds,
+				NoResultMinFindings:  a.NoResultMinFindings,
+				NoResultMinSeverity:  a.NoResultMinSeverity,
 			})
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
@@ -531,7 +547,9 @@ func (s *Server) seedOrchestrationTools() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v8_spawntask_one_target"
+	// v9（A8）：spawn_task 新增 no_result_seconds/no_result_min_findings/
+	// no_result_min_severity 三参数——SeedTool 首插入 only，旧库靠这里刷一次。
+	const flag = "tool_schema_refresh_v9_spawntask_no_result"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}

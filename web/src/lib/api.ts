@@ -357,6 +357,11 @@ export const api = {
     // 可选日历计划绑定（A7）：非空时随任务创建一条计划并绑定本任务；
     // start_immediately=false 时任务落库即暂停，等首个窗口自动恢复。
     schedule?: ScheduleInput;
+    // A8 无成果止损（任务级，默认 0=关闭）：活跃运行满 noResultSeconds 秒且达标
+    // 漏洞数 < noResultMinFindings → timeout 终态收场。
+    noResultSeconds?: number;
+    noResultMinFindings?: number;
+    noResultMinSeverity?: string;
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
@@ -375,6 +380,10 @@ export const api = {
       auth_config: input.authConfig?.enabled ? input.authConfig : undefined,
       project_id: input.projectId ?? null,
       schedule: input.schedule ? schedulePayload(input.schedule) : undefined, // 日历计划绑定（A7）
+      // A8 无成果止损：默认 0=关闭
+      no_result_seconds: input.noResultSeconds ?? 0,
+      no_result_min_findings: input.noResultMinFindings ?? 1,
+      no_result_min_severity: input.noResultMinSeverity ?? "",
     }),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   // ---- 日历式计划任务（移植自 ARTEX 0.3.29 A7）----

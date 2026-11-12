@@ -346,6 +346,13 @@ func (s *Server) Close() {
 // including the side-question checkpoint publisher installed during startup.
 func (s *Server) restoreTaskRuntimes() {
 	m := s.m
+	// A8 活跃计时：丢弃进程停止时仍开放的运行段（崩溃/发版后的墙钟时长不可知），
+	// 引擎恢复实际工作时会重新开段。
+	if n, err := m.PG().ClearOpenTaskRunSegments(); err != nil {
+		log.Printf("[engine] 清理开放运行段失败: %v", err)
+	} else if n > 0 {
+		log.Printf("[engine] 已清理 %d 个跨重启的开放运行段", n)
+	}
 	// reload tasks persisted on disk so the task list survives a restart, and
 	// restore persisted paused state (so a task paused before restart stays paused).
 	for _, t := range m.LoadExisting() {
@@ -1691,6 +1698,12 @@ type createTaskReq struct {
 	// Schedule 可选日历计划绑定（A7）：非 null 时随任务同事务建一条计划并绑定
 	// 本任务；start_immediately=false 时任务落库即暂停，等首个窗口自动恢复。
 	Schedule json.RawMessage `json:"schedule,omitempty"`
+	// A8 无成果止损（任务级，默认 0=关闭）：活跃运行满 no_result_seconds 秒且
+	// 达标漏洞数 < no_result_min_findings → timeout 终态收场。min_severity 为空
+	// 不限等级，否则 ∈ low|medium|high|critical（低于阈值的漏洞不计入达标数）。
+	NoResultSeconds     int    `json:"no_result_seconds"`
+	NoResultMinFindings int    `json:"no_result_min_findings"`
+	NoResultMinSeverity string `json:"no_result_min_severity"`
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -1711,6 +1724,16 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TimeoutSeconds < 0 {
 		req.TimeoutSeconds = 0
+	}
+	// A8 无成果止损参数校验（秒数归一/等级白名单）。放在任何需要 m 的步骤之前，
+	// 让坏请求尽早 400。
+	if err := db.NormalizeNoResultOptions(&db.TaskCreateOptions{
+		NoResultSeconds:     req.NoResultSeconds,
+		NoResultMinFindings: req.NoResultMinFindings,
+		NoResultMinSeverity: req.NoResultMinSeverity,
+	}); err != nil {
+		writeErr(w, 400, "no_result 参数无效："+err.Error())
+		return
 	}
 	if len(req.SourceTaskIDs) > db.MaxTaskSourceCount {
 		writeErr(w, 400, fmt.Sprintf("关联任务最多选择 %d 个", db.MaxTaskSourceCount))
@@ -1788,6 +1811,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		AuthConfig:      req.AuthConfig,
 		ProjectID:       req.ProjectID,
 		Schedule:        schedule,
+		NoResultSeconds: req.NoResultSeconds, NoResultMinFindings: req.NoResultMinFindings,
+		NoResultMinSeverity: req.NoResultMinSeverity,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {
@@ -3445,8 +3470,8 @@ func (s *Server) getTraffic(w http.ResponseWriter, r *http.Request) {
 	}, page, size)
 	count, _ := tr.Count() // global total, for the stat card
 	writeJSON(w, 200, map[string]any{
-		"enabled":   s.m.TrafficEnabled(),      // reflect the capture toggle
-		"alive":     s.m.TrafficProxyAlive(),   // 录制代理是否真的在监听（端口被占等启动失败时 false）
+		"enabled":   s.m.TrafficEnabled(),    // reflect the capture toggle
+		"alive":     s.m.TrafficProxyAlive(), // 录制代理是否真的在监听（端口被占等启动失败时 false）
 		"proxy":     s.m.ProxyAddr(),
 		"count":     count,   // total recorded (unfiltered)
 		"total":     matched, // rows matching the current filter (for pagination)

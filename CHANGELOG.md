@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 
+### 新增：无成果止损（no-result）——ARTEX 移植 A8
+
+- **行为**：任务创建时可设 `no_result_seconds > 0`（默认 0=关闭）——活跃运行
+  （排除暂停/排队区间的段计时，暂停/排队/终态一律不计时）满预算秒数时做一次
+  （且仅一次）达标漏洞检查：达标数（`status != 'false_positive'` 且达到
+  `no_result_min_severity` 阈值，低于阈值的漏洞不计入）少于 `no_result_min_findings`
+  → 走 timeout 终态收场并落 `tasks.stop_reason='no_result'`（沿用 timeout 家族的
+  收尾时序：drain → planner 终局轮 → 守卫落终态；达成仍落 done）；检查通过则任务
+  继续运行且之后不再检查。timeout 复活（重跑）时一次性检查点重置、止损预算以
+  当时活跃秒数重新满额。ARTEX 0.3.29 同款。
+- **schema**（`internal/db/schema.sql` 幂等追加）：`tasks` 补 8 列——
+  `no_result_seconds` / `no_result_min_findings` / `no_result_min_severity` /
+  `no_result_base_seconds`（armed 时定格的活跃秒数基线）/ `no_result_checked_at`
+  （一次性检查点）/ `stop_reason`，以及活跃段计时两列
+  `active_run_seconds` / `run_segment_started_at`（no-result 的「活跃秒数」语义
+  与任务运行时长共用；进程停止时开放段丢弃，恢复实际工作再重开段）。
+- **持久层**（`internal/db/task_no_result.go` 新文件 + `db/tasks.go` 扩展）：
+  `NormalizeNoResultOptions`（秒数 <60 抬 60、min_findings 下限 1、severity 白名单）、
+  `CountQualifyingFindings`（先按 findings 直数——批次 C 漏洞归组落地后再升级为
+  独立漏洞口径）、`CheckNoResultCheckpoint`（单事务：tasks 行 `FOR UPDATE` 认领 +
+  计数 + 落判定；与漏洞写入的串行化由该行锁直接保证——本地 `RecordFindingTx`
+  的事务内 `LockTaskEvidenceTx` 本就先取同一把行锁，ARTEX 同款协议）；段计时
+  helper（Start/Finalize/ClearOpenTaskRunSegments）与暂停/入队/终态迁移的折叠
+  SQL。无 settings 键，纯任务级配置。
+- **引擎**（`internal/server/task_runtime.go` + `engine_no_result.go` 新文件）：
+  `noResultRemaining`/`taskRunSeconds`/`evaluateNoResultStop` 纯判定函数；
+  deadline 协调器旁挂一次性检查（无 timeout 但带止损预算的任务也起协调器，
+  重启后能恢复未收场的判定）；planner 轮末经 auto_finish 路径复评（第四种
+  收场判定，与 auto_rounds/auto_coverage/auto_idle 并列，硬上限语义——已提交
+  的止损判定不因新增目标撤销）。
+- **入口**：`POST /api/tasks` 与 spawn_task 工具（编排 agent）新增
+  `no_result_seconds`/`no_result_min_findings`/`no_result_min_severity` 三参数
+  （默认 0=关闭）；工具 schema 经一次性 refresh flag v9 刷进存量库；前端建任务
+  表单「高级设置」加无成果止损开关 + 条件输入组（分钟预算/达标数下限/等级阈值）。
+- **测试**：判定函数表驱动（暂停不计时/复活重计/达标不收场/已认领不重触发）+
+  PG 门控（计数口径/一次性认领/等待漏洞事务提交/终态与复原语义/等级阈值）+
+  `POST /api/tasks` 坏 severity 400。
+
 ### 新增：日历式计划任务——ARTEX 移植 A7
 
 - **schema**（`internal/db/schema.sql` 末节幂等追加）：`task_schedules`

@@ -35,7 +35,7 @@ import (
 type Task struct {
 	ID           string `json:"id"`
 	ExpID        int64  `json:"exploration_id"`
-	Name         string `json:"name"` // 可选任务名称;空=未命名
+	Name         string `json:"name"`   // 可选任务名称;空=未命名
 	Remark       string `json:"remark"` // 任务备注(最多 MaxTaskRemarkRunes 字符);空=无备注
 	CategoryID   *int64 `json:"category_id,omitempty"`
 	CategoryName string `json:"category_name,omitempty"`
@@ -63,16 +63,31 @@ type Task struct {
 	ProjectID          *int64  `json:"project_id,omitempty"` // 归属项目(创建时定,不可变)
 	Status             string  `json:"status"`               // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
 	// 任务级超时(见 docs/任务级超时与收尾设计.md)。DeadlineAt/FirstRunAt 为 unix 秒,0=未设/未运行。
-	TimeoutSeconds       int                    `json:"timeout_seconds"`
-	PlanHeartbeatSeconds int                    `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
-	CoverageEnabled      bool                   `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
-	FirstRunAt           int64                  `json:"first_run_at,omitempty"`
-	DeadlineAt           int64                  `json:"deadline_at,omitempty"`
-	Store                *pgdb.ExplorationStore `json:"-"`
-	Guard                *guard.Guard           `json:"-"`
-	notify               chan struct{}
-	lifecycleMu          sync.RWMutex
-	llmMu                sync.RWMutex
+	TimeoutSeconds       int   `json:"timeout_seconds"`
+	PlanHeartbeatSeconds int   `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
+	CoverageEnabled      bool  `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
+	FirstRunAt           int64 `json:"first_run_at,omitempty"`
+	DeadlineAt           int64 `json:"deadline_at,omitempty"`
+	// A8 无成果止损(创建时定,不可变):活跃运行满 NoResultSeconds 秒且达标漏洞数
+	// 低于 NoResultMinFindings → timeout 终态收场;0=关闭。运行态半边
+	// (base/checked_at/stop_reason/活跃段)在 taskLifecycleState。
+	NoResultSeconds     int                    `json:"no_result_seconds"`
+	NoResultMinFindings int                    `json:"no_result_min_findings"`
+	NoResultMinSeverity string                 `json:"no_result_min_severity"`
+	Store               *pgdb.ExplorationStore `json:"-"`
+	Guard               *guard.Guard           `json:"-"`
+	notify              chan struct{}
+	lifecycleMu         sync.RWMutex
+	llmMu               sync.RWMutex
+
+	// A8 无成果止损运行态（与 taskLifecycleState 镜像，勿直读/直写，走
+	// lifecycleSnapshot/updateLifecycle）：活跃秒数基线、一次性检查点、终态原因、
+	// 活跃运行段。
+	NoResultBaseSeconds int64
+	NoResultCheckedAt   int64
+	StopReason          string
+	ActiveRunSeconds    int64
+	RunSegmentStartedAt int64
 
 	// pendingTriggers accumulates the concrete changes (worker done / finding) that
 	// fired planning rounds since the last one consumed them. The debounce coalesces
@@ -145,6 +160,15 @@ type taskLifecycleState struct {
 	ProjectID     *int64
 	CategoryID    *int64
 	CategoryName  string
+	// A8 无成果止损运行态（ARTEX taskLifecycleState 同名半边）：NoResultBaseSeconds
+	// 是 armed 时的活跃秒数基线；NoResultCheckedAt（unix 秒,0=未检查）是一次性
+	// 检查点；StopReason 当前仅 'no_result'；ActiveRunSeconds/RunSegmentStartedAt
+	// 是排除 paused/queued 的活跃运行段。
+	NoResultBaseSeconds int64
+	NoResultCheckedAt   int64
+	StopReason          string
+	ActiveRunSeconds    int64
+	RunSegmentStartedAt int64
 }
 
 func (t *Task) lifecycleSnapshot() taskLifecycleState {
@@ -174,6 +198,12 @@ func (t *Task) lifecycleSnapshotLocked() taskLifecycleState {
 		ProjectID:     cloneInt64Ptr(t.ProjectID),
 		CategoryID:    cloneInt64Ptr(t.CategoryID),
 		CategoryName:  t.CategoryName,
+
+		NoResultBaseSeconds: t.NoResultBaseSeconds,
+		NoResultCheckedAt:   t.NoResultCheckedAt,
+		StopReason:          t.StopReason,
+		ActiveRunSeconds:    t.ActiveRunSeconds,
+		RunSegmentStartedAt: t.RunSegmentStartedAt,
 	}
 }
 
@@ -200,6 +230,11 @@ func (t *Task) updateLifecycle(update func(*taskLifecycleState)) {
 	t.ProjectID = cloneInt64Ptr(state.ProjectID)
 	t.CategoryID = cloneInt64Ptr(state.CategoryID)
 	t.CategoryName = state.CategoryName
+	t.NoResultBaseSeconds = state.NoResultBaseSeconds
+	t.NoResultCheckedAt = state.NoResultCheckedAt
+	t.StopReason = state.StopReason
+	t.ActiveRunSeconds = state.ActiveRunSeconds
+	t.RunSegmentStartedAt = state.RunSegmentStartedAt
 	t.lifecycleMu.Unlock()
 }
 
@@ -633,31 +668,31 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 				return nil, fmt.Errorf("recover traffic delete staging: %w", err)
 			}
 		}
-	if tr != nil {
-		// Open() 只准备存储与 CA，真正的端口绑定发生在上面 Start() 的 goroutine 里，
-		// 失败只是一行后台日志——曾导致另一个实例占住端口时，开关仍显示捕获开启、
-		// ProxyAddr 仍把死地址发给所有 agent、流量一条都记不到。这里先探测端口：
-		// 绑不上就把录制器置空，捕获在本实例不可用（不管持久化的开关是什么值）。
-		if ln, perr := net.Listen("tcp", proxyAddr); perr != nil {
-			log.Printf("[traffic] 录制代理无法监听 %s，本实例流量捕获不可用（释放端口或改 -proxy 启动参数）：%v", proxyAddr, perr)
-			_ = tr.Close()
-			tr = nil
-		} else {
-			ln.Close()
-		}
-	}
-	if tr != nil {
-		m.traffic = tr
-		// 同步置位再起 goroutine：避免启动后到 Start 真正跑起来之间的窗口里，
-		// 设置请求把「未监听」误报出去。绑定失败时 Start 返回会把标志翻回 false。
-		tr.MarkServing()
-		go func() {
-			log.Printf("[traffic] recording proxy on %s (set HTTP_PROXY=%s + trust _ca CA)", proxyAddr, tr.ProxyAddr())
-			if err := tr.Start(); err != nil {
-				log.Printf("[traffic] proxy stopped: %v", err)
+		if tr != nil {
+			// Open() 只准备存储与 CA，真正的端口绑定发生在上面 Start() 的 goroutine 里，
+			// 失败只是一行后台日志——曾导致另一个实例占住端口时，开关仍显示捕获开启、
+			// ProxyAddr 仍把死地址发给所有 agent、流量一条都记不到。这里先探测端口：
+			// 绑不上就把录制器置空，捕获在本实例不可用（不管持久化的开关是什么值）。
+			if ln, perr := net.Listen("tcp", proxyAddr); perr != nil {
+				log.Printf("[traffic] 录制代理无法监听 %s，本实例流量捕获不可用（释放端口或改 -proxy 启动参数）：%v", proxyAddr, perr)
+				_ = tr.Close()
+				tr = nil
+			} else {
+				ln.Close()
 			}
-		}()
-	}
+		}
+		if tr != nil {
+			m.traffic = tr
+			// 同步置位再起 goroutine：避免启动后到 Start 真正跑起来之间的窗口里，
+			// 设置请求把「未监听」误报出去。绑定失败时 Start 返回会把标志翻回 false。
+			tr.MarkServing()
+			go func() {
+				log.Printf("[traffic] recording proxy on %s (set HTTP_PROXY=%s + trust _ca CA)", proxyAddr, tr.ProxyAddr())
+				if err := tr.Start(); err != nil {
+					log.Printf("[traffic] proxy stopped: %v", err)
+				}
+			}()
+		}
 	}
 	// Asset auto-completion engine (§5): HTTP probes routed through the recording
 	// proxy (via m.ProxyAddr, which honors the traffic-capture toggle).
@@ -1242,7 +1277,12 @@ func taskFromPG(pt *pgdb.Task, m *Manager, store *pgdb.ExplorationStore) *Task {
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
 		CoverageEnabled: pt.CoverageEnabled,
 		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
-		Store: store, Guard: g, notify: make(chan struct{}, 1),
+		NoResultSeconds: pt.NoResultSeconds, NoResultMinFindings: pt.NoResultMinFindings,
+		NoResultMinSeverity: pt.NoResultMinSeverity,
+		NoResultBaseSeconds: pt.NoResultBaseSeconds, NoResultCheckedAt: unixOrZero(pt.NoResultCheckedAt),
+		StopReason: pt.StopReason, ActiveRunSeconds: pt.ActiveRunSeconds,
+		RunSegmentStartedAt: unixOrZero(pt.RunSegmentStartedAt),
+		Store:               store, Guard: g, notify: make(chan struct{}, 1),
 	}
 }
 
@@ -1609,6 +1649,10 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 
 	var queuedAt, completedAt, firstRunAt, deadlineAt sql.NullTime
 	var committedMode string
+	var stopReason string
+	var activeRunSeconds int64
+	var segmentStartedAt, noResultCheckedAt sql.NullTime
+	var noResultBaseSeconds int64
 	err = m.pg.QueryRow(`UPDATE tasks
 	SET status=$2,
 	    completed_at=CASE
@@ -1634,10 +1678,27 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 	    deadline_at=CASE
 	        WHEN $6='timeout' AND $2 NOT IN ('done','failed','timeout') THEN NULL
 	        ELSE deadline_at
-	    END
+	    END,
+	    -- A8 无成果止损复原：timeout→非终态时重置一次性检查点并把基线定格在当时的
+	    -- 活跃秒数（止损预算重新满额，对齐 ARTEX admission 同款 CASE）。
+	    no_result_base_seconds=CASE
+	        WHEN $6='timeout' AND stop_reason='no_result' AND $2 NOT IN ('done','failed','timeout') THEN active_run_seconds
+	        ELSE no_result_base_seconds
+	    END,
+	    no_result_checked_at=CASE
+	        WHEN $6='timeout' AND stop_reason='no_result' AND $2 NOT IN ('done','failed','timeout') THEN NULL
+	        ELSE no_result_checked_at
+	    END,
+	    stop_reason=CASE WHEN $6='timeout' AND $2 NOT IN ('done','failed','timeout') THEN '' ELSE stop_reason END,
+	    -- A8 活跃运行段：入队或进终态时折叠开放段；非终态转出保持（引擎恢复实际
+	    -- 工作时会幂等重开段）。
+	    active_run_seconds=active_run_seconds + CASE WHEN ($3 OR $2 IN ('done','failed','timeout')) AND run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+	    run_segment_started_at=CASE WHEN $3 OR $2 IN ('done','failed','timeout') THEN NULL ELSE run_segment_started_at END
 	WHERE id=$1 AND deleted_at IS NULL AND status=$6
-	RETURNING queued_at, queue_mode, completed_at, first_run_at, deadline_at`, n, status, queued, mode, preservePosition, expectedStatus).
-		Scan(&queuedAt, &committedMode, &completedAt, &firstRunAt, &deadlineAt)
+	RETURNING queued_at, queue_mode, completed_at, first_run_at, deadline_at,
+	          stop_reason, active_run_seconds, run_segment_started_at, no_result_base_seconds, no_result_checked_at`, n, status, queued, mode, preservePosition, expectedStatus).
+		Scan(&queuedAt, &committedMode, &completedAt, &firstRunAt, &deadlineAt,
+			&stopReason, &activeRunSeconds, &segmentStartedAt, &noResultBaseSeconds, &noResultCheckedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s lifecycle changed before admission (expected status %q)", id, expectedStatus)
 	}
@@ -1668,6 +1729,17 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 			if deadlineAt.Valid {
 				state.DeadlineAt = deadlineAt.Time.Unix()
 			}
+			state.StopReason = stopReason
+			state.ActiveRunSeconds = activeRunSeconds
+			state.RunSegmentStartedAt = 0
+			if segmentStartedAt.Valid {
+				state.RunSegmentStartedAt = segmentStartedAt.Time.Unix()
+			}
+			state.NoResultBaseSeconds = noResultBaseSeconds
+			state.NoResultCheckedAt = 0
+			if noResultCheckedAt.Valid {
+				state.NoResultCheckedAt = noResultCheckedAt.Time.Unix()
+			}
 		})
 	}
 	m.mu.Unlock()
@@ -1688,12 +1760,17 @@ func (m *Manager) ApplyTaskPause(id string) error {
 		return err
 	}
 	var mode string
+	var pausedActive int64
+	var pausedSegment sql.NullTime
 	err = m.pg.QueryRow(`UPDATE tasks
 		SET paused=true, queued=false, queued_at=NULL,
-		    schedule_paused=false, schedule_manual_until=NULL
+		    schedule_paused=false, schedule_manual_until=NULL,
+		    -- A8 活跃计时：暂停不计时——暂停提交时折叠开放运行段。
+		    active_run_seconds=active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+		    run_segment_started_at=NULL
 		WHERE id=$1 AND deleted_at IS NULL AND paused=false
 		  AND status NOT IN ('done','failed','timeout')
-		RETURNING COALESCE(queue_mode,'')`, n).Scan(&mode)
+		RETURNING COALESCE(queue_mode,''), active_run_seconds, run_segment_started_at`, n).Scan(&mode, &pausedActive, &pausedSegment)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s is unavailable for pause", id)
 	}
@@ -1707,6 +1784,11 @@ func (m *Manager) ApplyTaskPause(id string) error {
 			state.Queued = false
 			state.QueuedAt = 0
 			state.QueueMode = mode
+			state.ActiveRunSeconds = pausedActive
+			state.RunSegmentStartedAt = 0
+			if pausedSegment.Valid {
+				state.RunSegmentStartedAt = pausedSegment.Time.Unix()
+			}
 		})
 	}
 	m.mu.Unlock()
@@ -1829,13 +1911,20 @@ func (m *Manager) StampTaskFirstRun(id string) (int64, error) {
 // (resolves the completed↔timeout race — first terminal writer wins). Reflects the
 // won status on the live handle. won=false means another terminal already stuck.
 func (m *Manager) SetTaskStatusGuarded(id, status string) (won bool, err error) {
+	return m.SetTaskStatusGuardedReason(id, status, "")
+}
+
+// SetTaskStatusGuardedReason is the stop-reason-carrying form (A8): reason lands in
+// tasks.stop_reason together with the terminal status ('no_result' for the no-result
+// settle; "" otherwise — done/failed force it empty at the db layer).
+func (m *Manager) SetTaskStatusGuardedReason(id, status, reason string) (won bool, err error) {
 	m.taskStateMu.Lock()
 	defer m.taskStateMu.Unlock()
 	n, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
 		return false, err
 	}
-	won, err = m.pg.SetTerminalStatusGuarded(n, status)
+	won, err = m.pg.SetTerminalStatusGuardedReason(n, status, reason)
 	if err != nil || !won {
 		return won, err
 	}
@@ -1843,6 +1932,10 @@ func (m *Manager) SetTaskStatusGuarded(id, status string) (won bool, err error) 
 	if t := m.tasks[id]; t != nil {
 		t.updateLifecycle(func(state *taskLifecycleState) {
 			state.Status = status
+			state.StopReason = reason
+			if status != "timeout" {
+				state.StopReason = ""
+			}
 			if state.CompletedAt == 0 {
 				state.CompletedAt = time.Now().Unix()
 			}
@@ -1850,6 +1943,57 @@ func (m *Manager) SetTaskStatusGuarded(id, status string) (won bool, err error) 
 	}
 	m.mu.Unlock()
 	return true, nil
+}
+
+// StartTaskRunSegment opens the active execution segment once the engine is about
+// to run planner/worker work (A8 活跃计时；幂等，paused/queued/终态拒开).
+func (m *Manager) StartTaskRunSegment(id string) {
+	m.taskStateMu.Lock()
+	defer m.taskStateMu.Unlock()
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return
+	}
+	m.mu.RLock()
+	if t := m.tasks[id]; t != nil && t.lifecycleSnapshot().RunSegmentStartedAt > 0 {
+		m.mu.RUnlock()
+		return
+	}
+	m.mu.RUnlock()
+	active, started, err := m.pg.StartTaskRunSegment(n)
+	if err != nil {
+		log.Printf("[runtime] task %s start segment failed: %v", id, err)
+		return
+	}
+	m.mirrorTaskRuntime(id, active, started)
+}
+
+// FinalizeTaskRunSegment folds any open execution segment into active_run_seconds;
+// idempotent (pause/terminal paths may race with a late engine cancellation).
+func (m *Manager) FinalizeTaskRunSegment(id string) {
+	m.taskStateMu.Lock()
+	defer m.taskStateMu.Unlock()
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return
+	}
+	active, started, err := m.pg.FinalizeTaskRunSegment(n)
+	if err != nil {
+		log.Printf("[runtime] task %s finalize segment failed: %v", id, err)
+		return
+	}
+	m.mirrorTaskRuntime(id, active, started)
+}
+
+func (m *Manager) mirrorTaskRuntime(id string, active int64, started *time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t := m.tasks[id]; t != nil {
+		t.updateLifecycle(func(state *taskLifecycleState) {
+			state.ActiveRunSeconds = active
+			state.RunSegmentStartedAt = unixOrZero(started)
+		})
+	}
 }
 
 // SetTaskStatus persists a task's lifecycle status (e.g. "done") and reflects it

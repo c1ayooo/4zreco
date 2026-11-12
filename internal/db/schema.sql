@@ -569,6 +569,25 @@ CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned_at DESC)
     WHERE deleted_at IS NULL AND pinned_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at DESC)
     WHERE archived_at IS NOT NULL;
+-- A8 无成果止损（ARTEX 移植）：纯任务级配置，无 settings 键。no_result_seconds=0
+-- 表示关闭；>0 时活跃运行满该秒数且达标漏洞数 < min_findings（低于 min_severity
+-- 的不计入）→ 走 timeout 终态收场，stop_reason='no_result'。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_min_findings INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_min_severity TEXT NOT NULL DEFAULT '';
+-- 无成果计时基线：armed 时定格的 active_run_seconds 快照；恢复（timeout→running）
+-- 时重置为当时的 active_run_seconds，让止损预算重新满额。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_base_seconds BIGINT NOT NULL DEFAULT 0;
+-- 一次性检查点：非 NULL = 已做过（且通过）无成果检查，之后不再检查。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS no_result_checked_at TIMESTAMPTZ;
+-- 终态原因（当前仅 'no_result'；done/failed 终态恒为空串，timeout 复原时清空）。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stop_reason TEXT NOT NULL DEFAULT '';
+-- 活跃运行段计时（A8）：排除 paused/queued 区间的累计活跃秒数 + 当前开放段起点。
+-- no_result 的「活跃秒数」语义与 ARTEX noResultRemaining 对齐依赖这两列：
+-- 段由引擎真正开始跑 planner/worker 时打开（StartTaskRunSegment），暂停/排队/终态
+-- 时把开放段折叠进累计值；进程停止时丢弃开放段（重启后重新计时）。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS active_run_seconds BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS run_segment_started_at TIMESTAMPTZ;
 
 -- Cold task archives retain only compact metadata in PostgreSQL. The complete
 -- task payload lives in a versioned .tar.zst package under data/archives/tasks.

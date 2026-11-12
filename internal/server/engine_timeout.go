@@ -146,8 +146,9 @@ func (e *Engine) clockCtx(base context.Context, t *Task, final bool, reason stri
 // startDeadlineCoordinator launches the per-task deadline timer once (idempotent).
 // Called from Run() and from the restart reload path, so non-active timeout tasks
 // still get settled after their deadline even without live planner/worker loops.
+// A8：无 timeout 但带无成果止损预算的任务同样由它协调（needsNoResultCoordinator）。
 func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
-	if t == nil || t.TimeoutSeconds <= 0 {
+	if t == nil || (t.TimeoutSeconds <= 0 && !needsNoResultCoordinator(t)) {
 		return
 	}
 	e.deleteMu.RLock()
@@ -164,8 +165,9 @@ func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.deadlineCoordinator(loopCtx, t) })
 }
 
-// deadlineCoordinator waits until the task's absolute deadline, then runs the settle
-// sequence. Absolute wall-clock: it keeps counting through pauses.
+// deadlineCoordinator watches both the absolute deadline and the one-shot no-result
+// runtime checkpoint (A8). Only the absolute deadline keeps counting through pauses;
+// the no-result clock runs on active segments（排除 paused/queued）.
 func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 	for {
 		select {
@@ -176,25 +178,48 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 		if isTerminalStatus(e.m.TaskStatus(t.ID)) {
 			return // already finished (goals met / failed) — nothing to time out
 		}
-		dl := e.taskDeadline(t)
-		if dl <= 0 {
-			if sleepCtx(ctx, deadlinePollInterval) { // not yet stamped (task hasn't really run)
+		state := t.lifecycleSnapshot()
+		if state.NoResultCheckedAt > 0 && state.StopReason == db.StopReasonNoResult {
+			// 恢复一笔已提交但收尾被打断的止损判定（重启/并发竞态兜底）。
+			e.settleTaskWithReason(ctx, t, "no_result", "活跃运行已满止损预算且达标漏洞不足")
+			return
+		}
+		nap := deadlineMaxSleep
+		if dl := e.taskDeadline(t); dl > 0 {
+			remaining := time.Until(time.Unix(dl, 0))
+			if remaining <= 0 {
+				e.settleTask(ctx, t)
+				return
+			}
+			nap = min(nap, remaining)
+		} else if t.TimeoutSeconds > 0 {
+			// deadline 未盖章（任务还没真正跑起来）——按既有节奏轮询等盖章。
+			if sleepCtx(ctx, deadlinePollInterval) {
 				return
 			}
 			continue
 		}
-		if remaining := time.Until(time.Unix(dl, 0)); remaining > 0 {
-			nap := remaining
-			if nap > deadlineMaxSleep {
-				nap = deadlineMaxSleep
+		if t.NoResultSeconds > 0 && state.NoResultCheckedAt == 0 {
+			remaining := noResultRemaining(t.NoResultSeconds, state, time.Now().Unix())
+			if remaining <= 0 {
+				stop, err := e.checkNoResultCheckpoint(t)
+				if err != nil {
+					log.Printf("[no-result] task %s 检查失败: %v", t.ID, err)
+					nap = deadlinePollInterval // DB 错误绝不能被当成 0 达标漏洞
+				} else if stop {
+					e.settleTaskWithReason(ctx, t, "no_result", "活跃运行已满止损预算且达标漏洞不足")
+					return
+				}
+			} else {
+				nap = min(nap, remaining)
 			}
-			if sleepCtx(ctx, nap) {
-				return
-			}
-			continue
 		}
-		e.settleTask(ctx, t)
-		return
+		if t.TimeoutSeconds <= 0 && (t.NoResultSeconds <= 0 || t.lifecycleSnapshot().NoResultCheckedAt > 0) {
+			return // 无 timeout 且止损检查已完结（通过或不需要）——协程退出
+		}
+		if sleepCtx(ctx, nap) {
+			return
+		}
 	}
 }
 
@@ -205,6 +230,7 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 
 // settleTaskWithReason 是统一收尾入口。reason:
 //   - timeout      任务绝对 deadline（终态 met?done:timeout）
+//   - no_result    A8 无成果止损（ARTEX 同款：终态沿用 timeout 家族 + stop_reason='no_result'）
 //   - goal_met     planner 明确判定目标达成且无在跑意图（不再跑终局轮，直接 done）
 //   - auto_idle / auto_coverage / auto_rounds 程序化自动收尾（终态 done）
 func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, detail string) {
@@ -216,6 +242,8 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	switch reason {
 	case "timeout":
 		label = "到达超时上限"
+	case "no_result":
+		label = "无成果止损：" + detail
 	case "goal_met":
 		label = "planner 判定目标达成且无在跑意图"
 	case "auto_idle", "auto_coverage", "auto_rounds":
@@ -253,12 +281,18 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	}
 	defer e.decInflight(t.ID)
 
-	// ⑥ 定终态(带守卫)：timeout 保持 met?done:timeout；自动收尾统一 done。
+	// ⑥ 定终态(带守卫)：timeout/no_result 保持 met?done:timeout；自动收尾统一 done。
+	// no_result（A8）随终态落 stop_reason='no_result'（on_task_timeout 家族的收尾
+	// 语义不变，只是原因可辨）。
 	status := "done"
-	if reason == "timeout" && !met {
+	if (reason == "timeout" || reason == "no_result") && !met {
 		status = "timeout"
 	}
-	won, err := e.m.SetTaskStatusGuarded(t.ID, status)
+	stopReason := ""
+	if reason == "no_result" {
+		stopReason = db.StopReasonNoResult
+	}
+	won, err := e.m.SetTaskStatusGuardedReason(t.ID, status, stopReason)
 	switch {
 	case err != nil:
 		log.Printf("[settle] task %s 落终态失败: %v", t.ID, err)
@@ -300,7 +334,9 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task, reason strin
 	defer e.decInflight(t.ID)
 	emit := func(r db.Activity) { e.emitActivity(t, r) }
 	summary := fmt.Sprintf("任务超时收尾·终局判定(第 %d 轮)", e.nextPlannerRound(t.ID))
-	if reason != "timeout" {
+	if reason == "no_result" {
+		summary = fmt.Sprintf("无成果止损收尾·终局判定(第 %d 轮)", e.nextPlannerRound(t.ID))
+	} else if reason != "timeout" {
 		summary = fmt.Sprintf("自动收尾·终局判定(第 %d 轮，原因 %s)", e.nextPlannerRound(t.ID), reason)
 	}
 	e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round", Summary: summary})

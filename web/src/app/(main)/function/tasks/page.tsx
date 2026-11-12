@@ -3264,6 +3264,11 @@ function CreateTaskSheet({
   const [creating, setCreating] = React.useState(false);
   const [timeoutMin, setTimeoutMin] = React.useState(""); // 任务级超时(分钟);空/0 = 不限时
   const [heartbeatMin, setHeartbeatMin] = React.useState("10"); // planner 心跳(分钟);默认10,下限10(与后端一致)
+  // A8 无成果止损(移植自 ARTEX 0.3.29):活跃运行满预算且达标漏洞不足 → timeout 终态收场。
+  const [noResultEnabled, setNoResultEnabled] = React.useState(false); // 默认关闭;开启才展开条件输入组
+  const [noResultMin, setNoResultMin] = React.useState("5"); // 止损预算(分钟);默认 5min,下限 1(后端再抬到 ≥60s)
+  const [noResultMinFindings, setNoResultMinFindings] = React.useState("1"); // 达标漏洞数下限
+  const [noResultMinSeverity, setNoResultMinSeverity] = React.useState(""); // 等级阈值;空=不限
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [coverageEnabled, setCoverageEnabled] = React.useState(true); // 资产覆盖度功能;默认开。关闭=不计算/展示覆盖度、不累积范围、隐藏范围类工具(company 关联不受影响)
   const [interceptRules, setInterceptRules] = React.useState<AssetInterceptRuleInput[]>([]); // 任务级资产拦截规则(仅本任务生效,不进全局表)
@@ -3364,6 +3369,7 @@ function CreateTaskSheet({
     try {
       const timeoutSec = Math.max(0, Math.floor(Number(timeoutMin) || 0)) * 60;
       const heartbeatSec = Math.max(10, Math.floor(Number(heartbeatMin) || 10)) * 60; // 下限 10min，与后端归一一致
+      const noResultSec = noResultEnabled ? Math.max(1, Math.floor(Number(noResultMin) || 5)) * 60 : 0; // 0=关闭
       await api.createTask({
         name: name.trim(),
         categoryId: categoryID,
@@ -3376,6 +3382,9 @@ function CreateTaskSheet({
         seedFirstIntent,
         planHeartbeatSeconds: heartbeatSec,
         coverageEnabled,
+        noResultSeconds: noResultSec,
+        noResultMinFindings: Math.max(1, Math.floor(Number(noResultMinFindings) || 1)),
+        noResultMinSeverity: noResultEnabled ? noResultMinSeverity : "",
         interceptRules: interceptRules
           .map((r) => ({ ...r, pattern: r.pattern.trim() }))
           .filter((r) => r.pattern !== ""),
@@ -3395,6 +3404,10 @@ function CreateTaskSheet({
       setLLMProfileIDs([]);
       setTimeoutMin("");
       setHeartbeatMin("10");
+      setNoResultEnabled(false);
+      setNoResultMin("5");
+      setNoResultMinFindings("1");
+      setNoResultMinSeverity("");
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
       setAuthCfg({ enabled: false, login_url: "", method: "POST", content_type: "json", username: "", password: "" });
@@ -3702,6 +3715,61 @@ function CreateTaskSheet({
                   />
                   <p className="text-muted-foreground text-xs">
                     到点后触发优雅收尾（各 agent 写回 + planner 终局判定），任务进入 timeout 终态。
+                  </p>
+                </div>
+                {/* A8 无成果止损：条件输入组，开启才展开预算/阈值输入 */}
+                <div className="grid gap-2">
+                  <label htmlFor="no-result-enabled" className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      id="no-result-enabled"
+                      checked={noResultEnabled}
+                      onCheckedChange={(v) => setNoResultEnabled(!!v)}
+                    />
+                    无成果止损
+                  </label>
+                  {noResultEnabled && (
+                    <div className="grid gap-3 rounded-lg border p-3">
+                      <div className="grid gap-2">
+                        <Label htmlFor="no-result-min">活跃运行预算（分钟）</Label>
+                        <Input
+                          id="no-result-min"
+                          type="number"
+                          min={1}
+                          className="w-40"
+                          value={noResultMin}
+                          onChange={(e) => setNoResultMin(e.target.value)}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="no-result-min-findings">达标漏洞数下限</Label>
+                        <Input
+                          id="no-result-min-findings"
+                          type="number"
+                          min={1}
+                          className="w-40"
+                          value={noResultMinFindings}
+                          onChange={(e) => setNoResultMinFindings(e.target.value)}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="no-result-min-severity">漏洞等级阈值</Label>
+                        <Select value={noResultMinSeverity || "any"} onValueChange={(v) => setNoResultMinSeverity(v === "any" ? "" : v)}>
+                          <SelectTrigger className="w-40">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="any">不限</SelectItem>
+                            <SelectItem value="low">低及以上</SelectItem>
+                            <SelectItem value="medium">中及以上</SelectItem>
+                            <SelectItem value="high">高及以上</SelectItem>
+                            <SelectItem value="critical">仅严重</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-muted-foreground text-xs">
+                    开启后：活跃运行（暂停/排队不计时）满预算时做一次性检查，达标漏洞少于下限即触发收尾，任务进入 timeout 终态；达标则继续运行且不再检查。
                   </p>
                 </div>
                 <div className="grid gap-2">

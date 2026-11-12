@@ -32,7 +32,7 @@ func rawString(raw json.RawMessage) string {
 type TaskDTO struct {
 	ID                 string             `json:"id"`
 	ExplorationID      int64              `json:"exploration_id"`
-	Name               string             `json:"name"` // 可选任务名称;空=未命名
+	Name               string             `json:"name"`   // 可选任务名称;空=未命名
 	Remark             string             `json:"remark"` // 任务备注(最多 2000 字符);空=无备注
 	CategoryID         *int64             `json:"category_id,omitempty"`
 	CategoryName       string             `json:"category_name,omitempty"`
@@ -62,7 +62,13 @@ type TaskDTO struct {
 	ArchiveBlockedBy   string             `json:"archive_blocked_by_task_id,omitempty"`
 	CompanyIDs         []int64            `json:"company_ids"`
 	ProjectID          *int64             `json:"project_id,omitempty"` // 归属项目(创建时定)
-	CoverageEnabled    bool               `json:"coverage_enabled"` // 资产覆盖度功能开关(创建时定)
+	CoverageEnabled    bool               `json:"coverage_enabled"`     // 资产覆盖度功能开关(创建时定)
+	// A8 无成果止损：创建时定的任务级配置；stop_reason 非 'no_result' 时省略
+	// （timeout 终态不带原因时不显示）。
+	NoResultSeconds     int    `json:"no_result_seconds"`
+	NoResultMinFindings int    `json:"no_result_min_findings"`
+	NoResultMinSeverity string `json:"no_result_min_severity,omitempty"`
+	StopReason          string `json:"stop_reason,omitempty"`
 }
 
 // FindingSeverityDTO 是任务列表里按严重度分档的漏洞计数（严重/高/中/低）。
@@ -112,32 +118,36 @@ func taskDTO(t *Task, status string) TaskDTO {
 	}
 	profileIDs := append(make([]int64, 0, len(llmState.ProfileIDs)), llmState.ProfileIDs...)
 	return TaskDTO{
-		ID:                 t.ID,
-		ExplorationID:      t.ExpID,
-		Name:               lifecycle.Name,
-		Remark:             lifecycle.Remark,
-		CategoryID:         lifecycle.CategoryID,
-		CategoryName:       lifecycle.CategoryName,
-		Pinned:             lifecycle.PinnedAt > 0,
-		PinnedAt:           completedRFC(lifecycle.PinnedAt),
-		Description:        t.Description,
-		Goal:               t.Goal,
-		Status:             status,
-		CreatedAt:          rfc3339(time.Unix(t.CreatedAt, 0)),
-		CreatedUnix:        t.CreatedAt,
-		CompletedAt:        completedRFC(lifecycle.CompletedAt),
-		CompletedUnix:      lifecycle.CompletedAt,
-		Paused:             lifecycle.Paused,
-		Queued:             lifecycle.Queued,
-		LLMProfileID:       llmState.ProfileID,
-		LLMProfileIDs:      profileIDs,
-		ActiveLLMProfileID: llmState.ActiveID,
-		LLMFailoverState:   llmState.FailoverState,
-		LLMFailoverReason:  llmState.FailoverReason,
-		SourceTaskIDs:      sourceIDs,
-		CompanyIDs:         lifecycle.CompanyIDs,
-		ProjectID:          lifecycle.ProjectID,
-		CoverageEnabled:    t.CoverageEnabled,
+		ID:                  t.ID,
+		ExplorationID:       t.ExpID,
+		Name:                lifecycle.Name,
+		Remark:              lifecycle.Remark,
+		CategoryID:          lifecycle.CategoryID,
+		CategoryName:        lifecycle.CategoryName,
+		Pinned:              lifecycle.PinnedAt > 0,
+		PinnedAt:            completedRFC(lifecycle.PinnedAt),
+		Description:         t.Description,
+		Goal:                t.Goal,
+		Status:              status,
+		CreatedAt:           rfc3339(time.Unix(t.CreatedAt, 0)),
+		CreatedUnix:         t.CreatedAt,
+		CompletedAt:         completedRFC(lifecycle.CompletedAt),
+		CompletedUnix:       lifecycle.CompletedAt,
+		Paused:              lifecycle.Paused,
+		Queued:              lifecycle.Queued,
+		LLMProfileID:        llmState.ProfileID,
+		LLMProfileIDs:       profileIDs,
+		ActiveLLMProfileID:  llmState.ActiveID,
+		LLMFailoverState:    llmState.FailoverState,
+		LLMFailoverReason:   llmState.FailoverReason,
+		SourceTaskIDs:       sourceIDs,
+		CompanyIDs:          lifecycle.CompanyIDs,
+		ProjectID:           lifecycle.ProjectID,
+		CoverageEnabled:     t.CoverageEnabled,
+		NoResultSeconds:     t.NoResultSeconds,
+		NoResultMinFindings: t.NoResultMinFindings,
+		NoResultMinSeverity: t.NoResultMinSeverity,
+		StopReason:          lifecycle.StopReason,
 	}
 }
 
@@ -200,15 +210,15 @@ type TaskNodeDTO struct {
 
 func taskNodeDTO(n *db.Node) TaskNodeDTO {
 	d := TaskNodeDTO{
-		ID:           i64s(n.ID),
-		Type:         n.Kind,
-		Payload:      rawString(n.Payload),
-		DeleteReason: n.DeleteReason,
+		ID:            i64s(n.ID),
+		Type:          n.Kind,
+		Payload:       rawString(n.Payload),
+		DeleteReason:  n.DeleteReason,
 		BlockedReason: n.BlockedReason,
-		Priority:     n.Priority,
-		State:        n.State,
-		Origin:       n.Origin,
-		TS:           rfc3339(n.CreatedAt),
+		Priority:      n.Priority,
+		State:         n.State,
+		Origin:        n.Origin,
+		TS:            rfc3339(n.CreatedAt),
 	}
 	if n.SourceTaskID > 0 {
 		d.SourceTaskID = i64s(n.SourceTaskID)
@@ -247,8 +257,8 @@ func goalDTO(n *db.Node) GoalDTO {
 		Unverified:       p.Unverified,
 		UnverifiedReason: p.UnverifiedReason,
 		State:            n.State,
-		Origin:    n.Origin,
-		TS:        rfc3339(n.CreatedAt),
+		Origin:           n.Origin,
+		TS:               rfc3339(n.CreatedAt),
 	}
 }
 

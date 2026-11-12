@@ -14,7 +14,7 @@ import (
 // Task is a row in the task registry (1:1 with an exploration).
 type Task struct {
 	ID            int64      `json:"id"`
-	Name          string     `json:"name"` // 可选任务名称;空=未命名
+	Name          string     `json:"name"`   // 可选任务名称;空=未命名
 	Remark        string     `json:"remark"` // 任务备注(最多 MaxTaskRemarkRunes 字符);空=无备注
 	CategoryID    *int64     `json:"category_id,omitempty"`
 	CategoryName  string     `json:"category_name,omitempty"`
@@ -46,6 +46,20 @@ type Task struct {
 	TimeoutSeconds int        `json:"timeout_seconds"`        // 0=不限时
 	FirstRunAt     *time.Time `json:"first_run_at,omitempty"` // 首次真正开始运行的时刻(非 created_at);nil=尚未运行
 	DeadlineAt     *time.Time `json:"deadline_at,omitempty"`  // = first_run_at + timeout_seconds;nil=不限或未运行
+	// A8 无成果止损：活跃运行满 NoResultSeconds 秒且达标漏洞（status != false_positive
+	// 且达到 NoResultMinSeverity）少于 NoResultMinFindings → timeout 终态收场。
+	// NoResultSeconds=0=关闭。NoResultBaseSeconds 是 armed 时定格的活跃秒数基线
+	// （恢复时重置为当时的累计值，止损预算重新满额）；NoResultCheckedAt 非 NULL =
+	// 一次性检查已做过（通过），之后不再检查。
+	NoResultSeconds     int        `json:"no_result_seconds"`
+	NoResultMinFindings int        `json:"no_result_min_findings"`
+	NoResultMinSeverity string     `json:"no_result_min_severity"`
+	NoResultBaseSeconds int64      `json:"no_result_base_seconds"`
+	NoResultCheckedAt   *time.Time `json:"no_result_checked_at,omitempty"`
+	StopReason          string     `json:"stop_reason"`
+	// 活跃运行段计时（A8）：排除 paused/queued 的累计活跃秒数 + 当前开放段起点。
+	ActiveRunSeconds    int64      `json:"active_run_seconds"`
+	RunSegmentStartedAt *time.Time `json:"run_segment_started_at,omitempty"`
 	// planner 心跳触发间隔(秒)：距上轮 plan 结束/任务开始满该值且期间无触发 → 触发一轮。
 	// 下限=默认=300(5min)，低于一律抬到 300(在 CreateTask 归一)。见 docs/planner-trigger-impl-plan.md
 	PlanHeartbeatSeconds int `json:"plan_heartbeat_seconds"`
@@ -187,6 +201,12 @@ type TaskCreateOptions struct {
 	// CreateTaskWithOptions 覆写为 [taskID]。StartImmediately=false 时任务落库即
 	// 暂停（paused+schedule_paused，queue_mode='bootstrap'），等首个窗口自动恢复。
 	Schedule *TaskScheduleInput
+	// A8 无成果止损（ARTEX 移植）：NoResultSeconds>0 开启；秒数 <60 抬到 60，
+	// MinFindings 下限 1，MinSeverity ∈ {''（不限）,low,medium,high,critical}。
+	// 校验由 NormalizeNoResultOptions（task_no_result.go）统一做。
+	NoResultSeconds     int
+	NoResultMinFindings int
+	NoResultMinSeverity string
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
@@ -228,6 +248,9 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		opts.TimeoutSeconds = 0
 	}
 	opts.PlanHeartbeatSeconds = normalizeHeartbeat(opts.PlanHeartbeatSeconds)
+	if err := NormalizeNoResultOptions(&opts); err != nil {
+		return nil, err
+	}
 	coverageEnabled := opts.CoverageEnabled == nil || *opts.CoverageEnabled
 	var categoryName string
 	if opts.CategoryID != nil {
@@ -256,6 +279,8 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		ProjectID:      opts.ProjectID,
 		TimeoutSeconds: opts.TimeoutSeconds, PlanHeartbeatSeconds: opts.PlanHeartbeatSeconds,
 		CoverageEnabled: coverageEnabled,
+		NoResultSeconds: opts.NoResultSeconds, NoResultMinFindings: opts.NoResultMinFindings,
+		NoResultMinSeverity: opts.NoResultMinSeverity,
 	}
 	var authJSON any
 	if opts.AuthConfig != nil {
@@ -264,9 +289,10 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		}
 	}
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, auth_config, project_id)
-VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11)
-RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, authJSON, opts.ProjectID).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, auth_config, project_id, no_result_seconds, no_result_min_findings, no_result_min_severity)
+VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, authJSON, opts.ProjectID,
+		opts.NoResultSeconds, opts.NoResultMinFindings, opts.NoResultMinSeverity).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	// 任务挂项目：项目范围种成本任务初始 task_scope（source='project'），让规划器
@@ -410,12 +436,14 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), COALESCE(remark,''), category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(auth_config::text,'null'), project_id`
+description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(auth_config::text,'null'), project_id,
+COALESCE(no_result_seconds,0), COALESCE(no_result_min_findings,0), COALESCE(no_result_min_severity,''), COALESCE(no_result_base_seconds,0), no_result_checked_at, COALESCE(stop_reason,''), COALESCE(active_run_seconds,0), run_segment_started_at`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	var authRaw string
-	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &authRaw, &t.ProjectID); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &authRaw, &t.ProjectID,
+		&t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason, &t.ActiveRunSeconds, &t.RunSegmentStartedAt); err != nil {
 		return nil, err
 	}
 	t.AuthConfig = ParseTaskAuth([]byte(authRaw))
@@ -508,9 +536,14 @@ func (d *DB) GetTask(id int64) (*Task, error) {
 	return t, nil
 }
 
-// SetPaused persists a task's paused flag.
+// SetPaused persists a task's paused flag. Pausing folds any open execution
+// segment into active_run_seconds（A8 活跃计时：暂停不计时）.
 func (d *DB) SetPaused(id int64, paused bool) error {
-	_, err := d.Exec(`UPDATE tasks SET paused=$1 WHERE id=$2`, paused, id)
+	_, err := d.Exec(`UPDATE tasks
+SET paused=$1,
+    active_run_seconds=active_run_seconds + CASE WHEN $1 AND run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+    run_segment_started_at=CASE WHEN $1 THEN NULL ELSE run_segment_started_at END
+WHERE id=$2`, paused, id)
 	return err
 }
 
@@ -523,6 +556,8 @@ func (d *DB) Enqueue(id int64, mode string) error {
 	_, err := d.Exec(`UPDATE tasks
 SET queued=true,
     queued_at=CASE WHEN queued THEN COALESCE(queued_at, now()) ELSE now() END,
+    active_run_seconds=active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+    run_segment_started_at=NULL,
     queue_mode=CASE
         WHEN queue_mode='bootstrap' OR $2='bootstrap' THEN 'bootstrap'
         ELSE 'resume'
@@ -554,12 +589,16 @@ func (d *DB) SetQueued(id int64, queued bool) error {
 // SetStatus updates a task's lifecycle status. Entering a terminal state
 // (done/failed/timeout) stamps completed_at once (COALESCE keeps the first stamp
 // stable); moving back to a non-terminal state clears it, so a re-run has no stale
-// finish time.
+// finish time — it also clears stop_reason（A8：复原即清掉终态原因）. Terminal
+// transitions fold any open execution segment into active_run_seconds（A8 活跃计时）.
 func (d *DB) SetStatus(id int64, status string) error {
 	_, err := d.Exec(`
 UPDATE tasks
    SET status = $1,
-       completed_at = CASE WHEN $1 IN ('done','failed','timeout') THEN COALESCE(completed_at, now()) ELSE NULL END
+       completed_at = CASE WHEN $1 IN ('done','failed','timeout') THEN COALESCE(completed_at, now()) ELSE NULL END,
+       stop_reason = CASE WHEN $1 NOT IN ('done','failed','timeout') THEN '' ELSE stop_reason END,
+       active_run_seconds = active_run_seconds + CASE WHEN $1 IN ('done','failed','timeout') AND run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+       run_segment_started_at = CASE WHEN $1 IN ('done','failed','timeout') THEN NULL ELSE run_segment_started_at END
  WHERE id = $2`, status, id)
 	return err
 }
@@ -569,11 +608,25 @@ UPDATE tasks
 // Returns won=false (no error) when another terminal status already stuck — the
 // caller then leaves it alone. Non-terminal transitions / re-run still use SetStatus.
 func (d *DB) SetTerminalStatusGuarded(id int64, status string) (won bool, err error) {
+	return d.SetTerminalStatusGuardedReason(id, status, "")
+}
+
+// SetTerminalStatusGuardedReason is the stop-reason-carrying form (A8): reason is
+// persisted into tasks.stop_reason together with the terminal status. A non-timeout
+// terminal (done/failed) forces reason=”（达成/失败不算「止损」）；timeout 家族可带
+// 'no_result'。进入终态时折叠开放运行段。
+func (d *DB) SetTerminalStatusGuardedReason(id int64, status, reason string) (won bool, err error) {
+	if status != "timeout" {
+		reason = ""
+	}
 	res, err := d.Exec(`
 UPDATE tasks
    SET status = $1,
-       completed_at = COALESCE(completed_at, now())
- WHERE id = $2 AND status NOT IN ('done','failed','timeout')`, status, id)
+       completed_at = COALESCE(completed_at, now()),
+       stop_reason = $3,
+       active_run_seconds = active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
+       run_segment_started_at = NULL
+ WHERE id = $2 AND status NOT IN ('done','failed','timeout')`, status, id, reason)
 	if err != nil {
 		return false, err
 	}
