@@ -3339,6 +3339,8 @@ export const settings: Settings = {
   llm_pool_enabled: true,
   llm_pool_bind_fallback: false,
   noa_compaction: false,
+  task_auto_title_enabled: false,
+  chat_auto_title_enabled: false,
   install_proxy: "",
   task_concurrency_enabled: false,
   task_concurrency_limit: 5,

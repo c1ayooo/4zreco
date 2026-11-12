@@ -485,6 +485,9 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 			title = "附件消息"
 		}
 		_ = pg.RenameConversation(c.ID, title)
+		// chat_auto_title_enabled 开启时异步生成 LLM 标题，就绪后 CAS 式替换
+		// 占位标题（仅当标题仍为占位/初值，防覆盖用户手动改名）。best-effort。
+		s.maybeAutoTitleConversation(c, msg, req.Attachments, title)
 	}
 	_ = pg.TouchConversation(c.ID)
 

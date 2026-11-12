@@ -11,6 +11,7 @@ import {
   RadioTowerIcon,
   SearchIcon,
   ShieldAlertIcon,
+  SparklesIcon,
   TimerResetIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -81,6 +82,9 @@ export default function SystemSettingsPage() {
   const [injectWorker, setInjectWorker] = React.useState(true);
   // 实验功能:noa 上下文压缩(默认关)。
   const [noaCompaction, setNoaCompaction] = React.useState(false);
+  // 会话/任务自动标题(默认关)。
+  const [taskAutoTitle, setTaskAutoTitle] = React.useState(false);
+  const [chatAutoTitle, setChatAutoTitle] = React.useState(false);
   // IM 交互机器人：四平台凭据（密钥 *_set 只读回显，输入框留空=不改）。
   const [imAgent, setImAgent] = React.useState("auto");
   const [imFeishuOn, setImFeishuOn] = React.useState(false);
@@ -130,6 +134,8 @@ export default function SystemSettingsPage() {
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
     setNoaCompaction(!!s.noa_compaction);
+    setTaskAutoTitle(!!s.task_auto_title_enabled);
+    setChatAutoTitle(!!s.chat_auto_title_enabled);
     setAutoFinishEnabled(s.auto_finish_enabled !== false);
     setAutoFinishIdle(String(s.auto_finish_idle_rounds ?? 3));
     setAutoFinishMin(String(s.auto_finish_min_rounds ?? 5));
@@ -362,6 +368,16 @@ export default function SystemSettingsPage() {
         setNoaCompaction(!v); // revert on failure
         toast.error(`保存失败：${(e as Error).message}`);
       });
+  };
+
+  // 会话/任务自动标题开关（乐观更新，保存失败回滚）。下次发送首条消息/建任务时生效。
+  const toggleAutoTitle = (key: "task_auto_title_enabled" | "chat_auto_title_enabled", v: boolean) => {
+    const setter = key === "task_auto_title_enabled" ? setTaskAutoTitle : setChatAutoTitle;
+    setter(v); // optimistic
+    api
+      .setSettings({ [key]: v })
+      .then(apply)
+      .catch(() => setter(!v)); // revert on failure
   };
 
   // B10:压缩器钉住的配置，onValueChange 即存（乐观更新）。对之后启动的任务与
@@ -684,6 +700,40 @@ export default function SystemSettingsPage() {
                 disabled={!loaded}
                 onCheckedChange={toggleNoaCompaction}
               />
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <SparklesIcon className="size-4" />
+                自动标题
+              </CardTitle>
+              <CardDescription>用 LLM 为会话和任务生成标题，不覆盖用户手动命名的结果。</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="task-auto-title" className="font-normal text-muted-foreground text-sm">
+                  任务名自动生成{taskAutoTitle ? " · 已开启" : " · 已关闭"}
+                </Label>
+                <Switch
+                  id="task-auto-title"
+                  checked={taskAutoTitle}
+                  disabled={!loaded}
+                  onCheckedChange={(v) => toggleAutoTitle("task_auto_title_enabled", v)}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="chat-auto-title" className="font-normal text-muted-foreground text-sm">
+                  会话标题自动生成{chatAutoTitle ? " · 已开启" : " · 已关闭"}
+                </Label>
+                <Switch
+                  id="chat-auto-title"
+                  checked={chatAutoTitle}
+                  disabled={!loaded}
+                  onCheckedChange={(v) => toggleAutoTitle("chat_auto_title_enabled", v)}
+                />
+              </div>
             </CardContent>
           </Card>
 

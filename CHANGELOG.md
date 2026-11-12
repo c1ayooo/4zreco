@@ -4,6 +4,59 @@
 
 ## [Unreleased]
 
+### 新增：会话/任务 LLM 自动标题（auto_title）——ARTEX 移植 A2
+
+- **会话侧**（`internal/server/conversations.go` 首条用户消息挂点）：保留原「首行截 40 字」
+  占位标题，`chat_auto_title_enabled` 开启时后台异步生成 LLM 标题（单轮非流式补全，
+  max_tokens 96 / thinking disabled / 20s 超时，附件名以「附件：…」拼入生成内容），
+  就绪后经 `RenameConversationIfTitle` CAS 式替换——仅当标题仍为空/「新对话」/占位初值，
+  用户手动改名的会话不被覆盖。
+- **任务侧**（`internal/server/orchestration.go` spawn_task）：`task_auto_title_enabled`
+  开启时内联同步生成任务名（description+goal 单轮补全，失败只记日志不挡建任务），
+  与 ARTEX create_task 形态一致。
+- **LLM 调用**：走 `internal/llmpool` 的 `Pool.Complete` 单轮补全（轮询关时退化为裸
+  provider，provider 解析复用 chat 同款 precedence：agent 绑定 → 会话 pin → 全局激活）；
+  判定与清洗（`cleanAutoTitle`/`autoTitleMayReplace`/`autoTitleIsUsable`）为纯函数，
+  不进内核、不感知 eino。
+- **settings 面**：`chat_auto_title_enabled` / `task_auto_title_enabled` 两个键（默认关）
+  进 GET/PUT `/api/settings`；系统设置页新增「自动标题」卡片（两个开关，中文文案）。
+- 测试：`internal/server/auto_title_test.go`（清洗/防覆盖协议/占位拒绝/补全参数纯函数
+  表驱动）+ `internal/db/conversation_auto_title_test.go`（CAS 防覆盖协议，DSN 门控
+  PG 测试）。
+
+### 新增：扫描器领域工具 P1-P4——gogo/spray/katana/zombie/proton/uncover 进程内接入（§5.5）
+
+- **P2 只读发现类**（`internal/agent/tools_scanners.go`，readTool 包装保 ReadOnly+Concurrent
+  标记）：`gogo_scan` 端口/服务发现（默认 Exploit="none" 不启漏洞利用）、`spray_finger`
+  Web 指纹识别。进程内接 chainreactors 官方 Go SDK，不拉外部进程；内嵌指纹库懒初始化单例。
+- **P3 强动作类**（`internal/agent/tools_zombie_proton.go`，writeTool 包装）：`zombie_weakpass`
+  弱口令检测（真实认证尝试）、`proton_secrets` 凭据/secret 提取。ask 审批门在拦截规则层：
+  **seed 批次 v6** 新增两条 tool_name ask 规则（「[内置] 弱口令检测 zombie_weakpass」/
+  「[内置] 敏感信息扫描 proton_secrets」），按 §3 第 5 条三件套配齐——批次播种 + 按名补种
+  （flag 早退不吞新规则，V4/V5 教训）+ enabled 工具集合并。
+- **P4 侦察类**（`internal/agent/tools_recon.go`，readTool）：`katana_scan` Web 爬虫端点发现
+  （standard 引擎，不启动浏览器）、`passive_search` 网空测绘（FOFA/Hunter）、`web_search`
+  通用联网搜索（Tavily 兼容 API）。七个工具全部注册三件套（tools.go/tools_insert.go 三张
+  清单 × 执行角色 + toolcatalog seed 自动展开 + 提示词段落）。
+- **凭据纪律**：FOFA/Hunter/Tavily 凭据只落运行时配置——gitignored 的 config.json 新增
+  `passive_search` / `web_search` 段，或 `ZRECO_FOFA_EMAIL` / `ZRECO_FOFA_KEY` /
+  `ZRECO_HUNTER_KEY` / `ZRECO_WEBSEARCH_ENDPOINT` / `ZRECO_WEBSEARCH_KEY` 环境变量
+  （`internal/config` LoadPassiveSearch/LoadWebSearch，每次调用热读、免重启）；凭据不进
+  trace 明文，zombie/proton 命中原文落 evidence 附件、工具返回只给打码摘要。
+- **依赖与版本锁**：chainreactors sdk 主模块及 gogo/spray/zombie 子模块 pseudo-version
+  锁死；chainreactors/zombie v1.3.0、projectdiscovery/katana v1.8.0、uncover v1.2.1、
+  utils/parsers v0.0.3 固定 tag 精确锁死（两种形态等价，§5.5 措辞已同步）。注意：
+  katana 经 `pkg/engine/standard` **静态引入 go-rod**（含 launcher，十余个包进二进制）——
+  运行时 standard 引擎不启动浏览器，仅体积代价，后续在意可评估上游拆分/vendor 裁剪。
+  扫描器依赖目前无独立版本锁机检（`check-eino-boundary.sh` 只锁 eino），靠 go.mod 精确值
+  + review 兜底；升级前重跑架构门禁与相关回归。
+- **出口代理**：`SetScannerEgressProxy` 为预留注入点，当前 server 侧未接线——扫描流量
+  默认直连；接线非纯地址传递（录制代理 MITM 需客户端信任 traffic CA、gogo 原始 TCP 探测
+  经 HTTP CONNECT 会失真），作后续独立改动。
+- 测试：`tools_scanners_test.go` / `tools_recon_test.go` / `tools_zombie_proton_test.go`
+  （目标归一、参数校验、结果截断、凭据打码等纯函数表驱动）+ `intercept_v6_rules_test.go`
+  （v6 规则播种/补种/工具集合并回归）。
+
 ### 新增：任务/计划/模板备注（remark）——ARTEX 移植 A1
 
 - `tasks` / `task_templates` 各加 `remark TEXT NOT NULL DEFAULT ''` 列（schema.sql 幂等追加，

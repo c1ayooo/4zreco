@@ -3582,6 +3582,10 @@ func (s *Server) settingsPayload() map[string]any {
 		// 实验功能:noa 模型驱动上下文压缩(默认关)。开启后平台接入的四类 agent 由 noa
 		// 接管上下文压缩,取代内置 compaction;每 run 读一次,对之后启动的 run 生效。
 		"noa_compaction": s.m.NoaCompactionEnabled(),
+		// 会话/任务自动标题(auto_title,默认关)。会话=首条用户消息后异步 LLM 生成
+		// 会话标题;任务=spawn_task 建任务时内联同步生成任务名。
+		db.SettingChatAutoTitle: s.m.pg.GetBool(db.SettingChatAutoTitle, false),
+		db.SettingTaskAutoTitle: s.m.pg.GetBool(db.SettingTaskAutoTitle, false),
 		// 漏洞 IM 推送的全局项。渠道本身是独立资源，走 /api/notify/* 管理；
 		// 这里只放「作用于全部渠道」的三项。
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
@@ -3681,6 +3685,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		ConstraintsInjectWorker  *bool `json:"constraints_inject_worker"`
 		// 实验功能:noa 上下文压缩开关(默认关);每 run 读,对之后启动的 run 生效,无需重建 agent。
 		NoaCompaction *bool `json:"noa_compaction"`
+		// 会话/任务自动标题开关(默认关);发送首条消息/建任务时读,改完即时生效,无需重建 agent。
+		ChatAutoTitle *bool `json:"chat_auto_title_enabled"`
+		TaskAutoTitle *bool `json:"task_auto_title_enabled"`
 		// 漏洞 IM 推送的全局项。三者都由投递引擎每轮读一次，改完即时生效，
 		// 不需要重建 agent 或重启。
 		NotifyEnabled    *bool   `json:"notify_enabled"`
@@ -3713,6 +3720,18 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if req.NoaCompaction != nil {
 		// 每 run 读的解析器,切换即时对之后启动的 run 生效,无需 applyLLM 重建。
 		if err := s.m.SetNoaCompaction(*req.NoaCompaction); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.ChatAutoTitle != nil {
+		if err := s.m.pg.SetBool(db.SettingChatAutoTitle, *req.ChatAutoTitle); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.TaskAutoTitle != nil {
+		if err := s.m.pg.SetBool(db.SettingTaskAutoTitle, *req.TaskAutoTitle); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

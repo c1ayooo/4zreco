@@ -209,6 +209,15 @@ func (d *DB) RenameConversation(id int64, title string) error {
 	return err
 }
 
+// RenameConversationIfTitle updates a thread only while its title is still an
+// initial placeholder or preview (CAS 式防覆盖)。异步自动标题生成完回来时，
+// 用户已手动改过标题的线程不会被覆盖。
+func (d *DB) RenameConversationIfTitle(id int64, title, initial string) error {
+	_, err := d.Exec(`UPDATE conversations SET title=$2
+WHERE id=$1 AND title IN ('', '新对话', $3)`, id, title, initial)
+	return err
+}
+
 // TouchConversation bumps updated_at so the thread floats to the top of the list.
 func (d *DB) TouchConversation(id int64) error {
 	_, err := d.Exec(`UPDATE conversations SET updated_at=now() WHERE id=$1`, id)
