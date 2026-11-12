@@ -18,6 +18,7 @@ import (
 // from history on a resumed session (design doc C2).
 type DeferredInfo struct {
 	FindingGuidance string            // derived from the final permitted tools, including DB overrides
+	CaseGuidance    string            // finding_cases 归并指引（C1）；历史整理会话在此追加覆盖指引
 	Deferred        []string          // all MCP tool names (schema withheld)
 	GlobalNames     []string          // MCP names to list in the system-prompt block
 	Unlock          *actool.UnlockSet // shared call-gate; nil when no MCP tools
@@ -66,7 +67,17 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 	if ToolResolve != nil {
 		out = ToolResolve(ctx, agentKey, out)
 	}
+	// 历史批量整理会话：先裁剪到只读+归并白名单（禁 report_finding/Bash 等），
+	// 再注入覆盖指引——指引优先于旧报告撰写/自动绑流量。
+	if agentKey == "reporter" && isFindingCaseReview(ctx) {
+		out = historicalFindingCaseTools(out)
+	}
 	out, def.FindingGuidance = findingWorkflowTools(agentKey, out)
+	out, def.CaseGuidance = findingCaseWorkflow(agentKey, out)
+	if agentKey == "reporter" && isFindingCaseReview(ctx) {
+		def.FindingGuidance = ""
+		def.CaseGuidance += historicalFindingReviewGuidance
+	}
 	for i, t := range out {
 		out[i] = guardPanic(t)
 	}

@@ -233,6 +233,9 @@ func seedPrompts(pg *db.DB) {
 // and缺省入参 get injected. MCP/skill/host tools have no row and pass through.
 func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
+	// C1 归并工具的 db 入口：会话级 agent（reporter 等）的 ToolSet 没有探索图
+	// store，7 个归并工具统一从这里拿 *db.DB。
+	agent.FindingCaseDB = func() *db.DB { return pg }
 	// 证据附件列表（v0.4.9）：agent 的 list_artifacts 工具读取本任务已登记附件。
 	agent.ListTaskArtifacts = func(taskID string) ([]db.TaskArtifact, error) { return pg.ListTaskArtifacts(taskID) }
 	// reporter 的 chat 会话没有任务上下文（v0.4.20）：允许工具按 finding_id

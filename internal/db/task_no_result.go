@@ -37,17 +37,23 @@ func NormalizeNoResultOptions(opts *TaskCreateOptions) error {
 	}
 }
 
-// 与 ARTEX 的独立漏洞口径（finding_case_members/finding_cases JOIN 折叠 case 级
-// severity）不同：本仓库批次 C 的漏洞归组尚未落地，先按 findings 直数——
-// 排除误报 + severity 阈值（array_position 序比较，空串=不限）。批次 C 落地后
-// 再升级为独立漏洞口径。
-const countQualifyingFindingsSQL = `SELECT count(*) FROM findings
-WHERE task_id=$1 AND status<>'false_positive'
-  AND ($2='' OR array_position(ARRAY['low','medium','high','critical'],severity)
-       >= array_position(ARRAY['low','medium','high','critical'],$2))`
+// C1 落地后升级为独立漏洞口径（与 ARTEX 0.3.29 同款）：同一 case 文件夹的成员
+// 折叠成一个实体 'c:<case_id>'，severity 取 case 统一评级（未评级时按空串，
+// 只在未设阈值时计入）；未归并的 findings 仍是 'f:<id>'。
+const countQualifyingFindingsSQL = `WITH observations AS (
+ SELECT CASE WHEN m.case_id IS NULL THEN 'f:'||f.id ELSE 'c:'||m.case_id END entity,
+        CASE WHEN m.case_id IS NULL THEN f.severity ELSE c.severity END severity
+ FROM findings f
+ LEFT JOIN finding_case_members m ON m.finding_id=f.id
+ LEFT JOIN finding_cases c ON c.id=m.case_id
+ WHERE f.task_id=$1 AND f.status<>'false_positive'
+)
+SELECT count(DISTINCT entity) FROM observations
+WHERE $2='' OR array_position(ARRAY['low','medium','high','critical'],severity)
+ >= array_position(ARRAY['low','medium','high','critical'],$2)`
 
-// CountQualifyingFindings 统计任务内达标漏洞数。误报永不计入；未设 severity
-// 阈值时各等级都计入。
+// CountQualifyingFindings 统计任务内达标漏洞数（case 折叠口径）。误报永不计入；
+// 未设 severity 阈值时各等级都计入。
 func (d *DB) CountQualifyingFindings(taskID int64, minSeverity string) (int, error) {
 	if err := NormalizeNoResultOptions(&TaskCreateOptions{NoResultMinSeverity: minSeverity}); err != nil {
 		return 0, err

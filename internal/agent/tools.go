@@ -2510,7 +2510,7 @@ func (t *ToolSet) listWorkerTraces() actool.CoreTool {
 
 // PlannerTools is the read + intent-generation + goal-judgement tool set.
 func (t *ToolSet) PlannerTools() []actool.CoreTool {
-	return []actool.CoreTool{
+	tools := []actool.CoreTool{
 		t.graphOverview(), t.listFindings(), t.listFacts(), t.nodeDetail(),
 		// cold-digest §6.1: restore folded cold nodes (digest body → members → detail).
 		t.expandDigest(),
@@ -2532,8 +2532,16 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		// search_vulns / get_vuln：识别出目标组件后查公开已知漏洞（NVD+KEV），
 		// 规划阶段把「有现成利用的方向」排进 todolist。
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
+		// gogo_scan / spray_finger（§5.5 P2）：规划阶段也可直接摸端口面/指纹补态势。
+		t.gogoScan(), t.sprayFinger(),
+		// katana_scan / passive_search / web_search（§5.5 P4）：Web 爬虫端点发现、
+		// FOFA/Hunter 网空测绘查询、通用联网搜索——规划期补态势/查公开情报。
+		t.katanaScan(), t.passiveSearchTool(), t.webSearchTool(),
 		// listener_*：回连接收器（红队 C2 前置）——start/stop 走 ask 审批，sessions 只读。
 		t.listenerStart(), t.listenerStop(), t.listenerSessions(),
+		// zombie_weakpass / proton_secrets（§5.5 P3）：弱口令检测与敏感信息扫描——
+		// 强动作类，走 ask 审批（拦截规则 seed v6），凭据明文只落 evidence。
+		t.zombieWeakpass(), t.protonSecrets(),
 		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。
 		t.authRequest(),
 		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
@@ -2543,6 +2551,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
 	}
+	// finding_cases 归并七件套（C1）：规划者研判重复上报、发起归并/建议。
+	return append(tools, t.FindingCaseTools()...)
 }
 
 // stallOverview 计算本任务的"边际收益"态势:最近的产出轮是第几轮、

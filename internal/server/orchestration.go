@@ -469,6 +469,12 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			if nodeID <= 0 {
 				return actool.Errorf("finding_id 无效"), nil
 			}
+			// C1 历史整理会话：原始报告只读（按独立 finding id 查 scope）。
+			if fid, err := s.m.pg.FindingIDByNodeID(nodeID); err == nil && fid > 0 {
+				if err := agent.CheckCaseReviewScope(ctx, "update_finding_report", agent.FindingCaseRequest{FindingID: json.RawMessage(i64s(fid))}); err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+			}
 			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, a.Report, a.EvidenceVersion)
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
@@ -536,6 +542,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
+	s.seedFindingCaseTools() // C1：归并工具 reporter 绑定 + 重启中断整理会话置 failed
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。

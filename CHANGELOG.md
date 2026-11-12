@@ -4,6 +4,65 @@
 
 ## [Unreleased]
 
+### 新增：同一漏洞重复上报归并 finding_cases 体系——ARTEX 移植 C1
+
+- **行为**：同一实际缺陷的多次独立上报（变体写法/重复发现）可归并进「归并文件夹」：
+  各条记录保留自己的评级、状态、证据与报告，文件夹汇总统一评级 + 统一报告。
+  与写入时指纹去重（`RecordFindingTx` 的 fingerprint 合并）正交共存——写时去重挡
+  完全重复，归并体系处理「同一缺陷的变体上报」；两者都不删（方案 C1 明确）。
+- **schema**（`internal/db/schema.sql` 幂等追加，7 表 + 3 触发器）：`finding_cases`、
+  `finding_case_members`（finding_id PK，级联删）、`finding_case_events`（归并/
+  移出/成员删除/报告更新留痕）、`finding_case_suggestions`（建议即分组语义——
+  **按最终形态建表**，不建 UNIQUE(left,right)、无存量回填；left/right 仅作最小
+  两锚点兼容列）、`finding_case_suggestion_members`、`finding_case_blocks`
+  （人工否决/移出的持久禁止对）、`finding_case_review_runs`（历史整理会话预留，
+  会话与运行行同事务创建）；触发器 `finding_case_content_changed`（成员变更 bump
+  case.version，统一报告的证据版本基准）+ `finding_case_member_deleted`（<2 成员
+  自动解散）+ `finding_case_suggestion_reanchor`（锚点 finding 删除前重锚，方案
+  风险 #1：否则删 finding 级联炸建议组）。本地 findings 表零列变更。
+- **db 层**：`internal/db/finding_cases.go`（归并/建议/否决/候选打分/统计/列表
+  上下文，任务级 advisory lock `5100000000000000+taskID` 串行化并发组并——已确认
+  与本地锁空间 7337741001-7337741010 无冲突）+ `finding_case_reviews.go`（事务性
+  会话预留 + IsFindingCaseReviewConversation/FindingCaseReviewSelection）；
+  `WithEvidenceTx`/`LockTaskEvidenceTx` 复用本地实现（finding_traffic.go:29/:168）。
+  `CountQualifyingFindings`（A8）同步升级为 case 折叠口径（`'c:'||case_id` /
+  `'f:'||id` COUNT DISTINCT，severity 取统一评级）。
+- **agent 工具 7 件**（`internal/agent/tools_finding_cases.go`，判定逻辑纯 Go +
+  SQL，不感知 eino）：`search_finding_duplicates`/`get_finding_record`/
+  `get_finding_case`（readTool）+ `merge_finding_records`/`suggest_finding_merge`/
+  `update_finding_case_report`/`complete_finding_case_review`（writeTool）——进
+  Worker/Planner/MainAgent 三张清单并经 `BuiltinToolSeeds` 播种 tools 表；
+  db 访问经 `agent.FindingCaseDB`（wireTools 注入，会话级 agent 无探索图 store）。
+  reporter（会话级 agent）由 `seedFindingCaseTools` 一次性按名补绑（一次性 flag
+  守卫，用户解绑后不回绑）。`findingCaseWorkflow` 整理指引注入 reporter 会话
+  （挂依赖工具存在检查）；历史批量整理会话走 `WithFindingCaseReview` ctx 标记 +
+  `historicalFindingCaseTools` 白名单裁剪（只读 + 归并工具，禁 report_finding/
+  update_finding_report/bind_finding_traffic/Bash）+ `CheckCaseReviewScope` 强制
+  只能操作所选 ids + 验收后冻结；`ValidateUnifiedFindingReport` 校验统一报告八大
+  章节完整且代码块闭合。
+- **server 层**：`GET/POST /api/exploration/finding-cases`、`GET
+  /api/exploration/finding-cases/{id}`（+ `/members`、`DELETE …/members/{fid}`、
+  `PUT …/report`）、`GET/POST /api/exploration/finding-case-suggestions[/{id}]`、
+  `POST/GET /api/exploration/finding-case-review`；文件夹列表内嵌 case 折叠口径
+  `stats`（COUNT DISTINCT 'c:'/'f:'）与 `matching_reports`；继承文件夹经
+  `context_task` 只读。导出 `mode=consolidated`：选择集扩展成完整文件夹、证据
+  冻结后合成 composite finding（`case:` 合成 id + `member_ids`，统一报告过期时
+  附全部原始证据并注明）；ZIP 证据前缀按 finding_id 去重（composite 与成员共享
+  冻结副本）。历史整理会话经 `triggeredRun.conversationID` 复用事务预留会话，
+  收尾做验收重校验 + 运行行状态落盘（重启中断由 seed 置 failed）。
+- **前端**：发现页新增「按文件夹」视图（可展开文件夹 + 成员分页 + 筛选外标记 +
+  独立漏洞/原始上报双口径统计）、建议确认卡片（可排除成员后归并/否决）、整理
+  会话状态、工具栏「AI 整理所选」批量整理入口、导出弹窗「按归并文件夹合并导出」
+  （可选保留原始上报）；`/function/findings/case` 文件夹详情页（统一报告编辑 +
+  版本冲突提示、成员移出二次确认、归并历史）。i18n 全部剥离为中文文案。
+- **测试**：db 层 19 个 ARTEX 用例随迁（并发组并、建议原子性/超集复用/子集
+  superseded/否决全对、anchor 重锚、候选打分分层、任务删除保留、视图上下文与
+  资产过滤）+ 本地特有场景「写时 dedup 后归并共存」；server 层 8 个用例随迁
+  （工具迁移绑定、API 分页、consolidated 导出 ZIP/JSON、人工所选范围、任务删除
+  存活、整理验收须先读取、原始报告防护、候选仅限所选）。全量 `go test -p 1`
+  （真 PG）通过；已知共享库固定名 fixture 撞键（config_test/llmretry_test 3 例）
+  为 AGENTS.md §1 记载的既有假失败，与本次改动无关（fresh 库单跑通过）。
+
 ### 新增：审批旁路问答（第四轨）——ARTEX 移植 B2
 
 - **行为**：审批详情内嵌旁路提问工作区（`GET/POST/DELETE

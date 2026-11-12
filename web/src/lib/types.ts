@@ -2165,3 +2165,89 @@ export interface TaskSchedule {
     created_at: string;
   }>;
 }
+
+// ---- Finding cases（C1 漏洞归并，移植自 ARTEX）----
+
+// FindingCase 是一个「同一实际缺陷」的归并文件夹。version 是成员/证据变更计数，
+// report_version 是统一报告保存时的 version 快照——两者不等 = 统一报告过期。
+export interface FindingCase {
+  id: string;
+  task_id?: string | null;
+  title: string;
+  reason: string;
+  severity: string; // 统一评级；空 = 未评定
+  severity_reason: string;
+  report?: string; // 统一报告 Markdown；列表接口不带，详情接口返回
+  version: number;
+  report_version: number;
+  active: boolean;
+  count: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  created_at: string;
+}
+
+export interface FindingCaseEvent {
+  id: string;
+  action: string; // merge | detach | member_deleted | report_updated
+  actor: string;
+  reason: string;
+  finding_ids: number[];
+  created_at: string;
+}
+
+// FindingCaseSuggestion 是 agent 提交的疑似重复分组（pending 状态），人工确认。
+export interface FindingCaseSuggestion {
+  id: string;
+  task_id: string;
+  left_id: string;
+  right_id: string;
+  title: string;
+  reason: string;
+  state: string;
+  finding_ids?: string[];
+}
+
+export interface FindingCaseReviewRun {
+  conversation_id: string;
+  task_id: string;
+  state: "queued" | "running" | "done" | "failed";
+  error?: string;
+}
+
+// FindingCaseListRow 是文件夹列表的一行：case 折叠行（case 非空）或未归并的
+// 独立上报行（finding 非空）。matched_ids 是命中当前筛选的成员。
+export interface FindingCaseListRow {
+  case?: FindingCase;
+  finding?: Finding;
+  finding_id?: string;
+  matched_ids?: number[];
+  task_name?: string;
+  task_description?: string;
+  last_found_at?: string;
+  asset_count?: number;
+  assets?: FindingAsset[];
+}
+
+// FindingDistinctStats 是 case 折叠口径的独立漏洞统计：total=独立实体数
+// （COUNT DISTINCT 'c:<case_id>' / 'f:<finding_id>'），reports=原始上报行数。
+export interface FindingDistinctStats {
+  total: number;
+  reports: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unassessed: number;
+}
+
+export interface FindingCasePage {
+  items: FindingCaseListRow[];
+  total: number;
+  matching_reports: number;
+  page: number;
+  page_size: number;
+  stats: FindingDistinctStats;
+}

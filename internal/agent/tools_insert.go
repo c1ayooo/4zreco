@@ -687,7 +687,7 @@ func splitLines(s string) []string {
 
 // WorkerTools returns the tool set for a work agent.
 func (t *ToolSet) WorkerTools() []actool.CoreTool {
-	return []actool.CoreTool{
+	tools := []actool.CoreTool{
 		// list_findings 保留：报漏洞前先查本任务已确认漏洞，避免重复上报同一漏洞。
 		t.listFindings(),
 		t.addFinding(), t.recordFact(),
@@ -703,8 +703,17 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		// search_vulns / get_vuln：worker 识别出目标组件与版本后直接查已知漏洞与
 		// 影响区间——公开情报优先于模型现想 payload。
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
+		// gogo_scan / spray_finger（§5.5 P2）：端口/服务发现与 Web 指纹领域工具——
+		// SDK 进程内直跑、只读发现类（readTool，exploit 关闭），一次调用回紧凑摘要。
+		t.gogoScan(), t.sprayFinger(),
+		// katana_scan / passive_search / web_search（§5.5 P4）：Web 爬虫端点发现、
+		// FOFA/Hunter 网空测绘查询、通用联网搜索——只读发现类，一次调用回紧凑摘要。
+		t.katanaScan(), t.passiveSearchTool(), t.webSearchTool(),
 		// listener_*：回连接收器（红队 C2 前置）——start/stop 走 ask 审批，sessions 只读。
 		t.listenerStart(), t.listenerStop(), t.listenerSessions(),
+		// zombie_weakpass / proton_secrets（§5.5 P3）：弱口令检测与敏感信息扫描——
+		// 强动作类，走 ask 审批（拦截规则 seed v6），凭据明文只落 evidence。
+		t.zombieWeakpass(), t.protonSecrets(),
 		// http_probe（v0.4.27）：批量探活领域工具——替代逐条手写 curl（任务 5 实测
 		// Bash 占 tool_use 57%、curl 2750 次），一次往返拿整批紧凑摘要。
 		t.httpProbe(),
@@ -722,11 +731,15 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		// 以下工具仍【不给】worker，只留给 planner/main（读上下文、跨 work 复盘是规划职责，
 		// worker 只做单条意图的执行与写回）：list_facts / list_companies / list_worker_traces。
 	}
+	// finding_cases 归并七件套（C1，移植自 ARTEX）：重复上报的语义归并——检索候选/
+	// 读原记录/读归并组只读，归并/建议/统一报告/验收写。db 访问经 agent.FindingCaseDB
+	// （server 注入），不需要任务上下文。
+	return append(tools, t.FindingCaseTools()...)
 }
 
 // MainAgentTools returns the human-interface tool set.
 func (t *ToolSet) MainAgentTools() []actool.CoreTool {
-	return []actool.CoreTool{
+	tools := []actool.CoreTool{
 		t.graphOverview(), t.listFindings(), t.listFacts(), t.nodeDetail(),
 		t.expandDigest(), // cold-digest §6.1
 		// list_worker_traces：work 索引（intent_id+summary+state），先发现再看
@@ -747,10 +760,16 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		t.listUntestedAssets(),
 		// search_vulns / get_vuln：人在环路上也可直接查公开已知漏洞情报。
 		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
+		// gogo_scan / spray_finger（§5.5 P2）：与 worker 同款只读发现工具。
+		t.gogoScan(), t.sprayFinger(),
+		// katana_scan / passive_search / web_search（§5.5 P4）：与 worker 同款只读发现工具。
+		t.katanaScan(), t.passiveSearchTool(), t.webSearchTool(),
 		// http_probe（v0.4.27）：批量探活领域工具（mainagent 与 worker 同款）。
 		t.httpProbe(),
 		// listener_*：回连接收器（红队 C2 前置）——start/stop 走 ask 审批，sessions 只读。
 		t.listenerStart(), t.listenerStop(), t.listenerSessions(),
+		// zombie_weakpass / proton_secrets（§5.5 P3）：与 worker 同款强动作工具。
+		t.zombieWeakpass(), t.protonSecrets(),
 		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。
 		t.authRequest(),
 		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
@@ -760,6 +779,8 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
 	}
+	// finding_cases 归并七件套（C1）：主控会话可检索/归并重复上报。
+	return append(tools, t.FindingCaseTools()...)
 }
 
 // AllDomainTools returns the union of all domain tools across all agent types,

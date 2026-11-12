@@ -174,6 +174,9 @@ type triggeredRun struct {
 	taskDesc  string // 任务描述(任务级,同任务相同);合并时只渲染一次
 	taskGoal  string // 任务目标(任务级,同任务相同);合并时只渲染一次
 	mergeable bool   // true for finding/goal event triggers (merge by taskID)
+	// conversationID > 0 = 预创建会话（C1 历史整理：会话与运行行在 DB 事务里
+	// 一并预留），drainer 直接复用而不新建。
+	conversationID int64
 }
 
 // New 组装 Server。paths 是目录唯一解析点（internal/config/paths.go）：skillDir
@@ -912,6 +915,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/findings/asset-tree", s.findingAssetTree)
 	mux.HandleFunc("GET /api/exploration/findings/stats", s.findingStats)
 	mux.HandleFunc("GET /api/exploration/findings/export", s.findingsExport)
+	// C1 finding_cases 归并体系（移植自 ARTEX）：文件夹列表/详情/成员/事件、
+	// 建议、人工归并、统一报告、历史批量整理会话。
+	mux.HandleFunc("GET /api/exploration/finding-cases", s.listFindingCases)
+	mux.HandleFunc("POST /api/exploration/finding-cases", s.mergeFindingCase)
+	mux.HandleFunc("GET /api/exploration/finding-cases/{id}", s.getFindingCase)
+	mux.HandleFunc("GET /api/exploration/finding-cases/{id}/members", s.getFindingCaseMembers)
+	mux.HandleFunc("DELETE /api/exploration/finding-cases/{id}/members/{fid}", s.removeFindingCaseMember)
+	mux.HandleFunc("PUT /api/exploration/finding-cases/{id}/report", s.updateCaseReport)
+	mux.HandleFunc("GET /api/exploration/finding-case-suggestions", s.caseSuggestions)
+	mux.HandleFunc("POST /api/exploration/finding-case-suggestions/{id}", s.resolveCaseSuggestion)
+	mux.HandleFunc("POST /api/exploration/finding-case-review", s.reviewFindingCases)
+	mux.HandleFunc("GET /api/exploration/finding-case-review", s.caseReviewRuns)
 	s.registerFindingTraffic(mux)
 	mux.HandleFunc("GET /api/exploration/findings/{id}", s.getFinding)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/lineage", s.findingLineage)
@@ -2487,6 +2502,16 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C1 mode=consolidated：选择集先扩成完整文件夹，真实行照常冻结证据，
+	// 之后把每个活动文件夹替换成一条 composite finding。
+	var casePlan *findingCaseExportPlan
+	if q.Get("mode") == "consolidated" {
+		fs, casePlan, err = s.prepareFindingCaseExport(fs)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
 	stage, err := os.MkdirTemp("", "4zreco-finding-export-")
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -2496,6 +2521,13 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 	if err = s.evidenceStore().StageFindingsExport(r.Context(), fs, stage, format == "md-zip"); err != nil {
 		evidenceError(w, err)
 		return
+	}
+	if casePlan != nil {
+		fs, err = s.consolidateFindingCaseExport(fs, casePlan, q.Get("include_originals") == "true")
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 	}
 	now := time.Now()
 	stamp := now.Format("20060102-150405")

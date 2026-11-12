@@ -546,6 +546,35 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	// Only the first turn executes a historical retest. Follow-up conversation
 	// turns may explain the sealed result; the result tool refuses to overwrite it.
 	finishStatus, finishReason := "failed", "复测未能启动"
+	if c.AgentKey == "reporter" {
+		// C1 历史整理会话：收窄工具白名单 + 整理指引；收尾做验收与运行状态落盘。
+		manualReview, err := s.isHistoricalFindingReview(c.ID)
+		if err != nil {
+			finishReason = err.Error()
+			_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error=$2 WHERE conversation_id=$1`, c.ID, finishReason)
+			return
+		}
+		if manualReview {
+			ctx = agent.WithFindingCaseReview(ctx)
+		}
+		defer func() {
+			state := "done"
+			reason := ""
+			if finishStatus != "completed" || ctx.Err() != nil {
+				state = "failed"
+				reason = finishReason
+				if ctx.Err() != nil {
+					reason = "整理已停止或服务关闭"
+				}
+			}
+			if state == "done" && manualReview {
+				if err := s.validateFindingReviewCompletion(c.ID); err != nil {
+					state, reason = "failed", err.Error()
+				}
+			}
+			_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state=$2,error=$3 WHERE conversation_id=$1 AND state='running'`, c.ID, state, reason)
+		}()
+	}
 	if c.AgentKey == db.FindingRetestAgentKey {
 		// Read without the run cancellation so an immediate stop still seals pending.
 		r, err := s.m.pg.FindingRetestForConversation(context.Background(), c.ID)
@@ -661,6 +690,20 @@ func (s *Server) StartTriggeredRun(agentKey, title, message string, taskID int64
 	s.queueMu.Unlock()
 }
 
+// startTriggeredRunItem enqueues a fully-built fire (C1 历史整理用：带预创建
+// conversationID) and pumps the queue. 与 StartTriggeredRun 同一队列/并发策略。
+func (s *Server) startTriggeredRunItem(item triggeredRun) {
+	if s.m.pg == nil || s.chatAgentRef() == nil {
+		return
+	}
+	cfg := s.readTriggerBehavior(item.agentKey) // DB read BEFORE the lock (never under queueMu)
+	s.queueMu.Lock()
+	s.triggerCfg[item.agentKey] = cfg
+	s.triggerQ[item.agentKey] = append(s.triggerQ[item.agentKey], item)
+	s.pumpLocked(item.agentKey)
+	s.queueMu.Unlock()
+}
+
 // pumpLocked launches queued fires for one agent up to its concurrency limit, then
 // returns. Serial → limit 1; parallel → limit = maxParallel (<=0 → unlimited). Each
 // launched run re-pumps on completion (runAndPump) to fill the freed slot. Caller
@@ -710,13 +753,31 @@ func (s *Server) runAndPump(agentKey string, item triggeredRun) {
 // Caller holds queueMu.
 func (s *Server) nextTriggerRun(agentKey string, cfg triggerBehavior) triggeredRun {
 	q := s.triggerQ[agentKey]
-	if cfg.runMode == "parallel" || cfg.mergeMode == "none" {
+	// C1 预创建会话（历史整理）绝不合并：会话与运行行是事务性预留的，合并会把
+	// 多个 conversationID 折成一个、其余运行行永远停在 queued。
+	if cfg.runMode == "parallel" || cfg.mergeMode == "none" || (len(q) > 0 && q[0].conversationID > 0) {
 		s.triggerQ[agentKey] = q[1:]
 		return q[0]
 	}
 	if cfg.mergeMode == "all" {
-		s.triggerQ[agentKey] = q[:0:0]
-		return mergeAllRuns(q)
+		// C1：合并到第一条预创建会话为止。队头是普通 fire、历史整理 fire 排在
+		// 后方时（reporter 兜底 serial+all 会走到这里），整队合并会丢掉整理 fire
+		// 的 conversationID——runTriggeredRun 另建新会话，事务性预留的 conversation
+		// 与 finding_case_review_runs 行永久停在 queued，任务被 ErrFindingCaseReviewBusy
+		// 卡死到重启。所以只合并截断点之前的部分，整理 fire 留在队头单独成跑。
+		cut := len(q)
+		for i, it := range q {
+			if it.conversationID > 0 {
+				cut = i
+				break
+			}
+		}
+		if cut == 0 {
+			s.triggerQ[agentKey] = q[1:]
+			return q[0]
+		}
+		s.triggerQ[agentKey] = q[cut:len(q):len(q)]
+		return mergeAllRuns(q[:cut:cut])
 	}
 	// by_task: head + same-task mergeable fires.
 	head := q[0]
@@ -840,12 +901,26 @@ func mergeAllRuns(items []triggeredRun) triggeredRun {
 func (s *Server) runTriggeredRun(item triggeredRun) {
 	defer func() {
 		if r := recover(); r != nil {
+			if item.conversationID > 0 {
+				_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error=$2 WHERE conversation_id=$1`, item.conversationID, fmt.Sprint(r))
+			}
 			log.Printf("[trigger] run for %s panicked: %v", item.agentKey, r)
 		}
 	}()
 	pg := s.m.pg
-	c, err := pg.CreateConversation(item.agentKey, firstLine(item.title, 60), nil)
-	if err != nil {
+	var c *db.Conversation
+	var err error
+	if item.conversationID > 0 {
+		// C1 历史整理：会话已与运行行事务性预留，直接取用并把运行标记 running。
+		c, err = pg.GetConversation(item.conversationID)
+		_, _ = pg.Exec(`UPDATE finding_case_review_runs SET state='running' WHERE conversation_id=$1`, item.conversationID)
+	} else {
+		c, err = pg.CreateConversation(item.agentKey, firstLine(item.title, 60), nil)
+	}
+	if err != nil || c == nil {
+		if item.conversationID > 0 {
+			_, _ = pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error='整理会话不可用' WHERE conversation_id=$1`, item.conversationID)
+		}
 		log.Printf("[trigger] create conversation for %s failed: %v", item.agentKey, err)
 		return
 	}

@@ -353,6 +353,8 @@ type FindingDTO struct {
 	TaskDescription string            `json:"task_description,omitempty"`
 	SourceTaskID    string            `json:"source_task_id,omitempty"`
 	Inherited       bool              `json:"inherited,omitempty"`
+	CaseID          string            `json:"case_id,omitempty"`    // 归并文件夹 id（C1）；composite 导出时 id 变形为 case:<id>
+	MemberIDs       []int64           `json:"member_ids,omitempty"` // C1 consolidated 导出：composite 的成员上报 id
 	Assets          []FindingAssetDTO `json:"assets,omitempty"`
 	TS              string            `json:"ts"`
 }
@@ -486,6 +488,12 @@ func findingFromDB(f *db.DBFinding, assets map[int64]*db.Asset) FindingDTO {
 		TS:        rfc3339(f.CreatedAt),
 	}
 	d.Assets = findingAssetDTOs(f.AssetIDs, assets)
+	if f.ExportCaseID > 0 {
+		// C1 consolidated 导出：composite finding 用合成 id，避免与真实行撞键。
+		d.ID = "case:" + i64s(f.ExportCaseID)
+		d.CaseID = i64s(f.ExportCaseID)
+		d.MemberIDs = f.ExportMemberIDs
+	}
 	if f.TaskID != nil {
 		d.TaskID = i64s(*f.TaskID)
 		d.TaskDescription = f.TaskDescription

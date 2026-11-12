@@ -40,6 +40,11 @@ import type {
   ExplorationNodeQuery,
   Finding,
   FindingAssetTree,
+  FindingCase,
+  FindingCaseEvent,
+  FindingCasePage,
+  FindingCaseReviewRun,
+  FindingCaseSuggestion,
   FindingDeepenResponse,
   FindingGroupsPage,
   FindingQuery,
@@ -720,19 +725,82 @@ export const api = {
   findingAssetTree: (q: Omit<FindingQuery, "page" | "pageSize">) =>
     get<FindingAssetTree>(`/exploration/findings/asset-tree?${findingFilterParams(q).toString()}`),
   findingStats: () => get<FindingStats>("/exploration/findings/stats"),
-  // exportFindings 触发发现页导出并下载文件。scope=selected 时传 ids(finding_id 列表);
-  // scope=filtered 时传当前筛选(沿用 FindingQuery 的筛选字段);scope=all 忽略筛选。
+  // ---- finding cases（C1 漏洞归并，移植自 ARTEX）----
+  // findingCases 是「文件夹优先」的列表：case 折叠成一行 + 未归并独立行，
+  // 响应内嵌 case 折叠口径统计（stats）与匹配的原始上报数（matching_reports）。
+  findingCases: (q: FindingQuery) => {
+    const p = findingFilterParams(q);
+    p.set("page", String(q.page));
+    p.set("limit", String(q.pageSize));
+    return get<FindingCasePage>(`/exploration/finding-cases?${p.toString()}`);
+  },
+  findingCase: (id: string, contextTask?: string) =>
+    get<{ case: FindingCase; events: FindingCaseEvent[] }>(
+      `/exploration/finding-cases/${encodeURIComponent(id)}${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
+    ),
+  findingCaseMembers: (id: string, page = 1, contextTask?: string, pageSize = 20) => {
+    const p = new URLSearchParams({ page: String(page), limit: String(pageSize) });
+    if (contextTask) p.set("context_task", contextTask);
+    return get<{ items: Finding[]; total: number; page: number; page_size: number }>(
+      `/exploration/finding-cases/${encodeURIComponent(id)}/members?${p.toString()}`,
+    );
+  },
+  // 归并所选原始上报（人工，actor=human）。至少 2 条同任务记录。
+  mergeFindingRecords: (taskId: string, ids: string[], title: string, reason: string) =>
+    post<{ case_id: string }>("/exploration/finding-cases", {
+      task_id: taskId,
+      finding_ids: ids.map((id) => Number(id)),
+      title,
+      reason,
+    }),
+  removeFindingCaseMember: (caseId: string, findingId: string, reason?: string) =>
+    del<{ ok: boolean }>(`/exploration/finding-cases/${encodeURIComponent(caseId)}/members/${encodeURIComponent(findingId)}`, { reason }),
+  updateFindingCaseReport: (
+    caseId: string,
+    version: number,
+    fields: { title: string; report: string; severity: string; severity_reason: string },
+    contextTask?: string,
+  ) =>
+    put<{ ok: boolean }>(
+      `/exploration/finding-cases/${encodeURIComponent(caseId)}/report${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
+      { version, ...fields },
+    ),
+  findingCaseSuggestions: (taskId?: string) =>
+    get<FindingCaseSuggestion[]>(
+      `/exploration/finding-case-suggestions${taskId ? `?task_id=${encodeURIComponent(taskId)}` : ""}`,
+    ).then(arr),
+  resolveFindingCaseSuggestion: (id: string, accept: boolean, excludeIds?: string[]) =>
+    post<{ case_id: string }>(`/exploration/finding-case-suggestions/${encodeURIComponent(id)}`, {
+      accept,
+      exclude_ids: excludeIds ?? [],
+    }),
+  // 历史批量整理：提交所选原始上报（或整个文件夹），服务端按来源任务分批
+  // 预留整理会话（202）。
+  findingCaseReview: (input: { finding_ids?: string[]; case_id?: string }) =>
+    post<{ runs: { conversation_id: string; task_id: string }[] }>("/exploration/finding-case-review", {
+      finding_ids: (input.finding_ids ?? []).map((id) => Number(id)),
+      case_id: input.case_id,
+    }),
+  findingCaseReviewRuns: () =>
+    get<FindingCaseReviewRun[]>("/exploration/finding-case-review").then(arr),
   exportFindings: async (opts: {
     format: "md-single" | "md-zip" | "csv" | "json";
     scope: "filtered" | "all" | "selected";
     filters?: Omit<FindingQuery, "page" | "pageSize">;
     ids?: string[];
+    consolidated?: boolean;
+    includeOriginals?: boolean;
   }) => {
     const p = new URLSearchParams({ format: opts.format, scope: opts.scope });
     if (opts.scope === "selected") {
       p.set("ids", (opts.ids ?? []).join(","));
     } else if (opts.scope === "filtered" && opts.filters) {
       for (const [k, v] of findingFilterParams(opts.filters)) p.set(k, v);
+    }
+    // C1 consolidated 导出：按归并文件夹合成 composite finding（统一报告）。
+    if (opts.consolidated) {
+      p.set("mode", "consolidated");
+      if (opts.includeOriginals) p.set("include_originals", "true");
     }
     const token = getToken();
     const r = await fetch(`/api/exploration/findings/export?${p.toString()}`, {

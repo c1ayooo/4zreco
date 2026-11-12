@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { FindingCaseList } from "@/components/finding-case-list";
 import { FindingRetestDialog } from "@/components/finding-retest-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
@@ -40,6 +41,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Checkbox } from "@/components/ui/checkbox";
 import { api } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { statusMeta } from "@/lib/status";
@@ -70,10 +72,11 @@ import {
 const FINDING_LIST_PREFERENCE_KEY = "4zreco_finding_list_preferences";
 
 // 列表视图:flat = 跨任务平铺大表(默认);grouped = 按任务分组折叠;
-// asset = 左侧资产树 + 右侧该子树下的发现。
-type FindingView = "flat" | "grouped" | "asset";
+// asset = 左侧资产树 + 右侧该子树下的发现;case = 归并文件夹视图(C1,
+// 同一实际缺陷的多次上报折叠进文件夹 + 建议/整理会话入口)。
+type FindingView = "flat" | "grouped" | "asset" | "case";
 
-const FINDING_VIEWS: FindingView[] = ["flat", "grouped", "asset"];
+const FINDING_VIEWS: FindingView[] = ["flat", "grouped", "asset", "case"];
 
 // 资产树的一次性快照。与另外两个视图不同,资产视图不轮询:进入视图、改筛选、
 // 或本页改动了发现之后才重新查询。
@@ -281,6 +284,11 @@ export default function FindingsPage() {
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exportScope, setExportScope] = React.useState<"filtered" | "all" | "selected">("filtered");
   const [exportFormat, setExportFormat] = React.useState<"md-single" | "md-zip" | "csv" | "json">("md-single");
+  // C1：按归并文件夹合成 composite finding 导出（统一报告 + 冻结证据包）。
+  const [exportConsolidated, setExportConsolidated] = React.useState(false);
+  const [exportIncludeOriginals, setExportIncludeOriginals] = React.useState(false);
+  // C1：历史批量整理（AI 整理所选上报）提交中标记。
+  const [reviewBusy, setReviewBusy] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
 
   const toggleSelected = React.useCallback((id: string, checked: boolean) => {
@@ -303,6 +311,22 @@ export default function FindingsPage() {
     });
   }, []);
 
+  // C1 批量整理入口：把勾选的原始上报提交为历史整理会话（服务端按来源任务
+  // 分批预留 reporter 会话，工具白名单收窄为只读 + 归并）。
+  async function startFindingReview() {
+    if (selectedIds.size < 2 || reviewBusy) return;
+    setReviewBusy(true);
+    try {
+      const r = await api.findingCaseReview({ finding_ids: [...selectedIds] });
+      toast.success(`已为 ${r.runs.length} 个来源任务各创建一个整理会话，可在「按文件夹」视图跟踪进度`);
+      setSelectedIds(new Set());
+    } catch (e) {
+      toast.error(`发起整理失败：${(e as Error).message}`);
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
   // 打开导出弹窗时,若有勾选项则默认范围切到「选中」,否则「当前筛选」。
   function openExport() {
     setExportScope(selectedIds.size > 0 ? "selected" : "filtered");
@@ -317,6 +341,8 @@ export default function FindingsPage() {
         scope: exportScope,
         filters: { severity, status, vulnclass, task, query, sort },
         ids: [...selectedIds],
+        consolidated: exportConsolidated,
+        includeOriginals: exportIncludeOriginals,
       });
       setExportOpen(false);
       toast.success("已开始下载导出文件");
@@ -859,6 +885,7 @@ export default function FindingsPage() {
             <TabsTrigger value="flat">全部发现</TabsTrigger>
             <TabsTrigger value="grouped">按任务分组</TabsTrigger>
             <TabsTrigger value="asset">按资产</TabsTrigger>
+            <TabsTrigger value="case">按文件夹</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -980,6 +1007,12 @@ export default function FindingsPage() {
             {selectedIds.size > 0 && (
               <span className="text-muted-foreground text-xs tabular-nums">已选 {selectedIds.size} 条</span>
             )}
+            {selectedIds.size >= 2 && (
+              <Button size="sm" variant="outline" onClick={startFindingReview} disabled={reviewBusy}>
+                {reviewBusy ? <Spinner /> : null}
+                AI 整理所选
+              </Button>
+            )}
             <Button size="sm" variant="outline" onClick={openExport}>
               <DownloadIcon data-icon="inline-start" /> 导出
             </Button>
@@ -987,6 +1020,14 @@ export default function FindingsPage() {
         </div>
 
         {view === "flat" && flatListCard}
+
+        {view === "case" && (
+          <FindingCaseList
+            query={{ severity, status, vulnclass, task, query, sort }}
+            selectedIds={selectedIds}
+            onSelect={toggleSelected}
+          />
+        )}
 
         {view === "asset" && (
           <div className="grid min-h-0 items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[24rem_minmax(0,1fr)]">
@@ -1274,6 +1315,28 @@ export default function FindingsPage() {
                   <RadioGroupItem id="export-format-json" value="json" /> JSON（.json）
                 </label>
               </RadioGroup>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <span className="text-muted-foreground text-xs">归并文件夹</span>
+              <label htmlFor="export-consolidated" className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  id="export-consolidated"
+                  checked={exportConsolidated}
+                  onCheckedChange={(v) => setExportConsolidated(v === true)}
+                />
+                按归并文件夹合并导出（每个文件夹输出统一报告一条）
+              </label>
+              {exportConsolidated && (
+                <label htmlFor="export-include-originals" className="ml-6 flex items-center gap-2 text-sm">
+                  <Checkbox
+                    id="export-include-originals"
+                    checked={exportIncludeOriginals}
+                    onCheckedChange={(v) => setExportIncludeOriginals(v === true)}
+                  />
+                  同时保留各条原始上报
+                </label>
+              )}
             </div>
           </div>
 

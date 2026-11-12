@@ -2074,3 +2074,146 @@ CREATE TABLE IF NOT EXISTS task_schedule_history (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_history ON task_schedule_history(schedule_id, id DESC);
+
+-- ============================================================================
+-- C1 finding_cases 归并体系（移植自 ARTEX 0.3.29 db/schema.sql:1480-1618）。
+-- 一个 case 收集「同一实际缺陷」的多次独立上报，不改写 findings 原行——
+-- 各条记录保留自己的评级、状态、证据与报告。与写入时指纹去重
+-- （RecordFindingTx 的 fingerprint 合并）正交：写时去重挡完全重复，
+-- 归并体系处理「同一缺陷的变体上报」。
+-- 本仓库无存量数据，按最终形态建表：suggestions 直接是分组语义
+-- （members 表承载全部成员；left_id/right_id 仅作为最小两锚点兼容列），
+-- 不建 UNIQUE(left,right)（分组可 >2 成员，两两唯一约束语义错误）、
+-- 不做老库回填 INSERT。
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS finding_cases (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    origin_task_id BIGINT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT '',
+    severity_reason TEXT NOT NULL DEFAULT '',
+    report TEXT NOT NULL DEFAULT '',
+    version BIGINT NOT NULL DEFAULT 1,
+    report_version BIGINT NOT NULL DEFAULT 0,
+    active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS finding_case_members (
+    finding_id BIGINT PRIMARY KEY REFERENCES findings(id) ON DELETE CASCADE,
+    case_id BIGINT NOT NULL REFERENCES finding_cases(id),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_case_members_case ON finding_case_members(case_id);
+CREATE TABLE IF NOT EXISTS finding_case_events (
+    id BIGSERIAL PRIMARY KEY,
+    case_id BIGINT NOT NULL REFERENCES finding_cases(id),
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    finding_ids JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS finding_case_suggestions (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK(left_id < right_id)
+);
+-- 建议即分组：left_id/right_id 是旧客户端兼容锚点，保持为存活成员中最小的两个 id。
+CREATE TABLE IF NOT EXISTS finding_case_suggestion_members (
+    suggestion_id BIGINT NOT NULL REFERENCES finding_case_suggestions(id) ON DELETE CASCADE,
+    finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    PRIMARY KEY (suggestion_id, finding_id)
+);
+CREATE INDEX IF NOT EXISTS idx_finding_case_suggestion_members_finding
+    ON finding_case_suggestion_members(finding_id);
+-- 锚点带级联外键。锚点 finding 被删前先重锚，3+ 成员的建议组才能活过级联。
+CREATE OR REPLACE FUNCTION finding_case_suggestion_reanchor() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    sid BIGINT;
+    new_left BIGINT;
+    new_right BIGINT;
+BEGIN
+    FOR sid IN
+        SELECT id FROM finding_case_suggestions
+        WHERE left_id = OLD.id OR right_id = OLD.id
+    LOOP
+        SELECT min(m.finding_id) INTO new_left
+        FROM finding_case_suggestion_members m
+        JOIN findings f ON f.id = m.finding_id
+        WHERE m.suggestion_id = sid AND m.finding_id <> OLD.id;
+        SELECT min(m.finding_id) INTO new_right
+        FROM finding_case_suggestion_members m
+        JOIN findings f ON f.id = m.finding_id
+        WHERE m.suggestion_id = sid AND m.finding_id <> OLD.id
+          AND m.finding_id > new_left;
+        IF new_left IS NOT NULL AND new_right IS NOT NULL THEN
+            UPDATE finding_case_suggestions
+            SET left_id = new_left, right_id = new_right
+            WHERE id = sid;
+        END IF;
+    END LOOP;
+    RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS finding_case_suggestion_reanchor ON findings;
+CREATE TRIGGER finding_case_suggestion_reanchor
+BEFORE DELETE ON findings FOR EACH ROW
+EXECUTE FUNCTION finding_case_suggestion_reanchor();
+-- 否决/移出是持久的人工否决，组并集时同样校验。
+CREATE TABLE IF NOT EXISTS finding_case_blocks (
+    left_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    right_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    PRIMARY KEY(left_id,right_id), CHECK(left_id < right_id)
+);
+-- 成员变更 bump case.version（统一报告的证据版本基准）；
+-- 成员少于 2 自动解散并留痕。
+CREATE OR REPLACE FUNCTION finding_case_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE cid BIGINT; remaining INTEGER;
+BEGIN
+    IF TG_TABLE_NAME = 'findings' THEN
+        IF OLD IS NOT DISTINCT FROM NEW THEN RETURN NEW; END IF;
+        SELECT case_id INTO cid FROM finding_case_members WHERE finding_id=NEW.id;
+    ELSE
+        cid := OLD.case_id;
+    END IF;
+    IF cid IS NOT NULL THEN
+        UPDATE finding_cases SET version=version+1 WHERE id=cid;
+        IF TG_OP='DELETE' THEN
+            SELECT count(*) INTO remaining FROM finding_case_members WHERE case_id=cid;
+            INSERT INTO finding_case_events(case_id,action,actor,reason,finding_ids)
+                VALUES(cid,'member_deleted','system','成员移出或删除',jsonb_build_array(OLD.finding_id));
+            IF remaining < 2 THEN
+                UPDATE finding_cases SET active=false WHERE id=cid;
+                DELETE FROM finding_case_members WHERE case_id=cid;
+            END IF;
+        END IF;
+    END IF;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS finding_case_content_changed ON findings;
+CREATE TRIGGER finding_case_content_changed AFTER UPDATE ON findings
+FOR EACH ROW EXECUTE FUNCTION finding_case_changed();
+DROP TRIGGER IF EXISTS finding_case_member_deleted ON finding_case_members;
+CREATE TRIGGER finding_case_member_deleted AFTER DELETE ON finding_case_members
+FOR EACH ROW EXECUTE FUNCTION finding_case_changed();
+-- 历史批量整理会话：conversation 事务性预留，重启时由 seedFindingCaseTools 置 failed。
+CREATE TABLE IF NOT EXISTS finding_case_review_runs (
+    conversation_id BIGINT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    error TEXT NOT NULL DEFAULT '',
+    finding_ids JSONB NOT NULL DEFAULT '[]',
+    reviewed_ids JSONB NOT NULL DEFAULT '[]',
+    conclusion JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_finding_case_reviews_active_task ON finding_case_review_runs(task_id) WHERE state IN ('queued','running');

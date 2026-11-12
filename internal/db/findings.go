@@ -20,6 +20,10 @@ type DBFinding struct {
 	ReportEvidenceVersion int64
 	TrafficBindings       []FindingTrafficBinding // populated only for export
 
+	// C1 导出专用：consolidated 模式合成的 composite finding 标注（真实行不填）。
+	ExportCaseID    int64
+	ExportMemberIDs []int64
+
 	ID              int64
 	TaskID          *int64
 	NodeID          *int64
