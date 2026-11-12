@@ -594,6 +594,15 @@ func (s *Server) interceptSetJudgeConfig(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 400, "ask_timeout_action 必须是 allow 或 deny")
 		return
 	}
+	switch req.IncompleteScriptAction {
+	case "":
+		// 缺省 = 保持默认策略（model），前端旧客户端/部分更新不受影响。
+		req.IncompleteScriptAction = intercept.DefaultIncompleteScriptAction
+	case "ask", "model":
+	default:
+		writeErr(w, 400, "incomplete_script_action 必须是 ask 或 model")
+		return
+	}
 	if err := s.m.interceptor.SetJudgeConfig(req); err != nil {
 		writeErr(w, 500, err.Error())
 		return

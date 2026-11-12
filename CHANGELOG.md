@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+### 新增：审批脚本审查快照与不完整强制转人工——ARTEX 移植 B1
+
+- **行为**：Bash/内联 Shell 类调用进入 LLM 兜底研判时，静态解析命令树，把待执行
+  脚本（引用文件 / `cat > x <<'EOF'` 命令内生成 / `python -m` 模块源码 / 受限 sed
+  变换结果）连同 SHA-256 一起作为只读快照（`script_files`）附加进审查输入，模型
+  拿到源码证据而非裸命令；无法静态解析、读取失败或超 1 MiB 总量时快照状态记为
+  `incomplete`（宁缺勿猜）。settings 新键 `llm_judge_incomplete_script_action`
+  （默认 `model`=交给模型按可见证据裁决；`ask`=模型判 allow 时强制升格人工审批，
+  deny/ask 裁决不受影响）。零表变更——快照随 ReviewInput 走
+  `intercept_pending.audit->>'model_input'` 既有载体。ARTEX 0.3.29 同款。
+- **落点**：`internal/intercept/` 新增 6 个纯 Go 文件（`scripts.go` 解析+快照、
+  `shell_static.go` AST 直线语句/内联展开/包装剥离、`static_sed.go` 受限 sed、
+  `python_modules.go`/`python_shell_environment.go` Python 模块定位与环境污染判定、
+  `shell_constants.go` 字面常量推导；判定全部纯函数、无内核依赖）；唯一新依赖
+  `mvdan.cc/sh/v3 v3.10.0`（精确锁死，版本对齐 ARTEX）。`ReviewInput` 加
+  `script_capture_status`/`script_files` 字段（version 4→5），`BuildReviewInput`
+  内挂快照采集；judge 流水线尾部挂 `applyIncompleteScriptPolicy`。
+- **提示词**：判定提示词补 script_files 语义（source=command 不能认定文件已存在、
+  快照缺失/截断时不得把未看到的部分当作没有副作用）与三段裁决边界说明。
+
 ### 新增：无成果止损（no-result）——ARTEX 移植 A8
 
 - **行为**：任务创建时可设 `no_result_seconds > 0`（默认 0=关闭）——活跃运行

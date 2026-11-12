@@ -177,6 +177,7 @@ const defaultJudge = (): JudgeConfig => ({
   fail_action: "ask",
   ask_timeout_seconds: 180,
   ask_timeout_action: "allow",
+  incomplete_script_action: "model",
 });
 
 function JudgeCard() {
@@ -384,6 +385,24 @@ function JudgeCard() {
                   <span className="text-muted-foreground text-xs">
                     模型挂掉时「放行」等于关卡自动敞开（多半是配置问题：thinking 不兼容、额度耗尽、上游 5xx），
                     推荐转人工——至少会留下一条待办记录。
+                  </span>
+                </Field>
+                <Field label="脚本快照不完整时">
+                  <Select
+                    value={cfg.incomplete_script_action}
+                    onValueChange={(v) => patch({ incomplete_script_action: v as JudgeConfig["incomplete_script_action"] })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ask">转人工审查</SelectItem>
+                      <SelectItem value="model">继续交给模型审查（默认）</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span className="text-muted-foreground text-xs">
+                    待执行脚本无法完整附加快照（路径不可静态解析、读取失败或超总量限制）时：
+                    默认继续交给模型按可见证据裁决；选「转人工」则模型判放行的调用也会升格人工审批。
                   </span>
                 </Field>
               </div>

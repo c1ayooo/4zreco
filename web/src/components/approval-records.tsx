@@ -242,6 +242,43 @@ function ModelReviewContext({ input }: { input: InterceptReviewInput }) {
         </>
       )}
       {input.working_directory ? <CodeBlock label="工作目录" text={input.working_directory} /> : null}
+      {input.script_files?.length ? (
+        <section className="flex min-w-0 flex-col gap-3" aria-label="脚本快照">
+          <div>
+            <h3 className="font-medium text-sm">脚本快照</h3>
+            <p className="text-muted-foreground text-xs">
+              这是审查前从当前命令或引用文件提取的脚本内容；不会在审查过程中执行脚本。
+            </p>
+          </div>
+          {input.script_files.map((file) => (
+            <div
+              key={`${file.path}:${file.source ?? ""}:${file.sha256 ?? file.read_error ?? ""}`}
+              className="flex min-w-0 flex-col gap-2 rounded-lg border p-3"
+            >
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                <span className="break-all font-mono">{file.path}</span>
+                {file.source ? (
+                  <span className="text-muted-foreground">{file.source === "command" ? "命令内生成" : "引用文件"}</span>
+                ) : null}
+                {file.sha256 ? <span className="text-muted-foreground">SHA-256 {file.sha256}</span> : null}
+                {file.bytes != null ? <span className="text-muted-foreground">{file.bytes} 字节</span> : null}
+              </div>
+              {file.content ? <CodeBlock label="脚本内容" text={file.content} /> : null}
+              {file.read_error ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{file.read_error}</AlertDescription>
+                </Alert>
+              ) : null}
+              {file.truncated ? <p className="text-muted-foreground text-xs">脚本内容不完整，不能据此自动放行。</p> : null}
+            </div>
+          ))}
+          {input.script_capture_status === "incomplete" ? (
+            <Alert variant="destructive">
+              <AlertDescription>无法完整读取当前执行脚本；快照已按可见部分附加，未读到的内容不能当作无副作用。</AlertDescription>
+            </Alert>
+          ) : null}
+        </section>
+      ) : null}
       {input.version >= 3 ? (
         <p className="text-muted-foreground text-xs">本次审查未发送历史调用或执行结果。</p>
       ) : (

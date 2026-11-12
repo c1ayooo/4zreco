@@ -144,11 +144,14 @@ func (i *Interceptor) SetReviewer(r Reviewer) {
 // rule system when no intercept_enabled_tools setting has been saved.
 // goal_met 一句话终结整个任务且不走 prove_goal 证据链（v0.3.88 体检 S3）——
 // 入集后可被规则命中（内置 judge 规则「goal_met 收官研判」随 V5 seed 落库）。
+// zombie_weakpass / proton_secrets 是强动作扫描器（AGENTS.md §5.5 P3）——
+// 入集后可被 ask 规则命中（内置 ask 规则随 V6 seed 落库）。
 var defaultEnabledTools = []string{
 	"Bash", "WebFetch", "web_search",
 	"shell_open", "shell_send",
 	"listener_start", "listener_stop",
 	"goal_met",
+	"zombie_weakpass", "proton_secrets",
 	"Write", "Edit", "MultiEdit",
 }
 
@@ -369,6 +372,11 @@ const (
 	settingJudgeAskTimeoutSecs   = "llm_judge_ask_timeout_seconds"
 	settingJudgeAskTimeoutAction = "llm_judge_ask_timeout_action"
 
+	// 脚本审查快照不完整（读取失败/截断/路径不可静态解析）时的处理策略：
+	// "model" = 快照缺失交给模型在可见证据内裁决（默认）；"ask" = 模型判 allow
+	// 时仍强制升格人工审批（见 applyIncompleteScriptPolicy）。
+	settingJudgeIncompleteScript = "llm_judge_incomplete_script_action"
+
 	// ask 审批（规则未声明 timeout 时）的全局兜底上限。规则级 TimeoutEnabled
 	// 之外的最后一道墙：审批人离场不能让 worker 无限挂死（v0.3.88 体检 S2）。
 	settingAskDefaultTimeoutSecs = "intercept_ask_default_timeout_seconds"
@@ -407,6 +415,11 @@ const (
 	defaultJudgeAskTimeoutSecs   = 180
 	defaultJudgeAskTimeoutAction = "allow"
 
+	// DefaultIncompleteScriptAction keeps incomplete snapshots with the judge.
+	// 默认 "model"：快照不完整时模型仍可依据可见证据裁决（提示词已约束
+	// 「不得把未看到的部分当作没有副作用」）；运维可显式改为 "ask" 收紧。
+	DefaultIncompleteScriptAction = "model"
+
 	// ask 全局兜底上限：6h（见 settingAskDefaultTimeoutSecs 注释）。
 	defaultAskTimeoutSecs = 6 * 60 * 60
 )
@@ -414,13 +427,14 @@ const (
 // JudgeConfig is the resolved LLM-fallback-judge configuration. Prompt is always
 // non-empty (falls back to DefaultJudgePrompt).
 type JudgeConfig struct {
-	Enabled           bool   `json:"enabled"`
-	ProfileID         int64  `json:"profile_id"` // 0 = follow active/default
-	Prompt            string `json:"prompt"`
-	TimeoutSeconds    int    `json:"timeout_seconds"`
-	FailAction        string `json:"fail_action"` // allow|ask|deny
-	AskTimeoutSeconds int    `json:"ask_timeout_seconds"`
-	AskTimeoutAction  string `json:"ask_timeout_action"` // allow|deny
+	Enabled                bool   `json:"enabled"`
+	ProfileID              int64  `json:"profile_id"` // 0 = follow active/default
+	Prompt                 string `json:"prompt"`
+	TimeoutSeconds         int    `json:"timeout_seconds"`
+	FailAction             string `json:"fail_action"` // allow|ask|deny
+	AskTimeoutSeconds      int    `json:"ask_timeout_seconds"`
+	AskTimeoutAction       string `json:"ask_timeout_action"`       // allow|deny
+	IncompleteScriptAction string `json:"incomplete_script_action"` // ask|model
 }
 
 // judgeConfig reads the judge configuration from settings, applying defaults for
@@ -431,22 +445,24 @@ func (i *Interceptor) judgeConfig() JudgeConfig {
 	// 裁决在工具调用的同步路径上，一崩就是整个 agent 进程死掉。
 	if i == nil || i.db == nil {
 		return JudgeConfig{
-			Enabled:           false,
-			ProfileID:         0,
-			Prompt:            DefaultJudgePrompt,
-			TimeoutSeconds:    defaultJudgeTimeoutSecs,
-			FailAction:        defaultJudgeFailAction,
-			AskTimeoutSeconds: defaultJudgeAskTimeoutSecs,
-			AskTimeoutAction:  defaultJudgeAskTimeoutAction,
+			Enabled:                false,
+			ProfileID:              0,
+			Prompt:                 DefaultJudgePrompt,
+			TimeoutSeconds:         defaultJudgeTimeoutSecs,
+			FailAction:             defaultJudgeFailAction,
+			AskTimeoutSeconds:      defaultJudgeAskTimeoutSecs,
+			AskTimeoutAction:       defaultJudgeAskTimeoutAction,
+			IncompleteScriptAction: DefaultIncompleteScriptAction,
 		}
 	}
 	c := JudgeConfig{
-		Enabled:           i.db.GetBool(settingJudgeEnabled, false),
-		ProfileID:         int64(i.getSettingInt(settingJudgeProfileID, 0)),
-		TimeoutSeconds:    i.getSettingInt(settingJudgeTimeoutSecs, defaultJudgeTimeoutSecs),
-		FailAction:        i.getSettingChoice(settingJudgeFailAction, defaultJudgeFailAction, "allow", "ask", "deny"),
-		AskTimeoutSeconds: i.getSettingInt(settingJudgeAskTimeoutSecs, defaultJudgeAskTimeoutSecs),
-		AskTimeoutAction:  i.getSettingChoice(settingJudgeAskTimeoutAction, defaultJudgeAskTimeoutAction, "allow", "deny"),
+		Enabled:                i.db.GetBool(settingJudgeEnabled, false),
+		ProfileID:              int64(i.getSettingInt(settingJudgeProfileID, 0)),
+		TimeoutSeconds:         i.getSettingInt(settingJudgeTimeoutSecs, defaultJudgeTimeoutSecs),
+		FailAction:             i.getSettingChoice(settingJudgeFailAction, defaultJudgeFailAction, "allow", "ask", "deny"),
+		AskTimeoutSeconds:      i.getSettingInt(settingJudgeAskTimeoutSecs, defaultJudgeAskTimeoutSecs),
+		AskTimeoutAction:       i.getSettingChoice(settingJudgeAskTimeoutAction, defaultJudgeAskTimeoutAction, "allow", "deny"),
+		IncompleteScriptAction: i.getSettingChoice(settingJudgeIncompleteScript, DefaultIncompleteScriptAction, "ask", "model"),
 	}
 	// Prompt: stored value if non-empty, else the built-in template.
 	if v, ok, _ := i.db.GetSetting(settingJudgePrompt); ok && strings.TrimSpace(v) != "" {
@@ -528,6 +544,9 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 		return err
 	}
 	if err := i.db.SetSetting(settingJudgeAskTimeoutAction, c.AskTimeoutAction); err != nil {
+		return err
+	}
+	if err := i.db.SetSetting(settingJudgeIncompleteScript, c.IncompleteScriptAction); err != nil {
 		return err
 	}
 	return nil
@@ -632,6 +651,12 @@ func (i *Interceptor) judge(ctx context.Context, tool string, arguments json.Raw
 	if err != nil {
 		out = Decision{ProfileID: out.ProfileID, ModelFallback: true, Action: cfg.FailAction, Message: "模型审批失败,按失败策略处理: " + err.Error()}
 	}
+	// A model verdict never carries a rule; keep RuleID 0 (→ NULL) for history.
+	// By default the model receives snapshot read errors and its verdict is
+	// honored. Operators may explicitly require human review when an incomplete
+	// snapshot would otherwise be allowed.
+	out.RuleID = 0
+	out = applyIncompleteScriptPolicy(input, out, cfg.IncompleteScriptAction)
 	switch out.Action {
 	case "allow", "ask", "deny":
 		// valid verdict
@@ -663,6 +688,19 @@ func (i *Interceptor) judge(ctx context.Context, tool string, arguments json.Raw
 		out.TimeoutAction = cfg.AskTimeoutAction
 	}
 	return out, true
+}
+
+// applyIncompleteScriptPolicy 是「不完整脚本快照强制转人工」的独立策略函数：
+// 快照状态为 incomplete（脚本缺失/读取失败/截断/路径无法静态解析）且运维策略
+// 不是 "model" 时，把模型的 allow 升格为 ask——deny 与 ask 的裁决保持不变
+// （模型已经要求人工或拒绝，无需再升格），非 allow 的模型失败兜底也保持不变
+// （失败策略本身已表达运维意图）。纯函数，不感知任何内核类型（红线 R4）。
+func applyIncompleteScriptPolicy(input ReviewInput, out Decision, policy string) Decision {
+	if input.ScriptCaptureStatus == "incomplete" && policy != "model" && out.Action == "allow" {
+		out.Action = "ask"
+		out.Message = "脚本未能完整附加，无法排除隐藏副作用，需要人工确认"
+	}
+	return out
 }
 
 func judgeActionLabel(action string) string {
