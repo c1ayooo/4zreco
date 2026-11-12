@@ -1559,23 +1559,31 @@ CREATE TABLE IF NOT EXISTS server_logs (
 CREATE INDEX IF NOT EXISTS idx_server_logs_id ON server_logs(id DESC);
 
 -- Independent /btw history and the latest provider-ready main checkpoint.
+-- 第四类 parent：审批旁问（approval_id，session_key='approval-{id}'）。互斥 CHECK
+-- 与既有三类并列为四支。注意 intercept_pending 是 append-only（触发器禁
+-- UPDATE/DELETE），FK 的 ON DELETE CASCADE 永不触发、审批行永不删除——旁问历史
+-- 随审批行永存，属有意语义（见 CHANGELOG B2）。
 CREATE TABLE IF NOT EXISTS side_question_sessions (
     session_key TEXT PRIMARY KEY,
     conversation_id BIGINT REFERENCES conversations(id) ON DELETE CASCADE,
     task_id BIGINT REFERENCES tasks(id) ON DELETE CASCADE,
     exploration_id BIGINT REFERENCES explorations(id) ON DELETE CASCADE,
     intent_id BIGINT REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+    approval_id BIGINT REFERENCES intercept_pending(id) ON DELETE CASCADE,
     run_id BIGINT NOT NULL,
     version BIGINT NOT NULL,
     snapshot JSONB NOT NULL,
     generation BIGINT NOT NULL DEFAULT 0,
-    CHECK ((conversation_id IS NOT NULL AND task_id IS NULL AND exploration_id IS NULL AND intent_id IS NULL)
-        OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL))
+    CHECK ((conversation_id IS NOT NULL AND task_id IS NULL AND exploration_id IS NULL AND intent_id IS NULL AND approval_id IS NULL)
+        OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL AND intent_id IS NULL AND approval_id IS NULL)
+        OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL AND intent_id IS NOT NULL AND approval_id IS NULL)
+        OR (conversation_id IS NULL AND task_id IS NULL AND exploration_id IS NULL AND intent_id IS NULL AND approval_id IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_side_sessions_conv ON side_question_sessions(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_side_sessions_task ON side_question_sessions(task_id);
 CREATE INDEX IF NOT EXISTS idx_side_sessions_exp ON side_question_sessions(exploration_id);
 CREATE INDEX IF NOT EXISTS idx_side_sessions_intent ON side_question_sessions(intent_id);
+CREATE INDEX IF NOT EXISTS idx_side_sessions_approval ON side_question_sessions(approval_id);
 
 CREATE TABLE IF NOT EXISTS side_question_requests (
     id TEXT PRIMARY KEY,
@@ -1600,6 +1608,17 @@ CREATE INDEX IF NOT EXISTS idx_side_requests_history ON side_question_requests(s
 -- Additive v3 archive fields; old archives restore these as empty objects.
 ALTER TABLE side_question_sessions ADD COLUMN IF NOT EXISTS memory JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE side_question_requests ADD COLUMN IF NOT EXISTS context_info JSONB NOT NULL DEFAULT '{}';
+
+-- B2 审批旁路：补旧库 approval_id 列并幂等重建互斥 CHECK（扩第四类 parent）。
+-- 新装库由上方 CREATE TABLE 直接带齐；此处的 DROP+ADD 对新库是无损重放（约束同名
+-- 同体）。intercept_pending append-only，FK CASCADE 永不触发（见上方注释）。
+ALTER TABLE side_question_sessions ADD COLUMN IF NOT EXISTS approval_id BIGINT REFERENCES intercept_pending(id) ON DELETE CASCADE;
+ALTER TABLE side_question_sessions DROP CONSTRAINT IF EXISTS side_question_sessions_check;
+ALTER TABLE side_question_sessions ADD CONSTRAINT side_question_sessions_check
+    CHECK ((conversation_id IS NOT NULL AND task_id IS NULL AND exploration_id IS NULL AND intent_id IS NULL AND approval_id IS NULL)
+        OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL AND intent_id IS NULL AND approval_id IS NULL)
+        OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL AND intent_id IS NOT NULL AND approval_id IS NULL)
+        OR (conversation_id IS NULL AND task_id IS NULL AND exploration_id IS NULL AND intent_id IS NULL AND approval_id IS NOT NULL));
 
 -- =====================================================================
 -- 资产拦截规则（全局黑名单）

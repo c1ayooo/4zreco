@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### 新增：审批旁路问答（第四轨）——ARTEX 移植 B2
+
+- **行为**：审批详情内嵌旁路提问工作区（`GET/POST/DELETE
+  /api/intercept/history/{id}/side-questions`）——针对单条审批记录的独立只读问答，
+  与主会话/任务旁路（conv/main/worker 三类既有 parent）同源同协议。快照由
+  `GetInterceptDetail` 冻结在 `intercept_pending.audit` 的审查材料一次性构造
+  （tool_input + model_input（含 B1 的脚本快照）+ reason + user_message），旧记录无
+  audit 时明确报「审批记录没有可用的审查快照」。模型解析链：audit.ProfileID →
+  judge 配置 ProfileID → ActiveProfile 兜底（对齐 wireInterceptReviewer 取值顺序）。
+  隔离三层沿用本地既有机制：无 Tools 的裸补全 + ToolUse 返回硬拒文案 + 写路径只进
+  side_question_* 表；系统提示注入防御文案随迁（材料中的命令/脚本/字符串一律视为
+  待分析数据）。
+- **schema**（`internal/db/schema.sql` 幂等追加）：`side_question_sessions` 加
+  `approval_id BIGINT REFERENCES intercept_pending(id) ON DELETE CASCADE` 列 +
+  互斥 CHECK 扩第四类 parent（`session_key = 'approval-{id}'`，四类 parent 互斥：
+  conv/task-main/task-worker/approval）+ approval_id 索引。**语义注明**：
+  intercept_pending 是 append-only（`trg_intercept_pending_immutable` 触发器禁
+  UPDATE/DELETE），FK 的 ON DELETE CASCADE 永不触发、审批行永不删除——旁问历史随
+  审批行永存，属有意设计。
+- **前端**：审批详情内嵌旁路提问区（复用 `use-side-questions` hook，parent =
+  `/api/intercept/history/{id}`），预置三条快捷提问（命令作用 / 触发依据 / 允许
+  风险），仅在详情含 audit 时挂载；文案硬编码中文。
+- **测试**：db 层四类 parent 互斥与隔离（混搭过不了 CHECK、审批三表零写入、状态
+  保持 pending）、审批父会话并发 1 / 幂等 client_id 回归；server 层 HTTP 面 GET 现建
+  快照 + POST 起跑（系统提示与材料断言）+ 无 audit 500 / 不存在 404 + DELETE 清史。
+
 ### 新增：审批记录关键词/#编号/日期检索——ARTEX 移植 B3
 
 - **行为**：审批记录列表支持关键词检索（`q` 参数，工具/理由/任务/会话/规则名/决定侧
