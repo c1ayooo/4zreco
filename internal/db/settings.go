@@ -1,6 +1,9 @@
 package db
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+)
 
 // Settings is a tiny key-value store for global app config the UI toggles at
 // runtime (e.g. traffic_capture). Missing keys fall back to caller defaults.
@@ -20,6 +23,16 @@ func (d *DB) GetSetting(key string) (value string, ok bool, err error) {
 // SetSetting upserts a setting value.
 func (d *DB) SetSetting(key, value string) error {
 	_, err := d.Exec(`
+INSERT INTO settings(key, value) VALUES ($1, $2)
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value)
+	return err
+}
+
+// SetSettingContext upserts a setting value under the caller's context — 用于
+// 需要有界超时/可取消写库的场景（如 HTTP Basic Auth 配置保存：请求取消时写库
+// 随之放弃，不把取消的保存发布成新配置）。
+func (d *DB) SetSettingContext(ctx context.Context, key, value string) error {
+	_, err := d.ExecContext(ctx, `
 INSERT INTO settings(key, value) VALUES ($1, $2)
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value)
 	return err

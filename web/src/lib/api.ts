@@ -132,6 +132,23 @@ function getToken(): string | null {
   return localStorage.getItem("4zreco_token");
 }
 
+let basicAuthReloading = false;
+
+// 通过页面导航续外层 HTTP Basic Auth 门会话：页面加载时浏览器可以携带 Basic
+// 凭据而不占用 API 请求的 Bearer 头。保住管理员 token，并把并发失败收敛成
+// 一次刷新（后端门失败标记 X-Zreco-Auth: basic，见 internal/server/basic_auth.go）。
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  if (basicAuthReloading) throw new Error("访问验证已过期，正在重新验证");
+  const response = await fetch(input, init);
+  if (basicAuthReloading) throw new Error("访问验证已过期，正在重新验证");
+  if (response.status === 401 && response.headers.get("X-Zreco-Auth") === "basic") {
+    basicAuthReloading = true;
+    window.location.reload();
+    throw new Error("访问验证已过期，正在重新验证");
+  }
+  return response;
+}
+
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   // Mock handler 按需加载:handler 静态引着 242KB 的 demo 数据集(data.ts),无条件
   // import 会把它拖进首屏主包——生产构建(NEXT_PUBLIC_MOCK 未设)白白付出体积。
@@ -141,7 +158,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
     return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   }
   const token = getToken();
-  const r = await fetch(`/api${path}`, {
+  const r = await apiFetch(`/api${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
@@ -888,6 +905,11 @@ export const api = {
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+  // 可选 HTTP Basic Auth 访问门（ARTEX 移植 A4）。公开视图不含口令哈希；
+  // password 留空=不上送（不改既有口令）。
+  basicAuthSettings: () => get<{ enabled: boolean; username: string; password_set: boolean }>(`/settings/basic-auth`),
+  setBasicAuthSettings: (patch: { enabled: boolean; username: string; password: string }) =>
+    put<{ enabled: boolean; username: string; password_set: boolean }>(`/settings/basic-auth`, patch),
   // IM 交互机器人配置：密钥留空=不上送（不改），后端保存即全停重起对应平台的收发循环。
   setIMBot: (patch: ImBotSettingsInput) => put<Settings>(`/settings`, { im_bot: patch }),
   // Run a real "test" search with the given (or saved) config to verify it works.

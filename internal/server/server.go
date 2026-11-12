@@ -53,6 +53,10 @@ type Server struct {
 	keyDir   string       // directory holding jwt.key（= paths.Base）
 	jwtKey   atomic.Value // HS256 signing key ([]byte); replaceable to revoke sessions
 
+	// basicAuth 是可选 HTTP Basic Auth 访问门（basic_auth.go）：配置快照 + settings
+	// 存储。请求走内存快照，只有保存成功后才发布新配置。
+	basicAuth basicAuthGate
+
 	// 文档预览（v0.4.21）：Office/PDF 取样转图片，单 worker 串行（LibreOffice
 	// 的 UserInstallation 不能并发），queue 只放 artifact id。
 	previewOnce sync.Once
@@ -194,6 +198,11 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 	s.jwtKey.Store(key)
 	if m.pg != nil {
 		m.pg.SetAuditKey(auditKey)
+		// HTTP Basic Auth 门配置随启动加载（加载失败致命：半生效的门配置等于
+		// 访问控制处于未定义状态）。
+		if err := s.basicAuth.load(m.pg); err != nil {
+			log.Fatalf("[auth] load HTTP Basic Auth: %v", err)
+		}
 	}
 	// 出口审查：注册平台敏感指纹（jwt.key 已就绪、PG 可用；LLM profile 变更经
 	// reapplyActiveProfile 重注册）。best-effort，失败只影响拦截面。
@@ -758,6 +767,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/change-password", s.authChangePassword)
 
+	// 可选 HTTP Basic Auth 门（basic_auth.go）：/api/basic-auth/check 是凭据换取
+	// 门 cookie 的入口（requireAuth 豁免），settings 两条走默认 JWT 鉴权。
+	mux.HandleFunc("GET /api/basic-auth/check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/settings/basic-auth", s.getBasicAuthSettings)
+	mux.HandleFunc("PUT /api/settings/basic-auth", s.saveBasicAuthSettings)
+
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/system/metrics", s.systemMetrics)
@@ -1093,7 +1111,10 @@ func (s *Server) Handler() http.Handler {
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
-	return root
+	// 最外层可选 HTTP Basic Auth 门（basic_auth.go）：套在 requireAuth 外层——
+	// /api/ 请求先过 Basic 挑战再过 JWT；页面路径同样被挑战（门启用时静态前端
+	// 壳也受保护，浏览器经原生 Basic 弹窗换取门 cookie 后才能进入）。
+	return s.requireBasicAuth(root)
 }
 
 // --- handlers ---

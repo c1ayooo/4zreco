@@ -29,6 +29,7 @@ import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSend
 import type { ImBotSettingsInput, Settings } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+import { BasicAuthCard } from "./_components/basic-auth-card";
 import { UpdateCard } from "./_components/update-card";
 
 export default function SystemSettingsPage() {
@@ -559,6 +560,8 @@ export default function SystemSettingsPage() {
       ) : (
         <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
           <UpdateCard />
+
+          <BasicAuthCard />
 
           <Card className="mb-4 break-inside-avoid md:mb-6">
             <CardHeader>

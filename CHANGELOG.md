@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+### 新增：可选 HTTP Basic Auth 访问门——ARTEX 移植 A4
+
+- **后端**（`internal/server/basic_auth.go`）：整站可选 HTTP Basic Auth 门，套在
+  `Handler()` 最外层（`requireAuth` 之外——`/api/` 请求先过 Basic 挑战再过 JWT，
+  页面路径同样被挑战）。配置存 settings 键 `auth.http_basic`
+  （{enabled, username, password_hash(bcrypt), revision}），每次保存轮换 revision
+  使旧门会话全部失效；签名 key 从 `s.currentJWTKey` HMAC 派生（audience 独立，
+  门 cookie 永远不能当管理员 JWT 用），cookie 名 `4zreco_basic_auth`（HttpOnly +
+  Strict + HTTPS 下 Secure，TTL 12h）。豁免 `/api/health`（无信息探活端点，供监控
+  探测，ARTEX 原版对此挑战，此处按方案豁免）、OPTIONS 预检；`/api/basic-auth/check`
+  是凭据换门 cookie 的入口（requireAuth 豁免、门本身挑战）。其余 API 401 只回
+  `X-Zreco-Auth: basic` 标记不带 WWW-Authenticate，防浏览器原生弹窗循环，由前端
+  刷新页面一次续外层会话。`db.SetSettingContext` 随迁（有界上下文写库：保存带
+  10s 超时、随请求取消放弃，未提交配置不发布、不阻塞请求快照）。启动加载失败
+  致命（半生效的门配置等于访问控制未定义）。依赖 bcrypt/jwt/v5/uuid 均已有，
+  零新增。
+- **前端**：设置页新增 `BasicAuthCard`（启用开关 + 用户名/口令，文案硬编码中文）；
+  `api.basicAuthSettings/setBasicAuthSettings` 与 `apiFetch` 门失败刷新逻辑随迁；
+  `web/src/proxy.ts` 加 dev 代理探测——next dev 页面过与内嵌前端相同的门
+  （凭据只发 loopback 后端，远程后端启用门时要求经内嵌前端访问）。
+- 路由：`GET /api/basic-auth/check`、`GET/PUT /api/settings/basic-auth`（后两条
+  走默认 JWT 鉴权）。
+- 测试：`internal/server/basic_auth_test.go`——门状态机表驱动（启用/禁用/凭据/
+  cookie 篡改/admin JWT 不可穿透/health 豁免/challenge 头语义）、保存持久化与
+  revision 撤销、校验与加载失败 fail-closed、过期 cookie 与 Secure 标志、门阻塞
+  保存不阻塞请求/随取消释放、门过期后的会话恢复；PG 门控回归
+  `TestBasicAuthPostgresLoginFlowPG`（真库走 保存→重启加载→登录→停用 全链）。
+
 ### 新增：系统资源指标接口与仪表盘展示——ARTEX 移植 A3
 
 - **后端**（`internal/server/system_metrics*.go`）：`GET /api/system/metrics` 返回 CPU/
