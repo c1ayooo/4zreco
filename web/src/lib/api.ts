@@ -94,6 +94,7 @@ import type {
   SSProject,
   SSTask,
   Stats,
+  SystemMetrics,
   Task,
   TaskArchive,
   TaskArchivePage,
@@ -266,6 +267,8 @@ export const api = {
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; status: string }>("/health"),
   version: () => get<{ service: string; version: string }>("/version"),
+  // 系统资源指标（dashboard 顶部 5s 轮询；移植自 ARTEX 0.3.29 A3）。
+  systemMetrics: () => get<SystemMetrics>("/system/metrics"),
 
   // ---- auth ----
   authStatus: () => get<{ initialized: boolean }>("/auth/status"),

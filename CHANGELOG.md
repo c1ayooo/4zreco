@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### 新增：系统资源指标接口与仪表盘展示——ARTEX 移植 A3
+
+- **后端**（`internal/server/system_metrics*.go`）：`GET /api/system/metrics` 返回 CPU/
+  内存/根盘/数据盘即时快照（scope/supported/timestamp + 各项 used_bytes/total_bytes/
+  percent）。Linux 实现走 cgroup v1/v2（cpu.stat/memory.current|usage_in_bytes）+
+  /proc/meminfo + Statfs，CPU 百分比为跨请求差分（基线存 `Server` 新增的
+  metricsMu/lastCPUUse/lastCPUAt，首采样返回 0）；非 Linux 平台返回 unsupported 占位。
+  数据盘根取 `config.Paths.Data`（运行时目录唯一解析点）；判定逻辑纯 Go，不感知 eino。
+- **前端**：dashboard 头部右侧新增 `SystemResourceStatus` 资源条（CPU/内存/磁盘三项
+  进度条，5s 轮询独立 effect，不支持平台显示「资源指标不可用」）；`api.systemMetrics()`
+  + `SystemMetrics` 类型随迁，文案硬编码中文（无 i18n）。
+- 测试：`internal/server/system_metrics_test.go`（响应结构与元数据、CPU 百分比区间、
+  差分基线推进；非 Linux 回退分支按 GOOS 门控断言）。
+
 ### 新增：会话/任务 LLM 自动标题（auto_title）——ARTEX 移植 A2
 
 - **会话侧**（`internal/server/conversations.go` 首条用户消息挂点）：保留原「首行截 40 字」

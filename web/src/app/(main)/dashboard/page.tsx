@@ -9,6 +9,9 @@ import {
   ArrowUpRightIcon,
   BugIcon,
   ClockIcon,
+  CpuIcon,
+  HardDriveIcon,
+  MemoryStickIcon,
   NetworkIcon,
   ShieldCheckIcon,
   TargetIcon,
@@ -35,6 +38,7 @@ import type {
   Settings,
   SkillItem,
   Stats,
+  SystemMetrics,
   Task,
   TokenTotal,
   Tool,
@@ -109,6 +113,48 @@ function LiveDot({ className }: { className?: string }) {
   return <span className={cn("inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-info", className)} />;
 }
 
+// 系统资源状态条（移植自 ARTEX 0.3.29 A3 的 SystemResourceStatus）：header 右侧
+// CPU/内存/数据盘 三项进度条，数据由页面级 5s 轮询注入。不支持的平台只留一行提示。
+function SystemResourceStatus({ metrics }: { metrics: SystemMetrics | null }) {
+  if (!metrics) return null;
+  if (!metrics.supported) {
+    return (
+      <div className="ml-auto text-xs text-muted-foreground" role="status">
+        资源指标不可用
+      </div>
+    );
+  }
+  const items = [
+    { Icon: CpuIcon, label: "CPU", value: metrics.cpu.percent },
+    { Icon: MemoryStickIcon, label: "内存", value: metrics.memory.percent },
+    { Icon: HardDriveIcon, label: "磁盘", value: metrics.data_disk.percent },
+  ];
+  return (
+    <div
+      className="ml-auto flex min-w-0 items-center justify-end gap-3 text-xs text-muted-foreground"
+      role="status"
+      aria-live="polite"
+    >
+      <span className="shrink-0 font-medium">系统资源</span>
+      {items.map(({ Icon, label, value }) => (
+        <div key={label} className="w-24 min-w-0" title={`${label} ${value.toFixed(1)}%`}>
+          <div className="mb-1 flex items-center justify-between gap-1 text-xs">
+            <span className="inline-flex items-center gap-1">
+              <Icon className="size-3" aria-hidden="true" />
+              {label}
+            </span>
+            <span className="tabular-nums">{value.toFixed(1)}%</span>
+          </div>
+          <Progress
+            value={value}
+            className="h-2 bg-muted [&_[data-slot=progress-indicator]]:bg-muted-foreground"
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SectionTitle({
   icon: Icon,
   children,
@@ -152,6 +198,26 @@ export default function DashboardPage() {
   const [_skills, setSkills] = React.useState<SkillItem[]>([]);
   const [tools, setTools] = React.useState<Tool[]>([]);
   const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
+  const [systemMetrics, setSystemMetrics] = React.useState<SystemMetrics | null>(null);
+
+  // 系统资源指标独立 5s 轮询（CPU 是跨请求差分，采样间隔即精度；移植自 ARTEX 0.3.29 A3）。
+  React.useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const next = await api.systemMetrics();
+        if (alive) setSystemMetrics(next);
+      } catch {
+        /* retry on the next interval */
+      }
+    };
+    void load();
+    const timer = setInterval(load, 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   // 首屏骨架门（§8：首屏未到时 Skeleton 行块，不显示假 0/假空态；轮询刷新不回退骨架）
   const [tasksReady, setTasksReady] = React.useState(false);
@@ -515,7 +581,10 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-1 flex-col gap-4 pb-6">
       {/* ── Header ── */}
-      <h1 className="font-semibold text-2xl tracking-tight">总览</h1>
+      <div className="flex flex-wrap items-center gap-4">
+        <h1 className="font-semibold text-2xl tracking-tight">总览</h1>
+        <SystemResourceStatus metrics={systemMetrics} />
+      </div>
 
       {/* ── Row 1: 5 stat cards ── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">

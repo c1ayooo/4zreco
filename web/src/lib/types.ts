@@ -1461,6 +1461,26 @@ export interface Stats {
   active_task?: Partial<Task>;
 }
 
+// ---- System Metrics ----
+// GET /api/system/metrics：CPU/内存/根盘/数据盘即时快照（移植自 ARTEX 0.3.29 A3）。
+// CPU percent 是跨请求差分，首次请求为 0；supported=false 时其余字段为占位零值。
+export interface SystemMetricValue {
+  used_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
+export interface SystemMetrics {
+  scope: string;
+  supported: boolean;
+  timestamp: string;
+  cpu: SystemMetricValue;
+  memory: SystemMetricValue;
+  disk: SystemMetricValue;
+  data_disk: SystemMetricValue;
+  container_metrics: boolean;
+}
+
 // ---- Intercept Rules ----
 export type InterceptAction = "allow" | "deny" | "ask" | "judge";
 export type InterceptMatchTarget = "tool_name" | "tool_input";
