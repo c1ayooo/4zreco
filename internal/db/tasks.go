@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Task is a row in the task registry (1:1 with an exploration).
 type Task struct {
 	ID            int64      `json:"id"`
 	Name          string     `json:"name"` // 可选任务名称;空=未命名
+	Remark        string     `json:"remark"` // 任务备注(最多 MaxTaskRemarkRunes 字符);空=无备注
 	CategoryID    *int64     `json:"category_id,omitempty"`
 	CategoryName  string     `json:"category_name,omitempty"`
 	Pinned        bool       `json:"pinned"`
@@ -96,6 +99,21 @@ const MaxTaskSourceCount = 8
 // task. Company scopes are prompt context, and their currently attributed
 // assets are snapshotted into the task at creation time.
 const MaxTaskCompanyCount = 32
+
+// MaxTaskRemarkRunes is the shared limit for task and template remarks
+// (ARTEX 移植 A1)。超限的备注在写入前被 NormalizeTaskRemark 拒绝。
+const MaxTaskRemarkRunes = 2000
+
+// NormalizeTaskRemark trims and bounds a task/template remark. Empty remarks
+// are allowed ("" = 无备注); over-limit ones are rejected with a user-facing
+// error message.
+func NormalizeTaskRemark(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) > MaxTaskRemarkRunes {
+		return "", fmt.Errorf("备注最多 %d 个字符", MaxTaskRemarkRunes)
+	}
+	return value, nil
+}
 
 const taskCompanyAssetSource = "company"
 
@@ -365,14 +383,14 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 	return nil
 }
 
-const taskCols = `id, COALESCE(name,''), category_id,
+const taskCols = `id, COALESCE(name,''), COALESCE(remark,''), category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
 description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(auth_config::text,'null'), project_id`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	var authRaw string
-	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &authRaw, &t.ProjectID); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &authRaw, &t.ProjectID); err != nil {
 		return nil, err
 	}
 	t.AuthConfig = ParseTaskAuth([]byte(authRaw))
@@ -416,21 +434,31 @@ ORDER BY (pinned_at IS NOT NULL) DESC, pinned_at DESC NULLS LAST, id DESC`)
 // TaskPatch updates task list metadata without changing execution state.
 type TaskPatch struct {
 	Name   *string
+	Remark *string
 	Pinned *bool
 }
 
-// UpdateTask applies a partial task name/pin mutation and returns the updated row.
-// Re-pinning an already pinned task preserves its original position.
+// UpdateTask applies a partial task name/remark/pin mutation and returns the
+// updated row. Re-pinning an already pinned task preserves its original
+// position. A set Remark is trimmed and bounded by NormalizeTaskRemark.
 func (d *DB) UpdateTask(id int64, patch TaskPatch) (*Task, error) {
+	if patch.Remark != nil {
+		remark, err := NormalizeTaskRemark(*patch.Remark)
+		if err != nil {
+			return nil, err
+		}
+		patch.Remark = &remark
+	}
 	task, err := scanTask(d.QueryRow(`UPDATE tasks SET
 	name = CASE WHEN $2::boolean THEN $3 ELSE name END,
+	remark = CASE WHEN $5::boolean THEN $6 ELSE remark END,
 	pinned_at = CASE
 		WHEN $4::boolean IS NULL THEN pinned_at
 		WHEN $4::boolean THEN COALESCE(pinned_at, now())
 		ELSE NULL
 	END
 WHERE id=$1 AND deleted_at IS NULL
-RETURNING `+taskCols, id, patch.Name != nil, patch.Name, patch.Pinned))
+RETURNING `+taskCols, id, patch.Name != nil, patch.Name, patch.Pinned, patch.Remark != nil, patch.Remark))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

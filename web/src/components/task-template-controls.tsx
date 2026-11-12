@@ -33,13 +33,14 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
-import type { AssetInterceptRuleInput, TaskCategory, TaskTemplate } from "@/lib/types";
+import { MAX_TASK_REMARK_RUNES, type AssetInterceptRuleInput, type TaskCategory, type TaskTemplate } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface TemplateDraft {
   name: string;
   description: string;
   goal: string;
+  remark: string;
   categoryID: number | null;
   interceptRules: AssetInterceptRuleInput[];
 }
@@ -61,6 +62,7 @@ const emptyDraft = (): TemplateDraft => ({
   name: "",
   description: "",
   goal: "",
+  remark: "",
   categoryID: null,
   interceptRules: [],
 });
@@ -70,6 +72,7 @@ function templateDraft(template: TaskTemplate): TemplateDraft {
     name: template.name,
     description: template.description,
     goal: template.goal,
+    remark: template.remark ?? "",
     categoryID: template.category_id ?? null,
     interceptRules: template.intercept_rules ?? [],
   };
@@ -108,6 +111,7 @@ function TaskTemplateManager({
           name: "",
           description: seed.description,
           goal: seed.goal,
+          remark: "",
           categoryID: seed.categoryID,
           interceptRules: seed.interceptRules,
         });
@@ -132,7 +136,7 @@ function TaskTemplateManager({
     setDraft(emptyDraft());
   };
 
-  const updateDraft = (field: "name" | "description" | "goal", value: string) => {
+  const updateDraft = (field: "name" | "description" | "goal" | "remark", value: string) => {
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
@@ -145,6 +149,7 @@ function TaskTemplateManager({
       name: draft.name.trim(),
       description: draft.description.trim(),
       goal: draft.goal.trim(),
+      remark: draft.remark.trim(),
       category_id: draft.categoryID,
       intercept_rules: draft.interceptRules
         .map((r) => ({ ...r, pattern: r.pattern.trim() }))
@@ -234,6 +239,11 @@ function TaskTemplateManager({
                     >
                       <span className="block truncate font-medium text-sm">{template.name}</span>
                       <span className="block truncate text-muted-foreground text-xs">{template.description}</span>
+                      {template.remark && (
+                        <span className="block truncate text-muted-foreground text-xs" title={template.remark}>
+                          备注：{template.remark}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -269,6 +279,17 @@ function TaskTemplateManager({
                     value={draft.goal}
                     placeholder="任务需要达成的目标"
                     onChange={(event) => updateDraft("goal", event.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="task-template-remark">备注（可选）</FieldLabel>
+                  <Textarea
+                    id="task-template-remark"
+                    className="min-h-16"
+                    value={draft.remark}
+                    maxLength={MAX_TASK_REMARK_RUNES}
+                    placeholder="补充说明，应用模板时不带入任务"
+                    onChange={(event) => updateDraft("remark", event.target.value)}
                   />
                 </Field>
                 <Field>

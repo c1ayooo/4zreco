@@ -48,6 +48,7 @@ import {
 import { toast } from "sonner";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
+import { RemarkEditor } from "@/components/remark-editor";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
@@ -649,6 +650,21 @@ export default function TasksPage() {
     [load],
   );
 
+  const updateTaskRemark = React.useCallback(
+    async (task: Task, remark: string) => {
+      try {
+        await api.updateTask(task.id, { remark });
+        toast.success(`任务 #${task.id} 备注已保存`);
+        lastRef.current = "";
+        load();
+      } catch (error) {
+        toast.error(`备注保存失败：${(error as Error).message}`);
+        throw error;
+      }
+    },
+    [load],
+  );
+
   const toggleTaskPinned = React.useCallback(
     async (task: Task) => {
       const pinned = taskIsPinned(task);
@@ -1042,6 +1058,7 @@ export default function TasksPage() {
                         onSort={sortTasksBy}
                       />
                       <TableHead>名称</TableHead>
+                      <TableHead className="hidden xl:table-cell">备注</TableHead>
                       <TableHead className="hidden sm:table-cell">描述</TableHead>
                       <TableHead className="hidden lg:table-cell">目标</TableHead>
                       <SortableTaskHead
@@ -1092,6 +1109,7 @@ export default function TasksPage() {
                         onDelete={deleteTask}
                         onControl={controlTask}
                         onRename={renameTask}
+                        onRemark={updateTaskRemark}
                         onTogglePinned={toggleTaskPinned}
                         onArchive={queueTaskArchive}
                         selected={selectedIds.has(task.id)}
@@ -1269,6 +1287,7 @@ const TaskRow = React.memo(function TaskRow({
   onDelete,
   onControl,
   onRename,
+  onRemark,
   onTogglePinned,
   onArchive,
   selected,
@@ -1280,6 +1299,7 @@ const TaskRow = React.memo(function TaskRow({
   onDelete: (id: string, options: DeleteTaskOptions) => Promise<void>;
   onControl: (id: string, action: "pause" | "resume") => Promise<void>;
   onRename: (task: Task, name: string) => Promise<void>;
+  onRemark: (task: Task, remark: string) => Promise<void>;
   onTogglePinned: (task: Task) => Promise<void>;
   onArchive: (task: Task) => Promise<void>;
   selected: boolean;
@@ -1313,6 +1333,13 @@ const TaskRow = React.memo(function TaskRow({
             </Badge>
           )}
         </div>
+      </TableCell>
+      <TableCell className="hidden xl:table-cell">
+        <RemarkEditor
+          value={task.remark ?? ""}
+          label={`任务 #${task.id}`}
+          onSave={(remark) => onRemark(task, remark)}
+        />
       </TableCell>
       <TableCell className="hidden text-muted-foreground sm:table-cell">
         <Link

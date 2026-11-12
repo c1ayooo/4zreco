@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### 新增：任务/计划/模板备注（remark）——ARTEX 移植 A1
+
+- `tasks` / `task_templates` 各加 `remark TEXT NOT NULL DEFAULT ''` 列（schema.sql 幂等追加，
+  `task_schedules` 的 remark 留给 A7 计划任务工单）；共享上限 `db.MaxTaskRemarkRunes=2000`
+  字符（`NormalizeTaskRemark` 单点 trim+校验，db `UpdateTask` 与模板 normalize 双层把关）。
+- `PATCH /api/tasks/{id}` 扩 `remark`（可 remark-only 补丁）；模板
+  `POST/PATCH /api/task-templates` 同步扩 `remark`；`TaskDTO` 回传 remark
+  （server 端经 taskLifecycleState 快照链路）。
+- 前端：新增 `remark-editor` 行内编辑组件（ARTEX 同款交互：Enter 保存/Esc 取消/失焦语义，
+  i18n 调用剥离为中文硬编码）；任务表新增「备注」列（xl 断点起显示）；模板管理抽屉加
+  备注字段并在模板列表展示。
+- 测试：`NormalizeTaskRemark`/模板 normalize 纯函数单测 + 任务备注/模板备注 PG 门控
+  （边界 2000 通过、2001 拒绝、落盘回读）+ HTTP PATCH 回归（remark-only、超限 400、
+  空补丁 400、边界落盘）。
+
 ### 新增：worker 零工具收场自愈——模型行为退化自动纠正与重派
 
 - 实证病灶：中转上游模型劣化时，worker 把系统提示的「你是执行 agent…」误读成

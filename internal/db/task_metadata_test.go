@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -66,6 +67,63 @@ func TestTaskPinOrderingAndRename(t *testing.T) {
 	first, err = d.UpdateTask(first.ID, TaskPatch{Pinned: &pinned})
 	if err != nil || first == nil || first.Pinned || first.PinnedAt != nil {
 		t.Fatalf("unpin first = %+v, %v", first, err)
+	}
+}
+
+func TestNormalizeTaskRemark(t *testing.T) {
+	// 纯函数单测：trim 与上限校验（ARTEX 移植 A1）。
+	got, err := NormalizeTaskRemark("  带空白的备注  ")
+	if err != nil || got != "带空白的备注" {
+		t.Fatalf("NormalizeTaskRemark = %q, %v", got, err)
+	}
+	if got, err := NormalizeTaskRemark("   "); err != nil || got != "" {
+		t.Fatalf("whitespace remark = %q, %v, want empty with no error", got, err)
+	}
+	if _, err := NormalizeTaskRemark(strings.Repeat("界", MaxTaskRemarkRunes)); err != nil {
+		t.Fatalf("boundary remark (%d runes) must pass: %v", MaxTaskRemarkRunes, err)
+	}
+	_, err = NormalizeTaskRemark(strings.Repeat("界", MaxTaskRemarkRunes+1))
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("备注最多 %d 个字符", MaxTaskRemarkRunes)) {
+		t.Fatalf("over-limit remark error = %v, want 备注最多 %d 个字符", err, MaxTaskRemarkRunes)
+	}
+}
+
+func TestTaskRemarkPatchValidatedAndPersisted(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer d.Close()
+
+	suffix := time.Now().UnixNano()
+	task, err := d.CreateTask(fmt.Sprintf("task-remark-%d", suffix), "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.DeleteTask(task.ID) }()
+
+	remark := strings.Repeat("界", MaxTaskRemarkRunes)
+	updated, err := d.UpdateTask(task.ID, TaskPatch{Remark: &remark})
+	if err != nil || updated == nil {
+		t.Fatalf("boundary remark patch = %+v, %v", updated, err)
+	}
+	got, err := d.GetTask(task.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetTask = %+v, %v", got, err)
+	}
+	if got.Remark != remark {
+		t.Fatalf("remark not persisted (len=%d, want %d)", len([]rune(got.Remark)), MaxTaskRemarkRunes)
+	}
+
+	over := strings.Repeat("界", MaxTaskRemarkRunes+1)
+	if _, err := d.UpdateTask(task.ID, TaskPatch{Remark: &over}); err == nil {
+		t.Fatalf("over-limit remark patch must fail")
+	}
+
+	empty := "  "
+	updated, err = d.UpdateTask(task.ID, TaskPatch{Remark: &empty})
+	if err != nil || updated == nil || updated.Remark != "" {
+		t.Fatalf("blank remark should normalize to empty: %+v, %v", updated, err)
 	}
 }
 

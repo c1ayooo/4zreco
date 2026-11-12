@@ -7,6 +7,7 @@ export type EngineMode = "exploring" | "paused" | "stalled" | "idle";
 export interface Task {
   id: string;
   name?: string; // 可选任务名称;空/缺省=未命名,展示时回退到描述
+  remark?: string; // 任务备注;空/缺省=无备注
   category_id?: number;
   category_name?: string;
   pinned?: boolean;
@@ -57,11 +58,15 @@ export interface TaskTemplate {
   name: string;
   description: string;
   goal: string;
+  remark?: string; // 模板备注;空/缺省=无备注
   category_id?: number | null; // 预设分类；null/缺省=无
   intercept_rules?: AssetInterceptRuleInput[]; // 预设的任务级拦截/允许规则
   created_at: string;
   updated_at: string;
 }
+
+// 任务/模板备注共用上限（后端 db.MaxTaskRemarkRunes）。
+export const MAX_TASK_REMARK_RUNES = 2000;
 
 export interface DeleteTaskOptions {
   delete_assets: boolean;

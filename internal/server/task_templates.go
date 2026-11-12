@@ -22,6 +22,7 @@ type taskTemplateRequest struct {
 	Name           *string                `json:"name"`
 	Description    *string                `json:"description"`
 	Goal           *string                `json:"goal"`
+	Remark         *string                `json:"remark"`
 	CategoryID     *int64                 `json:"category_id"`
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules"`
 }
@@ -65,6 +66,7 @@ func validateTaskTemplateRequest(req taskTemplateRequest) error {
 		{name: "name", value: req.Name, limit: db.MaxTaskTemplateNameRunes},
 		{name: "description", value: req.Description, limit: db.MaxTaskTemplateTextRunes},
 		{name: "goal", value: req.Goal, limit: db.MaxTaskTemplateTextRunes},
+		{name: "remark", value: req.Remark, limit: db.MaxTaskRemarkRunes}, // 与任务备注 normalizeRemark 上限一致
 	}
 	for _, check := range checks {
 		if check.value == nil {
@@ -75,6 +77,9 @@ func validateTaskTemplateRequest(req taskTemplateRequest) error {
 			value = strings.Join(strings.Fields(value), " ")
 		}
 		if utf8.RuneCountInString(value) > check.limit {
+			if check.name == "remark" {
+				return fmt.Errorf("备注最多 %d 个字符", check.limit)
+			}
 			return fmt.Errorf("%s 最多 %d 个字符", check.name, check.limit)
 		}
 	}
@@ -129,6 +134,7 @@ func (s *Server) pgCreateTaskTemplate(w http.ResponseWriter, r *http.Request) {
 		Name:           stringValue(req.Name),
 		Description:    stringValue(req.Description),
 		Goal:           stringValue(req.Goal),
+		Remark:         stringValue(req.Remark),
 		CategoryID:     req.CategoryID,
 		InterceptRules: rules,
 	})
@@ -160,11 +166,12 @@ func (s *Server) pgUpdateTaskTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	_, catPresent := present["category_id"]
 	_, rulesPresent := present["intercept_rules"]
-	if req.Name == nil && req.Description == nil && req.Goal == nil && !catPresent && !rulesPresent {
-		writeErr(w, http.StatusBadRequest, "至少需要提供 name、description、goal、category_id 或 intercept_rules")
+	_, remarkPresent := present["remark"]
+	if req.Name == nil && req.Description == nil && req.Goal == nil && !remarkPresent && !catPresent && !rulesPresent {
+		writeErr(w, http.StatusBadRequest, "至少需要提供 name、description、goal、remark、category_id 或 intercept_rules")
 		return
 	}
-	patch := db.TaskTemplatePatch{Name: req.Name, Description: req.Description, Goal: req.Goal}
+	patch := db.TaskTemplatePatch{Name: req.Name, Description: req.Description, Goal: req.Goal, Remark: req.Remark}
 	if catPresent {
 		patch.SetCategoryID = true
 		patch.CategoryID = req.CategoryID

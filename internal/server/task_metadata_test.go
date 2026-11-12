@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/c1ayooo/4zreco/internal/config"
+	"github.com/c1ayooo/4zreco/internal/db"
 )
 
 func TestTaskMetadataPatchReturnsRenameAndPin(t *testing.T) {
@@ -59,6 +60,85 @@ func TestTaskMetadataPatchReturnsRenameAndPin(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("overlong task name status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTaskMetadataPatchRemark(t *testing.T) {
+	m, err := NewManager(testDir(t), "")
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	defer m.Close()
+	task, err := m.CreateTask("metadata remark patch", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, _ := strconv.ParseInt(task.ID, 10, 64)
+	defer func() { _ = m.pg.DeleteTask(taskID) }()
+	s := New(context.Background(), m, config.Paths{Skills: testDir(t), Data: testDir(t), Base: testDir(t)})
+	token, err := signJWT(s.currentJWTKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// remark-only patch：只带 remark 也能通过校验并回写。
+	body, _ := json.Marshal(map[string]any{"remark": "  外网入口，弱口令已确认  "})
+	req := httptest.NewRequest(http.MethodPatch, "/api/tasks/"+task.ID, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remark patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var updated struct {
+		Remark string `json:"remark"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Remark != "外网入口，弱口令已确认" {
+		t.Fatalf("remark not trimmed/persisted: %q", updated.Remark)
+	}
+
+	// 超 2000 rune 拒绝（HTTP 层与 db 层同一上限）。
+	body, _ = json.Marshal(map[string]any{"remark": strings.Repeat("界", db.MaxTaskRemarkRunes+1)})
+	req = httptest.NewRequest(http.MethodPatch, "/api/tasks/"+task.ID, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("overlong remark status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 空补丁拒绝。
+	body, _ = json.Marshal(map[string]any{})
+	req = httptest.NewRequest(http.MethodPatch, "/api/tasks/"+task.ID, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 边界值 2000 rune 通过，且 DB 落盘值与响应一致。
+	body, _ = json.Marshal(map[string]any{"remark": strings.Repeat("界", db.MaxTaskRemarkRunes)})
+	req = httptest.NewRequest(http.MethodPatch, "/api/tasks/"+task.ID, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("boundary remark status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Repeat("界", db.MaxTaskRemarkRunes)
+	if updated.Remark != want {
+		t.Fatalf("boundary remark not echoed (len=%d)", len([]rune(updated.Remark)))
+	}
+	persisted, err := m.pg.GetTask(taskID)
+	if err != nil || persisted == nil || persisted.Remark != want {
+		t.Fatalf("boundary remark not persisted: %+v, %v", persisted, err)
 	}
 }
 

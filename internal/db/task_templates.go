@@ -23,14 +23,15 @@ var (
 	ErrTaskTemplateNotFound     = errors.New("task template not found")
 )
 
-// TaskTemplate is a reusable task preset (description/goal + optional category
-// and task-level intercept/allow rules).
+// TaskTemplate is a reusable task preset (description/goal + optional remark,
+// category and task-level intercept/allow rules).
 type TaskTemplate struct {
 	ID             int64                    `json:"id"`
 	Name           string                   `json:"name"`
 	NKey           string                   `json:"-"`
 	Description    string                   `json:"description"`
 	Goal           string                   `json:"goal"`
+	Remark         string                   `json:"remark"`
 	CategoryID     *int64                   `json:"category_id"`
 	InterceptRules []TaskInterceptRuleInput `json:"intercept_rules"`
 	CreatedAt      time.Time                `json:"created_at"`
@@ -42,6 +43,7 @@ type TaskTemplateInput struct {
 	Name           string
 	Description    string
 	Goal           string
+	Remark         string
 	CategoryID     *int64
 	InterceptRules []TaskInterceptRuleInput
 }
@@ -53,18 +55,19 @@ type TaskTemplatePatch struct {
 	Name              *string
 	Description       *string
 	Goal              *string
+	Remark            *string
 	CategoryID        *int64
 	SetCategoryID     bool
 	InterceptRules    []TaskInterceptRuleInput
 	SetInterceptRules bool
 }
 
-const taskTemplateCols = `id, name, nkey, description, goal, category_id, intercept_rules, created_at, updated_at`
+const taskTemplateCols = `id, name, nkey, description, goal, COALESCE(remark,''), category_id, intercept_rules, created_at, updated_at`
 
 func scanTaskTemplate(row interface{ Scan(...any) error }) (TaskTemplate, error) {
 	var t TaskTemplate
 	var rulesRaw []byte
-	if err := row.Scan(&t.ID, &t.Name, &t.NKey, &t.Description, &t.Goal, &t.CategoryID, &rulesRaw, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.Name, &t.NKey, &t.Description, &t.Goal, &t.Remark, &t.CategoryID, &rulesRaw, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return t, err
 	}
 	t.InterceptRules = []TaskInterceptRuleInput{}
@@ -112,11 +115,16 @@ func normalizeTaskTemplateInput(in TaskTemplateInput) (TaskTemplateInput, string
 	case utf8.RuneCountInString(in.Goal) > MaxTaskTemplateTextRunes:
 		return in, "", fmt.Errorf("%w: goal exceeds %d characters", ErrTaskTemplateInvalid, MaxTaskTemplateTextRunes)
 	}
+	// 模板备注与任务备注共用同一上限，保证应用模板不会生成会被拒绝的任务备注。
+	in.Remark = strings.TrimSpace(in.Remark)
+	if utf8.RuneCountInString(in.Remark) > MaxTaskRemarkRunes {
+		return in, "", fmt.Errorf("%w: remark exceeds %d characters", ErrTaskTemplateInvalid, MaxTaskRemarkRunes)
+	}
 	return in, taskTemplateNKey(in.Name), nil
 }
 
 func normalizeTaskTemplatePatch(patch TaskTemplatePatch) (TaskTemplatePatch, *string, error) {
-	if patch.Name == nil && patch.Description == nil && patch.Goal == nil && !patch.SetCategoryID && !patch.SetInterceptRules {
+	if patch.Name == nil && patch.Description == nil && patch.Goal == nil && patch.Remark == nil && !patch.SetCategoryID && !patch.SetInterceptRules {
 		return patch, nil, fmt.Errorf("%w: no fields supplied", ErrTaskTemplateInvalid)
 	}
 	var nkey *string
@@ -152,6 +160,13 @@ func normalizeTaskTemplatePatch(patch TaskTemplatePatch) (TaskTemplatePatch, *st
 		}
 		patch.Goal = &goal
 	}
+	if patch.Remark != nil {
+		remark := strings.TrimSpace(*patch.Remark)
+		if utf8.RuneCountInString(remark) > MaxTaskRemarkRunes {
+			return patch, nil, fmt.Errorf("%w: remark exceeds %d characters", ErrTaskTemplateInvalid, MaxTaskRemarkRunes)
+		}
+		patch.Remark = &remark
+	}
 	return patch, nkey, nil
 }
 
@@ -171,10 +186,10 @@ func (d *DB) CreateTaskTemplate(in TaskTemplateInput) (*TaskTemplate, error) {
 		return nil, err
 	}
 	t, err := scanTaskTemplate(d.QueryRow(`
-INSERT INTO task_templates(name, nkey, description, goal, category_id, intercept_rules)
-VALUES ($1,$2,$3,$4,$5,$6)
+INSERT INTO task_templates(name, nkey, description, goal, remark, category_id, intercept_rules)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
 ON CONFLICT (nkey) DO NOTHING
-RETURNING `+taskTemplateCols, in.Name, nkey, in.Description, in.Goal, in.CategoryID, rulesJSON))
+RETURNING `+taskTemplateCols, in.Name, nkey, in.Description, in.Goal, in.Remark, in.CategoryID, rulesJSON))
 	if err == sql.ErrNoRows {
 		return nil, ErrTaskTemplateNameConflict
 	}
@@ -221,7 +236,7 @@ func (d *DB) UpdateTaskTemplate(id int64, in TaskTemplateInput) (*TaskTemplate, 
 		return nil, err
 	}
 	return d.PatchTaskTemplate(id, TaskTemplatePatch{
-		Name: &in.Name, Description: &in.Description, Goal: &in.Goal,
+		Name: &in.Name, Description: &in.Description, Goal: &in.Goal, Remark: &in.Remark,
 	})
 }
 
@@ -242,14 +257,16 @@ SET name=CASE WHEN $2 THEN $3::text ELSE name END,
     nkey=CASE WHEN $2 THEN $4::text ELSE nkey END,
     description=CASE WHEN $5 THEN $6::text ELSE description END,
     goal=CASE WHEN $7 THEN $8::text ELSE goal END,
-    category_id=CASE WHEN $9 THEN $10::bigint ELSE category_id END,
-    intercept_rules=CASE WHEN $11 THEN $12::jsonb ELSE intercept_rules END
+    remark=CASE WHEN $9 THEN $10::text ELSE remark END,
+    category_id=CASE WHEN $11 THEN $12::bigint ELSE category_id END,
+    intercept_rules=CASE WHEN $13 THEN $14::jsonb ELSE intercept_rules END
 WHERE id=$1
 RETURNING `+taskTemplateCols,
 		id,
 		patch.Name != nil, patch.Name, nkey,
 		patch.Description != nil, patch.Description,
 		patch.Goal != nil, patch.Goal,
+		patch.Remark != nil, patch.Remark,
 		patch.SetCategoryID, patch.CategoryID,
 		patch.SetInterceptRules, rulesJSON,
 	))

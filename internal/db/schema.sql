@@ -561,6 +561,8 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS active_llm_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS llm_chain_revision BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+-- 任务备注(ARTEX 移植 A1);上限 2000 字符(db.MaxTaskRemarkRunes),空串=无备注。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remark TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category_id, created_at DESC)
     WHERE deleted_at IS NULL AND category_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned_at DESC)
@@ -629,6 +631,8 @@ CREATE TABLE IF NOT EXISTS task_templates (
 -- 补旧库(已发版,加列带 IF NOT EXISTS)。
 ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS category_id BIGINT REFERENCES task_categories(id) ON DELETE SET NULL;
 ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS intercept_rules JSONB NOT NULL DEFAULT '[]';
+-- 模板备注(ARTEX 移植 A1);与任务备注同一上限(db.MaxTaskRemarkRunes),空串=无备注。
+ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS remark TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_task_templates_updated ON task_templates(updated_at DESC, id DESC);
 DROP TRIGGER IF EXISTS trg_task_templates_upd ON task_templates;
 CREATE TRIGGER trg_task_templates_upd BEFORE UPDATE ON task_templates
