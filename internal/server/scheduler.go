@@ -23,6 +23,10 @@ type Scheduler struct {
 	s    *Server
 	pg   *db.DB
 	tick time.Duration
+	// startedAt 是本次调度器启动时刻（日历计划 A7 的漏窗抑制以它为界：窗口在
+	// 启动前已打开且无 last_window_key 记录 → 标记 missed，不补跑）。boot 时刻
+	// 同时落 scheduler_state 持久留痕（schedule_boot_at）。
+	startedAt time.Time
 }
 
 const (
@@ -31,10 +35,11 @@ const (
 	schedKeyLastTimeout    = "last_timeout_id"    // watermark: max task id fired for task timeout
 	schedKeyLastToolCall   = "last_toolcall_id"   // watermark: max activity id fired for tool call
 	schedKeyLastTaskCreate = "last_taskcreate_id" // watermark: max task id fired for task create
+	schedKeyScheduleBoot   = "schedule_boot_at"   // watermark: 调度器本次 boot 时刻（日历计划漏窗判定基准，A7）
 )
 
 func newScheduler(s *Server) *Scheduler {
-	return &Scheduler{s: s, pg: s.m.pg, tick: 5 * time.Second}
+	return &Scheduler{s: s, pg: s.m.pg, tick: 5 * time.Second, startedAt: time.Now()}
 }
 
 // Run loops until ctx is done, ticking the scheduler. Started once from server New.
@@ -51,6 +56,7 @@ func (sc *Scheduler) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			sc.s.reconcileConcurrency() // 并发上限:有空位就把排队任务补位启动
+			sc.fireTaskSchedules()      // 日历式计划任务（A7）:窗口开合联动任务启停
 			sc.step()
 		}
 	}
@@ -59,6 +65,9 @@ func (sc *Scheduler) Run(ctx context.Context) {
 // init seeds the watermarks on first run so pre-existing findings/goals don't all
 // fire at once — only events created AFTER the scheduler first starts count.
 func (sc *Scheduler) init() {
+	// 日历计划 boot 水印（A7）：记录本次调度器启动时刻，供漏窗判定审计/排障；
+	// 判定本身用内存里的 startedAt（与 ARTEX 同语义：每次重启重新计漏窗基准）。
+	_ = sc.pg.SetSchedState(schedKeyScheduleBoot, sc.startedAt.UTC().Format(time.RFC3339))
 	if sc.mustState(schedKeyLastFinding) == "" {
 		var maxID int64
 		if evs, err := sc.pg.NewFindingsSince(0); err == nil {

@@ -2106,3 +2106,37 @@ export interface C2ConfigPatch {
   key?: string;
   iface?: string;
 }
+
+// ---- 日历式计划任务（移植自 ARTEX 0.3.29 A7）----
+export interface TaskSchedule {
+  id: number;
+  name: string;
+  remark?: string;
+  enabled: boolean;
+  timezone_mode: "beijing" | "system";
+  timezone?: string;
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  end_date?: string;
+  weekdays: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately: boolean;
+  status: "waiting" | "running" | "outside" | "completed" | "error" | "paused";
+  last_window_key?: string;
+  last_transition_at?: string;
+  last_error?: string;
+  next_start?: string;
+  next_end?: string;
+  run_count?: number;
+  last_run_at?: string;
+  task_ids: number[];
+  history?: Array<{
+    id: number;
+    task_id?: number;
+    action: string;
+    success: boolean;
+    message: string;
+    created_at: string;
+  }>;
+}

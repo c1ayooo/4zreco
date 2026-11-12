@@ -1677,7 +1677,9 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 // ApplyTaskPause atomically removes a task from the admission queue and records
 // the user pause. queue_mode is intentionally retained so resuming a never-run
 // bootstrap task still performs goal decomposition, but the next enqueue receives
-// a new queued_at timestamp and therefore moves to the FIFO tail.
+// a new queued_at timestamp and therefore moves to the FIFO tail. Manual pauses
+// clear the calendar-ownership flags (schedule_paused/schedule_manual_until, A7);
+// the scheduler re-asserts schedule_paused after its own pause call succeeds.
 func (m *Manager) ApplyTaskPause(id string) error {
 	m.taskStateMu.Lock()
 	defer m.taskStateMu.Unlock()
@@ -1687,7 +1689,8 @@ func (m *Manager) ApplyTaskPause(id string) error {
 	}
 	var mode string
 	err = m.pg.QueryRow(`UPDATE tasks
-		SET paused=true, queued=false, queued_at=NULL
+		SET paused=true, queued=false, queued_at=NULL,
+		    schedule_paused=false, schedule_manual_until=NULL
 		WHERE id=$1 AND deleted_at IS NULL AND paused=false
 		  AND status NOT IN ('done','failed','timeout')
 		RETURNING COALESCE(queue_mode,'')`, n).Scan(&mode)

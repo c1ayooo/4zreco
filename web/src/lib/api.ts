@@ -109,6 +109,7 @@ import type {
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
+  TaskSchedule,
   TaskScopeRow,
   TaskTemplate,
   TokenTotal,
@@ -281,6 +282,37 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
   return query.toString();
 }
 
+// 日历式计划任务（A7）的创建/编辑请求体；后端 db.NormalizeScheduleInput 做权威校验。
+export type ScheduleInput = {
+  name: string;
+  enabled?: boolean;
+  timezone_mode?: "beijing" | "system";
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  end_date?: string;
+  weekdays?: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately?: boolean;
+  task_ids: number[];
+};
+
+function schedulePayload(input: ScheduleInput) {
+  return {
+    name: input.name,
+    enabled: input.enabled ?? true,
+    timezone_mode: input.timezone_mode ?? "beijing",
+    schedule_type: input.schedule_type,
+    run_date: input.run_date ?? "",
+    end_date: input.end_date ?? "",
+    weekdays: input.weekdays ?? [],
+    start_time: input.start_time,
+    end_time: input.end_time ?? "",
+    start_immediately: input.start_immediately ?? false,
+    task_ids: input.task_ids ?? [],
+  };
+}
+
 export const api = {
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; status: string }>("/health"),
@@ -322,6 +354,9 @@ export const api = {
     interceptRules?: AssetInterceptRuleInput[];
     authConfig?: TaskAuthConfigInput;
     projectId?: number;
+    // 可选日历计划绑定（A7）：非空时随任务创建一条计划并绑定本任务；
+    // start_immediately=false 时任务落库即暂停，等首个窗口自动恢复。
+    schedule?: ScheduleInput;
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
@@ -339,8 +374,21 @@ export const api = {
       // 任务级登录凭据（v0.4.8）：密码/TOTP 只进 DB，API 永不回传。
       auth_config: input.authConfig?.enabled ? input.authConfig : undefined,
       project_id: input.projectId ?? null,
+      schedule: input.schedule ? schedulePayload(input.schedule) : undefined, // 日历计划绑定（A7）
     }),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
+  // ---- 日历式计划任务（移植自 ARTEX 0.3.29 A7）----
+  schedules: () => get<{ schedules: TaskSchedule[] }>("/schedules").then((r) => arr(r.schedules)),
+  renameSchedule: (id: number, name: string) => patch<TaskSchedule>(`/schedules/${id}/metadata`, { name }),
+  updateScheduleRemark: (id: number, remark: string) => patch<TaskSchedule>(`/schedules/${id}/remark`, { remark }),
+  schedule: (id: number) => get<TaskSchedule>(`/schedules/${id}`),
+  createSchedule: (input: ScheduleInput) => post<TaskSchedule>("/schedules", schedulePayload(input)),
+  updateSchedule: (id: number, input: ScheduleInput) => patch<TaskSchedule>(`/schedules/${id}`, schedulePayload(input)),
+  deleteSchedule: (id: number) => del<{ ok: boolean }>(`/schedules/${id}`),
+  pauseSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/pause`, {}),
+  resumeSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/resume`, {}),
+  runScheduleNow: (id: number) =>
+    post<{ ok: boolean; started: number; errors?: string[] }>(`/schedules/${id}/run-now`, {}),
   updateTask: (id: string, input: { name?: string; pinned?: boolean; remark?: string }) =>
     patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),

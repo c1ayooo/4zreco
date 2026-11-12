@@ -4,6 +4,47 @@
 
 ## [Unreleased]
 
+### 新增：日历式计划任务——ARTEX 移植 A7
+
+- **schema**（`internal/db/schema.sql` 末节幂等追加）：`task_schedules`
+  （once/weekly 日历窗口，beijing/system 时区，CHECK 约束 + remark 列）、
+  `task_schedule_tasks`（窗口↔任务多对多绑定 + paused_by_schedule 标记）、
+  `task_schedule_history`（启停联动/状态迁移留痕）三表；`tasks` 补
+  `schedule_paused`（计划暂停的权威标记）与 `schedule_manual_until`
+  （人工恢复的到下窗宽限）两列。
+- **持久层**（`internal/db/schedules.go`，自 ARTEX db/schedules.go 移植）：计划
+  CRUD/元数据补丁（不动窗口态）、历史与运行次数统计、任务绑定查询、输入校验
+  （`ValidateTaskScheduleInput` 供任务创建路径复用）；`CreateTaskWithOptions`
+  新增可选 `Schedule`——与任务同事务建计划绑定，非立即启动的任务落库即暂停
+  （paused+schedule_paused+queue_mode='bootstrap'，等首个窗口自动恢复）。
+- **调度引擎**（`internal/server/calendar_schedule.go`）：窗口计算为纯函数
+  （once/weekly、跨午夜、截止日期、北京时间/系统时区，`time/tzdata` 空导入
+  保留）；调度联动**挂在本仓库 Scheduler.Run 的既有 5s tick**（reconcileConcurrency
+  之后调 `fireTaskSchedules`，不另起 ticker），先算全部窗口的并集再逐任务控制，
+  任务启停统一走 `applyTaskControlWithCause`；启动恢复（漏窗抑制）以调度器 boot
+  时刻为界，boot 水印落 `scheduler_state`（`schedule_boot_at`）。取消原因补
+  sentinel `AbortPausedBySchedule`（internal/agent/cancelcause.go）。人工恢复
+  绑定计划的任务授予到下一个窗口结束的宽限（`settleTaskScheduleOnResume`），
+  人工暂停永不自动解除（schedule_paused 为准）。
+- **HTTP 面**（`internal/server/schedules.go`）：`GET/POST /api/schedules`、
+  `GET/PATCH/DELETE /api/schedules/{id}`、`PATCH .../remark|metadata`、
+  `POST .../pause|resume|run-now` 共 10 条路由；`POST /api/tasks` 请求体新增可选
+  `schedule` 字段（校验复用计划输入链）。
+- **前端**：新增 `web/src/app/(main)/function/schedules/page.tsx`（列表/新建/编辑/
+  批量立即运行/删除/运行时间线，文案中文硬编码，剥离 ARTEX i18n；日期/时间用
+  原生 input type=date|time）、`web/src/lib/schedule-display.ts`（展示文案与
+  格式化）、`lib/api.ts` 的 schedules API 与 createTask schedule 入参、侧栏
+  「功能」组新增「计划任务」入口。
+- **裁剪**：ARTEX 的「代理熔断暂停→计划暂停转换」（ConvertProxyPauseToSchedule
+  /proxyResumeInsideSchedule）依赖其代理池暂停语义，本仓库不等价，本批不做；
+  tasks 表本地无 pause_reason 列，ARTEX 相应 UPDATE 语句裁剪，暂停来源以
+  schedule_paused 标记表达。
+- 测试：窗口计算与启动恢复（漏窗抑制）纯函数表驱动（`calendar_schedule_test.go`，
+  零 PG 依赖）；持久层 CRUD/绑定/建任务即暂停/校验表驱动 DSN 门控测试
+  （`internal/db/schedules_test.go`）；调度联动（窗口关→暂停+schedule_paused、
+  人工暂停优先不自动恢复、计划暂停窗口开→自动恢复进队列并清标记）DSN 门控
+  测试（`internal/server/calendar_schedule_pg_test.go`）。
+
 ### 新增：流量 ID 完整展示/复制/按 ID 搜索——ARTEX 移植 A6
 
 - **后端**（`internal/traffic/traffic.go`）：`Page` 通用搜索框的元数据 LIKE

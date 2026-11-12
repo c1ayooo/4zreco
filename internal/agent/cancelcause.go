@@ -31,6 +31,8 @@ var (
 		"用户通过任务控制接口（POST /api/tasks/{id}/control，action=pause）暂停了任务。本次 Planner/Worker 运行被主动取消；运行中的意图会退回 frontier(open)，恢复任务后重新领取并从头执行")
 	AbortPausedByOrchestrator = cause("paused_by_orchestrator", "编排 Agent 暂停了任务",
 		"编排 Agent 调用了 pause_task 工具暂停本任务。本次 Planner/Worker 运行被主动取消；运行中的意图会退回 frontier(open)，恢复后重新执行")
+	AbortPausedBySchedule = cause("paused_by_schedule", "日历计划暂停了任务",
+		"日历式计划任务（A7）在窗口关闭时暂停了本任务，任务带 schedule_paused 标记；窗口再次打开时调度器会自动恢复，运行中的意图会退回 frontier(open)，恢复后重新执行")
 	AbortTaskDeleted = cause("task_deleted", "任务被删除",
 		"任务正在删除（DELETE /api/tasks/{id}），删除屏障已取消该任务正在运行的 Planner、Worker 和主 Agent；本次运行结果不会再被使用")
 	AbortPausedOnReload = cause("paused_on_reload", "后端恢复了任务的暂停状态",

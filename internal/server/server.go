@@ -858,6 +858,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/tasks/{id}/constraints/{cid}", s.deleteConstraint) // 约束管理:删除约束
 	mux.HandleFunc("POST /api/tasks/{id}/control", s.control)
 	mux.HandleFunc("PUT /api/tasks/{id}/llm", s.updateTaskLLMProfiles)
+
+	// 日历式计划任务（移植自 ARTEX 0.3.29 A7）：10 条路由。调度联动不在 HTTP
+	// 线程——挂在 Scheduler.Run 的 5s tick（calendar_schedule.go）；run-now 立即
+	// 启动并把计划置 manual 态。
+	mux.HandleFunc("GET /api/schedules", s.listSchedules)
+	mux.HandleFunc("POST /api/schedules", s.createSchedule)
+	mux.HandleFunc("GET /api/schedules/{id}", s.getSchedule)
+	mux.HandleFunc("PATCH /api/schedules/{id}", s.updateSchedule)
+	mux.HandleFunc("PATCH /api/schedules/{id}/remark", s.updateScheduleMetadata)
+	mux.HandleFunc("PATCH /api/schedules/{id}/metadata", s.updateScheduleMetadata)
+	mux.HandleFunc("DELETE /api/schedules/{id}", s.deleteSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/pause", s.pauseSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/resume", s.resumeSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/run-now", s.runScheduleNow)
+
 	mux.HandleFunc("GET /api/tasks/{id}/llm/resolution", s.taskLLMResolutionHandler)
 	mux.HandleFunc("POST /api/tasks/{id}/intents/{iid}/control", s.controlIntent)
 	mux.HandleFunc("POST /api/tasks/{id}/intents/{iid}/messages", s.sendWorkerMessage)
@@ -1673,6 +1688,9 @@ type createTaskReq struct {
 	// ProjectID 归属项目（schema §D2）；省略/null=不挂。挂上后项目范围种成
 	// 本任务初始 task_scope（source='project'）。
 	ProjectID *int64 `json:"project_id,omitempty"`
+	// Schedule 可选日历计划绑定（A7）：非 null 时随任务同事务建一条计划并绑定
+	// 本任务；start_immediately=false 时任务落库即暂停，等首个窗口自动恢复。
+	Schedule json.RawMessage `json:"schedule,omitempty"`
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -1724,6 +1742,21 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "任务级拦截规则无效："+err.Error())
 		return
 	}
+	// 可选日历计划绑定（A7）：scheduleRequestFromTask 复用计划的校验链，TaskIDs
+	// 由 CreateTaskWithOptions 覆写为本任务 id，不需要调用方传。
+	var schedule *db.TaskScheduleInput
+	if sr, err := scheduleRequestFromTask(req.Schedule); err != nil {
+		writeErr(w, 400, "schedule 字段无效："+err.Error())
+		return
+	} else if sr != nil {
+		input := s.scheduleInput(*sr, nil)
+		input.TaskIDs = nil
+		if err := db.ValidateTaskScheduleInput(input); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		schedule = &input
+	}
 	if req.AuthConfig != nil {
 		if err := req.AuthConfig.Normalize(); err != nil {
 			writeErr(w, 400, "登录配置无效："+err.Error())
@@ -1754,6 +1787,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		InterceptRules:  interceptRules,
 		AuthConfig:      req.AuthConfig,
 		ProjectID:       req.ProjectID,
+		Schedule:        schedule,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {
@@ -1770,7 +1804,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[task] 新建任务 #%s «%s» 目标: %s", t.ID, req.Description, req.Goal)
 	// 共享的建后流程(seed + 种子意图 + 后台目标分解 + engine.Run),与 spawn_task 复用同一段。
 	// launchTask 内部异步,不阻塞 UI —— 目标分解在后台可见地进行。
-	s.launchTask(t, req.Description+" "+req.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent)
+	// 带非立即启动日历计划的任务（A7）落库即暂停：不 launchTask，只装引擎暂停
+	// 屏障，等调度器在首个窗口打开时经 applyTaskControlWithCause(resume) 拉起。
+	if schedule != nil && !schedule.StartImmediately {
+		s.engine.Pause(t.ID, agent.AbortPausedBySchedule)
+	} else {
+		s.launchTask(t, req.Description+" "+req.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent)
+	}
 	writeJSON(w, 201, taskDTO(t, s.resolvedTaskStatus(t)))
 }
 

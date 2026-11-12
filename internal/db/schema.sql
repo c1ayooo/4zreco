@@ -1967,3 +1967,72 @@ CREATE TABLE IF NOT EXISTS im_sessions (
 DROP TRIGGER IF EXISTS trg_im_sessions_upd ON im_sessions;
 CREATE TRIGGER trg_im_sessions_upd BEFORE UPDATE ON im_sessions
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ============================================================================
+-- 日历式计划任务（移植自 ARTEX 0.3.29 A7）：task_schedules 定义日历窗口
+-- （once 一次性 / weekly 按周，北京时间或系统时区），task_schedule_tasks 做
+-- 窗口↔任务多对多绑定，task_schedule_history 记录每次启停联动与状态迁移。
+-- 窗口态（waiting/running/outside/...）与 last_window_key 持久在本表，调度器
+-- 每 5s tick 复算；启动恢复（漏窗抑制）以调度器 boot 时间为界。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS task_schedules (
+    id                 BIGSERIAL PRIMARY KEY,
+    name               TEXT NOT NULL,
+    enabled            BOOLEAN NOT NULL DEFAULT true,
+    timezone_mode      TEXT NOT NULL DEFAULT 'beijing'
+                       CHECK (timezone_mode IN ('beijing','system')),
+    schedule_type      TEXT NOT NULL DEFAULT 'weekly'
+                       CHECK (schedule_type IN ('once','weekly')),
+    run_date           DATE,
+    end_date           DATE,
+    weekdays           TEXT NOT NULL DEFAULT '',
+    start_time         TIME NOT NULL,
+    end_time           TIME,
+    start_immediately  BOOLEAN NOT NULL DEFAULT false,
+    status             TEXT NOT NULL DEFAULT 'waiting'
+                       CHECK (status IN ('waiting','running','outside','completed','error','paused')),
+    last_window_key    TEXT NOT NULL DEFAULT '',
+    last_transition_at TIMESTAMPTZ,
+    last_error         TEXT NOT NULL DEFAULT '',
+    remark             TEXT NOT NULL DEFAULT '',
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((schedule_type = 'once' AND run_date IS NOT NULL) OR
+           (schedule_type = 'weekly' AND run_date IS NULL)),
+    CHECK ((schedule_type = 'once') OR weekdays <> '')
+);
+CREATE INDEX IF NOT EXISTS idx_task_schedules_enabled ON task_schedules(enabled, id);
+-- remark 列补旧库（新建表已含该列，幂等）
+ALTER TABLE task_schedules ADD COLUMN IF NOT EXISTS remark TEXT NOT NULL DEFAULT '';
+DROP TRIGGER IF EXISTS trg_task_schedules_upd ON task_schedules;
+CREATE TRIGGER trg_task_schedules_upd BEFORE UPDATE ON task_schedules
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS task_schedule_tasks (
+    schedule_id        BIGINT NOT NULL REFERENCES task_schedules(id) ON DELETE CASCADE,
+    task_id            BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    paused_by_schedule BOOLEAN NOT NULL DEFAULT false,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (schedule_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_schedule_tasks_task ON task_schedule_tasks(task_id);
+-- paused_by_schedule 列补旧库（幂等）
+ALTER TABLE task_schedule_tasks ADD COLUMN IF NOT EXISTS paused_by_schedule BOOLEAN NOT NULL DEFAULT false;
+
+-- 任务级计划暂停标记：调度器暂停任务时置 true（权威暂停来源），恢复时清除；
+-- 人工暂停不动它，因此调度器只自动恢复自己暂停过的任务。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS schedule_paused BOOLEAN NOT NULL DEFAULT false;
+-- 人工恢复的日历宽限：任务绑定了计划但当前窗口关闭时，人工恢复允许它运行到
+-- 下一个窗口结束（NULL=无宽限/未绑定）。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS schedule_manual_until TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS task_schedule_history (
+    id         BIGSERIAL PRIMARY KEY,
+    schedule_id BIGINT NOT NULL REFERENCES task_schedules(id) ON DELETE CASCADE,
+    task_id    BIGINT,
+    action     TEXT NOT NULL,
+    success    BOOLEAN NOT NULL,
+    message    TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_history ON task_schedule_history(schedule_id, id DESC);

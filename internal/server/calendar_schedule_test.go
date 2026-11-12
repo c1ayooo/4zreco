@@ -1,0 +1,150 @@
+package server
+
+// calendar_schedule_test.go — 日历窗口计算的纯函数单测（移植自 ARTEX
+// calendar_schedule_test.go + calendar_schedule_startup_test.go，零 PG 依赖）：
+//   - once/weekly、beijing/system 时区、跨午夜窗口、截止日期（end_date）；
+//   - 启动恢复（漏窗抑制）：boot 前已打开且无记录的窗口标记 missed，不补跑。
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/c1ayooo/4zreco/internal/db"
+)
+
+func TestEvaluateScheduleWindowWeeklyCrossMidnight(t *testing.T) {
+	s := &db.TaskSchedule{ScheduleType: "weekly", TimezoneMode: "beijing", Weekdays: []int{1, 2, 3, 4, 5}, StartTime: "18:00:00", EndTime: "09:00:00"}
+	// Tuesday 08:00 is still inside Monday's overnight window.
+	w := evaluateScheduleWindow(s, time.Date(2026, 10, 6, 8, 0, 0, 0, time.FixedZone("CST", 8*3600)))
+	if !w.active {
+		t.Fatal("expected overnight window to be active")
+	}
+	// Saturday 10:00 is outside the work-week window.
+	w = evaluateScheduleWindow(s, time.Date(2026, 10, 10, 10, 0, 0, 0, time.FixedZone("CST", 8*3600)))
+	if w.active {
+		t.Fatal("expected weekend to be outside")
+	}
+}
+
+func TestEvaluateScheduleWindowOnce(t *testing.T) {
+	s := &db.TaskSchedule{ScheduleType: "once", TimezoneMode: "beijing", RunDate: "2026-10-09", StartTime: "18:00:00", EndTime: "23:00:00"}
+	loc := time.FixedZone("CST", 8*3600)
+	if w := evaluateScheduleWindow(s, time.Date(2026, 10, 9, 17, 59, 0, 0, loc)); w.active {
+		t.Fatal("one-shot fired early")
+	}
+	if w := evaluateScheduleWindow(s, time.Date(2026, 10, 9, 19, 0, 0, 0, loc)); !w.active {
+		t.Fatal("one-shot should be active")
+	}
+	if w := evaluateScheduleWindow(s, time.Date(2026, 10, 10, 0, 0, 0, 0, loc)); !w.complete {
+		t.Fatal("one-shot should be complete")
+	}
+}
+
+func TestEvaluateScheduleWindowOpenEnded(t *testing.T) {
+	s := &db.TaskSchedule{ScheduleType: "weekly", TimezoneMode: "beijing", Weekdays: []int{6}, StartTime: "09:00:00"}
+	loc := time.FixedZone("CST", 8*3600)
+	if w := evaluateScheduleWindow(s, time.Date(2026, 10, 10, 10, 0, 0, 0, loc)); !w.active {
+		t.Fatal("open-ended weekly schedule should stay active")
+	}
+}
+
+func TestEvaluateScheduleWindowOnceDateRange(t *testing.T) {
+	s := &db.TaskSchedule{
+		ScheduleType: "once",
+		TimezoneMode: "beijing",
+		RunDate:      "2026-10-09",
+		EndDate:      "2026-10-11",
+		StartTime:    "18:00:00",
+		EndTime:      "09:00:00",
+	}
+	loc := time.FixedZone("CST", 8*3600)
+	if w := evaluateScheduleWindow(s, time.Date(2026, 10, 10, 12, 0, 0, 0, loc)); !w.active {
+		t.Fatal("date-range one-shot should remain active between its dates")
+	}
+	if w := evaluateScheduleWindow(s, time.Date(2026, 10, 11, 9, 0, 0, 0, loc)); !w.complete || w.active {
+		t.Fatal("date-range one-shot should complete at its end date and time")
+	}
+}
+
+func TestEvaluateScheduleWindowSystemTimezone(t *testing.T) {
+	// system 模式直接用本地时区：本机时区下当天 00:00 起的无界窗口必然 active。
+	s := &db.TaskSchedule{ScheduleType: "weekly", TimezoneMode: "system", Weekdays: []int{1, 2, 3, 4, 5, 6, 7}, StartTime: "00:00:00"}
+	w := evaluateScheduleWindow(s, time.Now())
+	if !w.active {
+		t.Fatalf("all-days open-ended system window should be active: %+v", w)
+	}
+	if w.nextEnd != nil {
+		t.Fatalf("open-ended window should have no end: %+v", w.nextEnd)
+	}
+}
+
+func calendarTestTime(s string) time.Time {
+	v, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func TestRuntimeScheduleStartupBoundaries(t *testing.T) {
+	old := calendarTestTime("2026-10-15T12:11:17+08:00")
+	for _, tc := range []struct {
+		name, now, boot string
+		change          func(*db.TaskSchedule)
+		active, missed  bool
+	}{
+		{"future weekday after restart", "2026-10-16T18:00:06+08:00", "2026-10-15T19:36:05+08:00", nil, true, false},
+		{"window starts exactly with service", "2026-10-16T18:00:05+08:00", "2026-10-16T18:00:00+08:00", nil, true, false},
+		{"already open before restart", "2026-10-16T18:10:05+08:00", "2026-10-16T18:10:00+08:00", nil, false, true},
+		{"new plan inside current window", "2026-10-16T18:12:00+08:00", "2026-10-16T18:10:00+08:00", func(s *db.TaskSchedule) { s.CreatedAt = calendarTestTime("2026-10-16T18:11:00+08:00") }, true, false},
+		{"explicit edit inside current window", "2026-10-16T18:12:00+08:00", "2026-10-16T18:10:00+08:00", func(s *db.TaskSchedule) { s.UpdatedAt = calendarTestTime("2026-10-16T18:11:00+08:00") }, true, false},
+		{"recorded window survives restart", "2026-10-16T18:12:00+08:00", "2026-10-16T18:10:00+08:00", func(s *db.TaskSchedule) { s.LastWindowKey = "active:2026-10-16T18:00" }, true, false},
+		{"same missed window remains blocked", "2026-10-16T18:12:00+08:00", "2026-10-16T18:10:00+08:00", func(s *db.TaskSchedule) {
+			s.LastWindowKey = "missed:active:2026-10-16T18:00"
+			s.UpdatedAt = calendarTestTime("2026-10-16T18:11:00+08:00")
+		}, false, true},
+		{"previous missed window does not block next", "2026-10-19T18:00:05+08:00", "2026-10-15T19:36:05+08:00", func(s *db.TaskSchedule) { s.LastWindowKey = "missed:active:2026-10-16T18:00" }, true, false},
+		{"disabled plan does not acquire missed state", "2026-10-16T18:12:00+08:00", "2026-10-16T18:10:00+08:00", func(s *db.TaskSchedule) { s.Enabled = false }, false, false},
+		{"manual run outside window", "2026-10-16T17:00:00+08:00", "2026-10-15T19:36:05+08:00", func(s *db.TaskSchedule) { s.LastWindowKey = "manual" }, true, false},
+		{"once future boundary", "2026-10-16T18:00:05+08:00", "2026-10-15T19:36:05+08:00", func(s *db.TaskSchedule) { s.ScheduleType = "once"; s.RunDate = "2026-10-16" }, true, false},
+		{"once missed boundary", "2026-10-16T18:12:00+08:00", "2026-10-16T18:10:00+08:00", func(s *db.TaskSchedule) { s.ScheduleType = "once"; s.RunDate = "2026-10-16" }, false, true},
+		{"completed plan remains stopped", "2026-10-16T18:12:00+08:00", "2026-10-15T19:36:05+08:00", func(s *db.TaskSchedule) { s.Status = "completed" }, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &db.TaskSchedule{Enabled: true, ScheduleType: "weekly", TimezoneMode: "beijing", Weekdays: []int{1, 2, 3, 4, 5}, StartTime: "18:00:00", EndTime: "00:00:00", CreatedAt: old, UpdatedAt: old}
+			if tc.change != nil {
+				tc.change(s)
+			}
+			w := evaluateRuntimeScheduleWindow(s, calendarTestTime(tc.now), calendarTestTime(tc.boot))
+			if w.active != tc.active || strings.HasPrefix(w.key, "missed:") != tc.missed {
+				t.Fatalf("active=%v key=%q, want active=%v missed=%v", w.active, w.key, tc.active, tc.missed)
+			}
+		})
+	}
+}
+
+func TestRuntimeScheduleWeekendAndAdjacentWindows(t *testing.T) {
+	old := calendarTestTime("2026-10-15T12:11:37+08:00")
+	boot := calendarTestTime("2026-10-16T18:20:00+08:00")
+	weekend := &db.TaskSchedule{Enabled: true, ScheduleType: "weekly", TimezoneMode: "beijing", Weekdays: []int{6, 7}, StartTime: "00:00:00", EndTime: "00:00:00", CreatedAt: old, UpdatedAt: old}
+	for _, at := range []string{"2026-10-17T00:00:00+08:00", "2026-10-18T00:00:00+08:00", "2026-10-18T23:59:59+08:00"} {
+		w := evaluateRuntimeScheduleWindow(weekend, calendarTestTime(at), boot)
+		if !w.active {
+			t.Fatalf("weekend unexpectedly inactive at %s: %+v", at, w)
+		}
+	}
+	weekday := &db.TaskSchedule{Enabled: true, ScheduleType: "weekly", TimezoneMode: "beijing", Weekdays: []int{1, 2, 3, 4, 5}, StartTime: "00:00:00", EndTime: "09:00:00", CreatedAt: old, UpdatedAt: old}
+	at := calendarTestTime("2026-10-19T00:00:00+08:00")
+	if evaluateRuntimeScheduleWindow(weekend, at, boot).active || !evaluateRuntimeScheduleWindow(weekday, at, boot).active {
+		t.Fatal("weekend-to-weekday boundary must keep the shared task union open")
+	}
+}
+
+func TestRuntimeScheduleUsesBeijingWindowAcrossTimezones(t *testing.T) {
+	s := &db.TaskSchedule{Enabled: true, ScheduleType: "weekly", TimezoneMode: "beijing", Weekdays: []int{5}, StartTime: "18:00:00", EndTime: "00:00:00", CreatedAt: calendarTestTime("2026-10-15T12:00:00+08:00")}
+	w := evaluateRuntimeScheduleWindow(s, calendarTestTime("2026-10-16T06:00:05-04:00"), calendarTestTime("2026-10-15T07:36:05-04:00"))
+	if !w.active || w.key != "active:2026-10-16T18:00" {
+		t.Fatalf("unexpected timezone result: %+v", w)
+	}
+}

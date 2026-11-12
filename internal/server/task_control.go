@@ -140,6 +140,9 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 		if err != nil {
 			return out, err
 		}
+		// 日历计划收尾（A7）：计划驱动的恢复清 schedule_paused；人工恢复授予到
+		// 下一个窗口结束的宽限（schedule_manual_until），见 calendar_schedule.go。
+		s.settleTaskScheduleOnResume(t, pauseCause)
 		out.Queued = queued
 		out.Status = map[bool]string{true: "queued", false: "running"}[queued]
 	default:

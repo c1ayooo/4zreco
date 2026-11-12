@@ -183,6 +183,10 @@ type TaskCreateOptions struct {
 	// ProjectID 是归属项目（schema §D2）；nil/0=不挂。>0 时项目范围（project_scope）
 	// 会种成本任务初始 task_scope（source='project'）——规划上下文，非闸门。
 	ProjectID *int64
+	// Schedule 是创建时随任务同事务写入的日历计划绑定（A7 移植）；TaskIDs 由
+	// CreateTaskWithOptions 覆写为 [taskID]。StartImmediately=false 时任务落库即
+	// 暂停（paused+schedule_paused，queue_mode='bootstrap'），等首个窗口自动恢复。
+	Schedule *TaskScheduleInput
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
@@ -288,6 +292,27 @@ RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, descripti
 		t.LLMFailoverState = "default"
 	} else {
 		t.LLMFailoverState = "ready"
+	}
+	// 日历计划绑定（A7）：与任务同事务写入；非立即启动的计划任务落库即暂停，
+	// 由调度器在首个窗口打开时经 applyTaskControlWithCause(resume) 自动恢复。
+	if opts.Schedule != nil {
+		in, err := normalizeScheduleInput(*opts.Schedule)
+		if err != nil {
+			return nil, err
+		}
+		in.TaskIDs = []int64{t.ID}
+		if _, err = insertTaskSchedule(tx, in); err != nil {
+			return nil, err
+		}
+		if !in.StartImmediately {
+			// 本仓库 tasks 无 pause_reason 列（ARTEX 同名 UPDATE 裁剪），
+			// schedule_paused 即暂停来源的权威标记。
+			if _, err = tx.Exec(`UPDATE tasks SET paused=true, schedule_paused=true, queue_mode='bootstrap' WHERE id=$1`, t.ID); err != nil {
+				return nil, err
+			}
+			t.Paused = true
+			t.QueueMode = "bootstrap"
+		}
 	}
 	return t, tx.Commit()
 }
