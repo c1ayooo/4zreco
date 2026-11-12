@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+### 新增：任务详情只读文件浏览——ARTEX 移植 A5
+
+- **后端**（`internal/server/task_files.go`）：任务详情页新增 6 条只读路由
+  （`GET /api/tasks/{id}/files[|/all|/read|/download|/preview|/archive]`，
+  read/download/preview 共用 handler），浏览任务工作目录 `Data/tasks/<id>`
+  （agent 的 CWD，含 `i<intentID>` 意图子目录）。全部文件系统访问走 `os.Root`
+  （Go 1.24+）：请求路径先经 `taskFilePath` 拒穿越与非可移植路径，任务根经其
+  父目录（Data 根）打开且本身是 symlink 时拦截，目录树每层开嵌套 Root——
+  symlink 逃逸全程不可达。`files` 列目录时把 `i<intentID>` 映射到探索图 intent
+  节点（`db.ExplorationStore.GetNode`，本地探索图查询，ARTEX 同构），返回意图
+  summary/state 供前端展示标题与状态徽章；`all` 全量扫描返回计数/字节与新近
+  2000 条（有界最小堆，受客户端取消中断）；`read` 内联文本（2MiB 上限，限读
+  本身而非仅前置 stat，二进制/超大只给标志）；`preview` 仅限真实图片（扩展名
+  与魔数一致，HTML/SVG 永不内联渲染）；`download` 附件流式下发；`archive`
+  目录树流式 ZIP 导出（symlink 跳过、ZIP 名保证跨平台可移植、HEAD 只回头、
+  中途出错掐断连接绝不交付半截 ZIP）。读上限复用 `maxWorkspaceRead`
+  （workspace.go），错误文案硬编码中文。
+- **前端**：任务详情页新增「文件」标签（`_tabs/files-tab.tsx`，文案硬编码
+  中文）：目录树/最近文件两种视图，运行中任务 5s 轻量刷新（页面不可见跳过），
+  文本/图片预览对话框、单文件下载、目录 ZIP 导出、复制工作空间路径；
+  `api.taskFiles/taskFilesAll/taskFileRead/taskFileDownload/taskFilePreview`
+  与 `TaskFileEntry/TaskFileListing` 类型随迁（下载走 HEAD 预检 + 原生
+  `<a download>` 流，ZIP 不进内存 Blob）。
+- 测试：`internal/server/task_files_test.go`——非法 id/穿越/symlink 逃逸（含
+  任务根本身是 symlink）、缺失目录语义、文本判定（空/NUL/非法 UTF-8/2MiB
+  边界/超限）与图片魔数-扩展名一致性（HTML/SVG/spoof 拒 415）、ZIP 内容与
+  symlink 剔除、最近文件截断排序与取消中断、认证 401 与 HEAD 空响应；意图
+  目录元数据标注走 PG 门控（`TestTaskFilesIntentMetadataPG`，无 DSN skip）。
+
 ### 新增：可选 HTTP Basic Auth 访问门——ARTEX 移植 A4
 
 - **后端**（`internal/server/basic_auth.go`）：整站可选 HTTP Basic Auth 门，套在

@@ -105,6 +105,7 @@ import type {
   TaskCategory,
   TaskConstraint,
   TaskCostEstimate,
+  TaskFileListing,
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
@@ -495,6 +496,44 @@ export const api = {
   deleteTaskScope: (id: string, scopeId: number) => del<{ ok: boolean }>(`/tasks/${id}/scope/${scopeId}`),
   // 某资产在本任务里关联的意图 / 事实 / 发现（覆盖图节点抽屉用）。
   taskAssetRefs: (id: string, assetId: number) => get<CoverageAssetRefs>(`/tasks/${id}/asset-refs?asset_id=${assetId}`),
+
+  // ---- 任务详情只读文件浏览（移植自 ARTEX 0.3.29 A5；后端 6 条只读路由）----
+  taskFiles: (id: string, path = "") =>
+    get<TaskFileListing>(`/tasks/${id}/files?path=${encodeURIComponent(path)}`),
+  taskFilesAll: (id: string) => get<TaskFileListing>(`/tasks/${id}/files/all`),
+  taskFileRead: (id: string, path: string) =>
+    get<WorkspaceFile>(`/tasks/${id}/files/read?path=${encodeURIComponent(path)}`),
+  // 下载走浏览器原生流：HEAD 预检后 <a download>，ZIP 整包不进内存 Blob。
+  taskFileDownload: async (id: string, path: string, archive = false) => {
+    if (MOCK) {
+      const blob = new Blob([`（demo）${path || `task-${id}`} 的下载内容示例。`], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = archive ? `task-${id}.zip` : (path.split("/").pop() || "download");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      return;
+    }
+    const action = archive ? "archive" : "download";
+    const token = getToken();
+    const response = await apiFetch(`/api/tasks/${id}/files/${action}?path=${encodeURIComponent(path)}`, {
+      method: "HEAD",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) throw new Error(response.status === 404 ? "任务文件不可用" : "下载失败");
+    const a = document.createElement("a");
+    a.href = `/api/tasks/${id}/files/${action}?path=${encodeURIComponent(path)}`;
+    a.download = archive ? `${path.split("/").pop() || `task-${id}`}.zip` : (path.split("/").pop() || "download");
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+  // 图片预览 URL：<img> 同源带 cookie（与 SSE 同款鉴权路径）；MOCK 无真图，返回 null。
+  taskFilePreview: (id: string, path: string): string | null =>
+    MOCK ? null : `/api/tasks/${id}/files/preview?path=${encodeURIComponent(path)}`,
 
   // ---- workspace file manager (workDir) ----
   workspaceList: (path = "") => get<WorkspaceListing>(`/workspace/list?path=${encodeURIComponent(path)}`),

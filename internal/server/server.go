@@ -827,6 +827,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/tasks/{id}/assets/{assetID}", s.detachTaskAsset)
 	mux.HandleFunc("GET /api/tasks/{id}/intent-assets", s.taskIntentAssets)
 
+	// 任务详情只读文件浏览（移植自 ARTEX 0.3.29 A5）：6 条只读路由，全部经
+	// os.Root 限定在 Data/tasks/<id> 内（防穿越/防 symlink 逃逸）。read/
+	// download/preview 共用 handler；archive 流式导出 ZIP（HEAD 只回头）。
+	mux.HandleFunc("GET /api/tasks/{id}/files", s.taskFilesList)
+	mux.HandleFunc("GET /api/tasks/{id}/files/all", s.taskFilesAll)
+	mux.HandleFunc("GET /api/tasks/{id}/files/read", s.taskFilesServe)
+	mux.HandleFunc("GET /api/tasks/{id}/files/download", s.taskFilesServe)
+	mux.HandleFunc("GET /api/tasks/{id}/files/preview", s.taskFilesServe)
+	mux.HandleFunc("GET /api/tasks/{id}/files/archive", s.taskFilesArchive)
+
 	// 工作空间文件管理器（针对 workDir）
 	mux.HandleFunc("GET /api/workspace/list", s.wsList)
 	mux.HandleFunc("GET /api/workspace/read", s.wsRead)

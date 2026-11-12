@@ -362,6 +362,22 @@ export interface WorkspaceFile {
   content?: string;
 }
 
+// 任务详情只读文件浏览（移植自 ARTEX 0.3.29 A5）。
+export interface TaskFileEntry extends WorkspaceEntry {
+  symlink: boolean;
+  intent_id?: number;
+  intent_title?: string;
+  intent_state?: string;
+}
+export interface TaskFileListing {
+  path: string;
+  entries: TaskFileEntry[];
+  total: number;
+  size: number;
+  truncated: boolean;
+  missing: boolean;
+}
+
 // 任务测试范围的一条（覆盖度分母 + 授权边界）。
 export interface TaskScopeRow {
   id: number;
