@@ -668,6 +668,32 @@ CREATE TABLE IF NOT EXISTS task_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_task_relations_source ON task_relations(source_task_id);
 
+-- 任务情报（移植自 ARTEX 0.3.29 C2）：与共享资产 auth、图谱压缩分离的独立情报流。
+-- credential_analysis 是凭据验证 agent（后续单独工单）的派生展示列，本票只建列不填，
+-- 原始情报行始终是权威数据。
+CREATE TABLE IF NOT EXISTS task_intelligence (
+    id          BIGSERIAL PRIMARY KEY,
+    task_id     BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    node_id     BIGINT REFERENCES exploration_nodes(id) ON DELETE SET NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('credential','lead','sensitive_data')),
+    title       TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    evidence    TEXT NOT NULL DEFAULT '',
+    confidence  TEXT NOT NULL CHECK (confidence IN ('observed','inferred')),
+    status      TEXT NOT NULL,
+    asset_ids   JSONB NOT NULL DEFAULT '[]',
+    worker      TEXT NOT NULL DEFAULT '',
+    fingerprint TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(task_id,kind,fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_task_intelligence_task  ON task_intelligence(task_id,id DESC);
+CREATE INDEX IF NOT EXISTS idx_task_intelligence_assets ON task_intelligence USING gin(asset_ids);
+
+-- Optional derived credential presentation; raw intelligence remains authoritative.
+ALTER TABLE task_intelligence ADD COLUMN IF NOT EXISTS credential_analysis JSONB;
+
 -- Task/asset provenance supplements the legacy assets.task_ids association. The
 -- array remains the compatibility source for existing query and cleanup paths;
 -- this relation records how each association was obtained for operator review.
@@ -1583,7 +1609,6 @@ CREATE INDEX IF NOT EXISTS idx_side_sessions_conv ON side_question_sessions(conv
 CREATE INDEX IF NOT EXISTS idx_side_sessions_task ON side_question_sessions(task_id);
 CREATE INDEX IF NOT EXISTS idx_side_sessions_exp ON side_question_sessions(exploration_id);
 CREATE INDEX IF NOT EXISTS idx_side_sessions_intent ON side_question_sessions(intent_id);
-CREATE INDEX IF NOT EXISTS idx_side_sessions_approval ON side_question_sessions(approval_id);
 
 CREATE TABLE IF NOT EXISTS side_question_requests (
     id TEXT PRIMARY KEY,
@@ -1619,6 +1644,9 @@ ALTER TABLE side_question_sessions ADD CONSTRAINT side_question_sessions_check
         OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL AND intent_id IS NULL AND approval_id IS NULL)
         OR (conversation_id IS NULL AND task_id IS NOT NULL AND exploration_id IS NOT NULL AND intent_id IS NOT NULL AND approval_id IS NULL)
         OR (conversation_id IS NULL AND task_id IS NULL AND exploration_id IS NULL AND intent_id IS NULL AND approval_id IS NOT NULL));
+-- approval_id 索引放在 B2 的 ALTER ADD COLUMN 之后：老库走补列路径，索引若建在
+-- 补列之前会在缺列旧表上报 column does not exist（2026-11-13 实测踩坑）。
+CREATE INDEX IF NOT EXISTS idx_side_sessions_approval ON side_question_sessions(approval_id);
 
 -- =====================================================================
 -- 资产拦截规则（全局黑名单）

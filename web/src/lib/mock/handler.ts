@@ -1357,6 +1357,24 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     if (!task) throw new Error("任务不存在");
     return publicMockTask(task);
   }
+  // 任务情报（C2，移植自 ARTEX）：demo 不产生情报，但返回真实列表契约（空页），
+  // 避免面板掉进通用兜底。详情/改状态落在通用报错——与空列表自洽。
+  if ((seg[0] === "tasks" || seg[0] === "assets") && seg[2] === "intelligence") {
+    const exists =
+      seg[0] === "tasks"
+        ? mockTasks.some((item) => item.id === seg[1] || mockTaskAssetID(item.id) === Number(seg[1]))
+        : D.assets.some((item) => item.id === Number(seg[1]));
+    if (!exists) throw new Error("任务或资产不存在");
+    if (m === "GET" && seg.length === 3) {
+      return {
+        items: [],
+        total: 0,
+        counts: { credential: 0, lead: 0, sensitive_data: 0 },
+        enabled: D.settings.task_intelligence_enabled,
+      };
+    }
+    throw new Error("情报不存在或不属于当前范围");
+  }
   if (seg[0] === "tasks" && seg.length === 2 && m === "PATCH") {
     const task = mockTasks.find((item) => item.id === seg[1]);
     if (!task) throw new Error("任务不存在");

@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 
 import { AssetDslSearch } from "@/components/asset-dsl-search";
+import { IntelligencePanel } from "@/components/intelligence-panel";
 import { ScopeTextEditor } from "@/components/scope-text-editor";
 import {
   AlertDialog,
@@ -153,6 +154,8 @@ export default function AssetsPage() {
   const [deleteIds, setDeleteIds] = React.useState<number[]>([]);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  // 任务情报（C2）：勾选单个资产后从工具栏打开该资产的关联情报面板。
+  const [intelligenceAsset, setIntelligenceAsset] = React.useState<number | null>(null);
 
   // company delete
   const [companyDeleteTarget, setCompanyDeleteTarget] = React.useState<Company | null>(null);
@@ -352,6 +355,15 @@ export default function AssetsPage() {
               <Trash2Icon className="size-3.5" /> 删除已选 ({selected.size})
             </Button>
           )}
+          {selected.size === 1 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIntelligenceAsset(Array.from(selected)[0])}
+            >
+              <KeyRoundIcon className="size-3.5" /> 关联情报
+            </Button>
+          ) : null}
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
             <RefreshCwIcon className={cn("size-4", loading && "animate-spin")} /> 刷新
           </Button>
@@ -829,6 +841,30 @@ export default function AssetsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={intelligenceAsset !== null}
+        onOpenChange={(open) => {
+          if (!open) setIntelligenceAsset(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>
+              资产 #{intelligenceAsset} 的关联情报
+            </DialogTitle>
+            <DialogDescription>凭据、重要线索与敏感数据随任务执行自动登记；凭据发现不等于验证成功。</DialogDescription>
+          </DialogHeader>
+          {intelligenceAsset !== null ? (
+            <IntelligencePanel
+              key={intelligenceAsset}
+              scope="assets"
+              scopeId={String(intelligenceAsset)}
+              onNavigate={() => setIntelligenceAsset(null)}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

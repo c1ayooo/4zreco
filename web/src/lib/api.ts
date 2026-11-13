@@ -93,6 +93,8 @@ import type {
   RetestState,
   SessionTokenUsage,
   Settings,
+  IntelligencePage,
+  TaskIntelligence,
   Severity,
   SkillCall,
   SkillItem,
@@ -1068,6 +1070,34 @@ export const api = {
   // Purges every exchange and compacts the index; `reclaimed` is the bytes of
   // index handed back to the filesystem. Evidence bound to findings is kept.
   trafficDeleteAll: () => del<{ deleted: number; reclaimed: number }>(`/traffic/all`),
+
+  // ---- 任务情报（C2，移植自 ARTEX 0.3.29）----
+  // 响应完整性校验：缺 items/counts/total/enabled 任意一项都视为后端异常，
+  // 抛错让面板显示重试提示，而不是渲染半份数据误导操作。
+  intelligence: (scope: "tasks" | "assets", id: string, query: URLSearchParams) =>
+    get<IntelligencePage>(`/${scope}/${id}/intelligence?${query.toString()}`).then((page) => {
+      if (
+        !page ||
+        !Array.isArray(page.items) ||
+        !page.counts ||
+        typeof page.counts !== "object" ||
+        Array.isArray(page.counts) ||
+        !["credential", "lead", "sensitive_data"].every((kind) => {
+          const count = page.counts[kind as keyof typeof page.counts];
+          return Number.isSafeInteger(count) && count >= 0;
+        }) ||
+        !Number.isSafeInteger(page.total) ||
+        page.total < 0 ||
+        typeof page.enabled !== "boolean"
+      ) {
+        throw new Error("情报数据响应不完整，请刷新后重试");
+      }
+      return page;
+    }),
+  intelligenceDetail: (scope: "tasks" | "assets", id: string, intelligenceId: number) =>
+    get<TaskIntelligence>(`/${scope}/${id}/intelligence/${intelligenceId}`),
+  updateIntelligence: (taskId: number, intelligenceId: number, status: string) =>
+    patch<{ updated: boolean }>(`/tasks/${taskId}/intelligence/${intelligenceId}`, { status }),
 
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),

@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+### 新增：任务情报（task_intelligence）——ARTEX 移植 C2
+
+- **行为**：Agent 执行中实际获取的凭据、重要线索与敏感数据结构化写库（与共享资产
+  auth、探索图 fact 分离的独立情报流）；人工定级（人工改过的状态/证据）不被 Agent
+  的重复上报覆盖，confidence 只升不降，重复上报按内容指纹去重（JSON 键序无关）。
+  凭据验证 agent（ARTEX `A/db/credentials.go` 租约状态机）按方案拆出单独工单，
+  `credential_analysis JSONB` 列本票只建不填，原始情报行始终是权威数据。
+- **schema**（`internal/db/schema.sql` 幂等追加）：`task_intelligence` 表
+  （UNIQUE(task_id,kind,fingerprint) + GIN asset_ids 索引 + credential_analysis 列）。
+  顺带修复 B2 遗留的迁移顺序缺陷：`idx_side_sessions_approval` 原先建在
+  `ADD COLUMN approval_id` 之前，老库（建表早于 B2）启动即报 column does not exist
+  ——索引移到补列之后（新装库无感）。
+- **db 层**：`internal/db/intelligence.go`（`NormalizeIntelligence` 长度/状态约束、
+  inferred 不得 verified；`intelligenceFingerprint` SHA256(规范化 content + 排序去重
+  asset_ids)；ON CONFLICT 升级语义；溯源只认探索图事实——intent 节点/唯一 yields 父
+  →`intent:<id>`，歧义/缺失不给精确会话；范围授权对齐任务继承规则：task_relations
+  直接继承可见，共享资产不授予）；归档链路随迁（快照/删除/恢复白名单 + asset_ids
+  重映射后重算指纹，人工定级保留）。
+- **agent 侧**：`internal/agent/intelligence.go`——`record_intelligence` 工具
+  （写库，writeTool）进 Worker/Planner/MainAgent 三张清单并经 `BuiltinToolSeeds`
+  播种；`record_fact` 扩 `intelligence[]` 随事实写回（≤20 条/次）；任务/来源节点由
+  系统绑定，模型不可指定。`intelligenceWorkflow` 按 settings 开关动态增删工具面：
+  关闭时剔除工具、删 schema 属性、无指引文本——对提示词零 token 开销。
+  `insert_assets` 的 auth 字段自动登记 credential 情报（失败不阻断资产保存）。
+- **server**：`internal/server/intelligence.go`（GET/PATCH
+  `/api/tasks/{id}/intelligence[/{intelID}]`，filter kind/status/q + counts；资产维度
+  镜像路由）；settings 开关 `task_intelligence_enabled`（默认关，wireTools 注入
+  `agent.IntelligenceEnabled/IntelligenceRecord`，每次写回前重读、即时生效）。
+- **前端**：`intelligence-panel.tsx`（三类 tab/搜索/状态筛选/详情弹层/人工定级，i18n
+  已剥离为中文文案）；任务详情「情报」tab + 资产页单选「关联情报」入口 + settings
+  开关；api.ts 响应完整性校验 + mock 空页契约。
+- **测试**：db 6 用例（校验/去重/溯源/升级语义/归档 remap）+ agent 2 用例（开关
+  gate 零 token 断言/资产与事实写回）+ server HTTP 范围回归，PG 门控无 DSN 时 skip。
+
 ### 新增：同一漏洞重复上报归并 finding_cases 体系——ARTEX 移植 C1
 
 - **行为**：同一实际缺陷的多次独立上报（变体写法/重复发现）可归并进「归并文件夹」：

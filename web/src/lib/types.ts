@@ -1127,6 +1127,9 @@ export interface Settings {
   // 任务=Agent 建任务时内联生成任务名。均不覆盖用户手动命名的结果。
   task_auto_title_enabled?: boolean;
   chat_auto_title_enabled?: boolean;
+  // 任务情报采集（C2，移植自 ARTEX）：开启后 agent 的 record_intelligence 工具与
+  // record_fact 随附 intelligence 写回生效；每次写回前重读，即时生效。
+  task_intelligence_enabled?: boolean;
   // ---- 漏洞 IM 推送（渠道本身是独立资源，见 /api/notify/*，这里只有三项全局配置）----
   notify_enabled?: boolean; // 推送总开关，默认开；用于维护期一键止血
   notify_public_base_url?: string; // 漏洞详情回链的外部访问地址；空=消息不带回链
@@ -2250,4 +2253,34 @@ export interface FindingCasePage {
   page: number;
   page_size: number;
   stats: FindingDistinctStats;
+}
+
+// ---- 任务情报（C2，移植自 ARTEX 0.3.29）----
+export type IntelligenceKind = "credential" | "lead" | "sensitive_data";
+
+export interface TaskIntelligence {
+  id: number;
+  task_id: number;
+  node_id?: number;
+  kind: IntelligenceKind;
+  title: string;
+  content: string;
+  evidence: string;
+  confidence: "observed" | "inferred";
+  status: string;
+  asset_ids: number[];
+  worker: string;
+  created_at: string;
+  updated_at: string;
+  // 任务维度查看来源任务时为 true（task_relations 继承）；资产维度恒 false。
+  inherited: boolean;
+  // 溯源走探索图（intent:<id> / plan），歧义或缺失时为空。
+  source_session?: string;
+}
+
+export interface IntelligencePage {
+  items: TaskIntelligence[];
+  total: number;
+  counts: Record<IntelligenceKind, number>;
+  enabled: boolean;
 }

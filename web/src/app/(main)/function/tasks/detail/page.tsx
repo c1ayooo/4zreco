@@ -45,6 +45,7 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { IntelligencePanel } from "@/components/intelligence-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
@@ -68,6 +69,7 @@ const TABS = [
   { value: "overview", label: "总览" },
   { value: "graph", label: "探索链路" },
   { value: "broadcast", label: "播报板" },
+  { value: "intelligence", label: "情报" },
   { value: "findings", label: "发现" },
   { value: "retests", label: "复测" },
   { value: "assets", label: "测试资产" },
@@ -504,6 +506,9 @@ function TaskDetailInner() {
         </TabsContent>
         <TabsContent value="broadcast" className="mt-0">
           <BroadcastTab taskId={id} />
+        </TabsContent>
+        <TabsContent value="intelligence" className="mt-0">
+          <IntelligencePanel scope="tasks" scopeId={id} />
         </TabsContent>
         <TabsContent value="findings" className="mt-0">
           <FindingsTab taskId={id} />

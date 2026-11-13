@@ -837,6 +837,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/tasks/{id}/assets/{assetID}", s.detachTaskAsset)
 	mux.HandleFunc("GET /api/tasks/{id}/intent-assets", s.taskIntentAssets)
 
+	// 任务情报（C2，移植自 ARTEX 0.3.29）：任务维度列表/详情/人工定级 + 资产维度
+	// 镜像路由（scope=assets 复用同一组 handler，范围语义见 db.intelligenceScope）。
+	mux.HandleFunc("GET /api/tasks/{id}/intelligence", s.listIntelligence)
+	mux.HandleFunc("GET /api/tasks/{id}/intelligence/{intelID}", s.getIntelligence)
+	mux.HandleFunc("PATCH /api/tasks/{id}/intelligence/{intelID}", s.updateIntelligence)
+	mux.HandleFunc("GET /api/assets/{id}/intelligence", func(w http.ResponseWriter, r *http.Request) {
+		r.SetPathValue("scope", "assets")
+		s.listIntelligence(w, r)
+	})
+	mux.HandleFunc("GET /api/assets/{id}/intelligence/{intelID}", func(w http.ResponseWriter, r *http.Request) {
+		r.SetPathValue("scope", "assets")
+		s.getIntelligence(w, r)
+	})
+
 	// 任务详情只读文件浏览（移植自 ARTEX 0.3.29 A5）：6 条只读路由，全部经
 	// os.Root 限定在 Data/tasks/<id> 内（防穿越/防 symlink 逃逸）。read/
 	// download/preview 共用 handler；archive 流式导出 ZIP（HEAD 只回头）。
@@ -3677,16 +3691,18 @@ func (s *Server) settingsPayload() map[string]any {
 		"traffic_capture":       s.m.TrafficEnabled(),
 		"traffic_proxy_alive":   s.m.TrafficProxyAlive(), // 录制代理是否真的在监听（端口被占时为 false，UI 据此告警）
 		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
-		"llm_record":            s.m.LLMRecordEnabled(),
-		"web_search_enabled":    on,
-		"web_search_backend":    backend,
-		"brave_key_set":         strings.TrimSpace(braveKey) != "",
-		"tavily_key_set":        strings.TrimSpace(tavilyKey) != "",
-		"web_search_proxy":      proxy,                       // 独立出口代理(http/https/socks5)，空=直连
-		"global_proxy":          s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
-		"install_proxy":         s.installProxy(),            // 装机代理：只用于宿主工具安装(apt/GitHub下载)，与目标流量无关
-		"python_interpreter":    strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
-		"workers":               s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		// 任务情报采集（C2，移植自 ARTEX）：默认关；开关注入点见 putSettings / wireTools。
+		db.SettingTaskIntelligence: s.m.pg.GetBool(db.SettingTaskIntelligence, false),
+		"llm_record":               s.m.LLMRecordEnabled(),
+		"web_search_enabled":       on,
+		"web_search_backend":       backend,
+		"brave_key_set":            strings.TrimSpace(braveKey) != "",
+		"tavily_key_set":           strings.TrimSpace(tavilyKey) != "",
+		"web_search_proxy":         proxy,                       // 独立出口代理(http/https/socks5)，空=直连
+		"global_proxy":             s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"install_proxy":            s.installProxy(),            // 装机代理：只用于宿主工具安装(apt/GitHub下载)，与目标流量无关
+		"python_interpreter":       strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
+		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
 		// 冷节点压缩的输出预算与墙钟上限。0 = 用默认值(32768 token / 20 分钟)。
 		"compaction_max_tokens":      s.m.CompactionTokens(),
 		"compaction_timeout_seconds": s.m.CompactionTimeout(),
@@ -3776,7 +3792,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TrafficCapture      *bool `json:"traffic_capture"`
 		AgentTrafficBinding *bool `json:"agent_traffic_binding"`
-		LLMRecord           *bool `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
+		TaskIntelligence    *bool `json:"task_intelligence_enabled"` // 任务情报采集（C2）；每次写回前重读，即时生效
+		LLMRecord           *bool `json:"llm_record"`                // LLM 录制开关（默认关）；即时生效，无需重建 agent
 		// Web search. WebSearchEnabled/Backend toggle the tool + backend; BraveKey/TavilyKey
 		// are optional — omit (null) to leave a stored key untouched, send "" to clear.
 		WebSearchEnabled *bool   `json:"web_search_enabled"`
@@ -3868,6 +3885,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TaskAutoTitle != nil {
 		if err := s.m.pg.SetBool(db.SettingTaskAutoTitle, *req.TaskAutoTitle); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.TaskIntelligence != nil {
+		if err := s.m.pg.SetBool(db.SettingTaskIntelligence, *req.TaskIntelligence); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

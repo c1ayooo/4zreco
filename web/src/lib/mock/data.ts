@@ -3327,6 +3327,7 @@ export const settings: Settings = {
   traffic_capture: true,
   traffic_proxy_alive: true,
   agent_traffic_binding: false,
+  task_intelligence_enabled: false,
   llm_record: false,
   web_search_enabled: true,
   web_search_backend: "ddgs",

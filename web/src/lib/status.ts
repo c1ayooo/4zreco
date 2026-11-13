@@ -112,6 +112,13 @@ const delivery: Record<string, StatusMeta> = {
   skipped: { label: "已跳过", tone: "neutral" },
 };
 
+// 任务情报（C2）类别色：任务页、资产页与详情弹层共用同一套。
+const intelligence: Record<string, StatusMeta> = {
+  credential: { label: "凭据", tone: "violet" },
+  lead: { label: "重要线索", tone: "blue" },
+  sensitive_data: { label: "敏感数据", tone: "amber" },
+};
+
 const maps = {
   intent,
   task,
@@ -122,6 +129,7 @@ const maps = {
   audit,
   node,
   delivery,
+  intelligence,
 } as const;
 
 export type StatusDomain = keyof typeof maps;

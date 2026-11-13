@@ -233,6 +233,19 @@ func seedPrompts(pg *db.DB) {
 // and缺省入参 get injected. MCP/skill/host tools have no row and pass through.
 func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.FindingTrafficBindingEnabled = func() bool { return pg.GetBool(settingAgentTrafficBinding, false) }
+	// 任务情报（C2，移植自 ARTEX）：开关每次写回前重读（运行中会话即时生效）；
+	// 落库经 pg.RecordIntelligence，写回失败原样返回给 agent。
+	agent.IntelligenceEnabled = func() bool { return pg.GetBool(db.SettingTaskIntelligence, false) }
+	agent.IntelligenceRecord = func(ctx context.Context, taskID, nodeID int64, worker string, input db.IntelligenceInput) (int64, error) {
+		if !pg.GetBool(db.SettingTaskIntelligence, false) {
+			return 0, fmt.Errorf("任务情报自动记录已关闭")
+		}
+		item, err := pg.RecordIntelligence(ctx, taskID, nodeID, worker, input)
+		if err != nil {
+			return 0, err
+		}
+		return item.ID, nil
+	}
 	// C1 归并工具的 db 入口：会话级 agent（reporter 等）的 ToolSet 没有探索图
 	// store，7 个归并工具统一从这里拿 *db.DB。
 	agent.FindingCaseDB = func() *db.DB { return pg }

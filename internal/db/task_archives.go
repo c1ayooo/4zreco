@@ -602,6 +602,8 @@ JOIN intercept_pending ip ON ip.id=d.pending_id WHERE COALESCE(ip.task_id,'')=$1
 JOIN intercept_pending ip ON ip.id=e.pending_id WHERE COALESCE(ip.task_id,'')=$1 ORDER BY e.id`, []any{strconv.FormatInt(taskID, 10)}},
 		{"side_question_sessions", `SELECT * FROM side_question_sessions WHERE task_id=$1 ORDER BY session_key`, []any{taskID}},
 		{"side_question_requests", `SELECT r.* FROM side_question_requests r JOIN side_question_sessions s ON s.session_key=r.session_key WHERE s.task_id=$1 ORDER BY r.ordinal`, []any{taskID}},
+		// 任务情报（C2）：随快照走，恢复时 asset_ids 重映射后按内容重算指纹。
+		{"task_intelligence", `SELECT * FROM task_intelligence WHERE task_id=$1 ORDER BY id`, []any{taskID}},
 		{"assets", `SELECT asset.* FROM assets asset WHERE asset.id IN (` + archiveAssetIDsQuery() + `) ORDER BY asset.id`, []any{taskID, expID}},
 	}
 	counts := make(map[string]int64, len(queries))

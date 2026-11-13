@@ -6,6 +6,7 @@ import {
   CpuIcon,
   FlaskConicalIcon,
   GaugeIcon,
+  KeyRoundIcon,
   KeyboardIcon,
   MessageSquareIcon,
   RadioTowerIcon,
@@ -36,6 +37,7 @@ export default function SystemSettingsPage() {
   const [trafficCapture, setTrafficCapture] = React.useState(false);
   const [trafficProxyAlive, setTrafficProxyAlive] = React.useState(true);
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
+  const [taskIntelligence, setTaskIntelligence] = React.useState(false);
   const [webSearch, setWebSearch] = React.useState(false);
   const [backend, setBackend] = React.useState("ddgs");
   const [braveKeySet, setBraveKeySet] = React.useState(false);
@@ -120,6 +122,7 @@ export default function SystemSettingsPage() {
     // 字段缺失（旧后端）视为存活，不误报。
     setTrafficProxyAlive(s.traffic_proxy_alive !== false);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
+    setTaskIntelligence(!!s.task_intelligence_enabled);
     setWebSearch(!!s.web_search_enabled);
     setBackend(s.web_search_backend || "ddgs");
     setBraveKeySet(!!s.brave_key_set);
@@ -344,6 +347,22 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setAgentTrafficBinding(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const toggleTaskIntelligence = (v: boolean) => {
+    setTaskIntelligence(v);
+    setSaving(true);
+    api
+      .setSettings({ task_intelligence_enabled: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启任务情报采集" : "已关闭任务情报采集");
+      })
+      .catch((e) => {
+        setTaskIntelligence(!v);
         toast.error(`保存失败：${(e as Error).message}`);
       })
       .finally(() => setSaving(false));
@@ -612,6 +631,30 @@ export default function SystemSettingsPage() {
                 checked={agentTrafficBinding}
                 disabled={!loaded || saving}
                 onCheckedChange={toggleAgentTrafficBinding}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="mb-4 break-inside-avoid md:mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <KeyRoundIcon className="size-4" />
+                任务情报采集
+              </CardTitle>
+              <CardDescription id="task-intelligence-description">
+                开启后 Agent 将凭据、重要线索与敏感数据结构化写库；凭据发现不等于验证成功，人工定级不会被覆盖。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-4">
+              <Label htmlFor="task-intelligence" className="font-normal text-muted-foreground text-sm">
+                {taskIntelligence ? "已开启 · 会增加少量 Token 消耗" : "已关闭"}
+              </Label>
+              <Switch
+                id="task-intelligence"
+                aria-describedby="task-intelligence-description"
+                checked={taskIntelligence}
+                disabled={!loaded || saving}
+                onCheckedChange={toggleTaskIntelligence}
               />
             </CardContent>
           </Card>

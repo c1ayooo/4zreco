@@ -17,11 +17,12 @@ import (
 // UnlockSkill unlocks a named skill's MCPs — hosts call it to rebuild the unlock set
 // from history on a resumed session (design doc C2).
 type DeferredInfo struct {
-	FindingGuidance string            // derived from the final permitted tools, including DB overrides
-	CaseGuidance    string            // finding_cases 归并指引（C1）；历史整理会话在此追加覆盖指引
-	Deferred        []string          // all MCP tool names (schema withheld)
-	GlobalNames     []string          // MCP names to list in the system-prompt block
-	Unlock          *actool.UnlockSet // shared call-gate; nil when no MCP tools
+	FindingGuidance      string            // derived from the final permitted tools, including DB overrides
+	CaseGuidance         string            // finding_cases 归并指引（C1）；历史整理会话在此追加覆盖指引
+	IntelligenceGuidance string            // 任务情报指引（C2）；开关关闭或无任务上下文时为空串（零 token 开销）
+	Deferred             []string          // all MCP tool names (schema withheld)
+	GlobalNames          []string          // MCP names to list in the system-prompt block
+	Unlock               *actool.UnlockSet // shared call-gate; nil when no MCP tools
 	// UnlockSeed 是装配时刻「已解锁」的名字集合（直连可见、非 skill 门控的 MCP 工具
 	// ——server 装配的 globalNames 快照），装配指纹 unlock_seed 分量的真实来源
 	// （评审第 1 轮 #1：此前该分量恒空串）。actool.UnlockSet 无枚举 API，种子经
@@ -74,6 +75,7 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 	}
 	out, def.FindingGuidance = findingWorkflowTools(agentKey, out)
 	out, def.CaseGuidance = findingCaseWorkflow(agentKey, out)
+	out, def.IntelligenceGuidance = intelligenceWorkflow(ctx, out)
 	if agentKey == "reporter" && isFindingCaseReview(ctx) {
 		def.FindingGuidance = ""
 		def.CaseGuidance += historicalFindingReviewGuidance

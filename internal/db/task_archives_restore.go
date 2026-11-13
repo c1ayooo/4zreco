@@ -89,6 +89,7 @@ WHERE relation.source_task_id=$1 LIMIT 1`, taskID).Scan(&dependent)
 		args  []any
 	}{
 		{`DELETE FROM task_relations WHERE task_id=$1 OR source_task_id=$1`, []any{taskID}},
+		{`DELETE FROM task_intelligence WHERE task_id=$1`, []any{taskID}},
 		{`DELETE FROM task_asset_links WHERE task_id=$1`, []any{taskID}},
 		{`DELETE FROM task_llm_profiles WHERE task_id=$1`, []any{taskID}},
 		{`DELETE FROM task_scope WHERE task_id=$1`, []any{taskID}},
@@ -242,7 +243,7 @@ WHERE archive.id=$1 FOR UPDATE OF archive,task`, archiveID).Scan(&taskID, &expID
 	}
 	// Insert graph rows in foreign-key order. The archived stub has no graph rows,
 	// so an ID conflict signals external corruption and must stop the restore.
-	for _, table := range []string{"exploration_nodes", "exploration_edges", "exploration_anchors", "task_constraints", "activity"} {
+	for _, table := range []string{"exploration_nodes", "exploration_edges", "exploration_anchors", "task_constraints", "activity", "task_intelligence"} {
 		if err := insertArchiveRows(tx, table, remappedTables[table]); err != nil {
 			return nil, fmt.Errorf("restore %s: %w", table, err)
 		}
@@ -389,7 +390,7 @@ func insertArchiveRows(tx *sql.Tx, table string, raw json.RawMessage) error {
 		"exploration_nodes": true, "exploration_edges": true, "exploration_anchors": true,
 		"task_constraints": true, "activity": true, "task_asset_links": true, "findings": true,
 		"llm_records": true, "llm_usage": true, "skill_usage": true, "tool_usage": true,
-		"side_question_sessions": true, "side_question_requests": true,
+		"side_question_sessions": true, "side_question_requests": true, "task_intelligence": true,
 	}
 	if !allowed[table] {
 		return fmt.Errorf("archive restore table %q is not allowed", table)
@@ -564,7 +565,7 @@ func remapArchiveAssetReferences(tables map[string]json.RawMessage, mapping map[
 		}
 		out[table], _ = json.Marshal(rows)
 	}
-	for _, table := range []string{"exploration_nodes", "findings"} {
+	for _, table := range []string{"exploration_nodes", "findings", "task_intelligence"} {
 		rows, err := decodeArchiveRows(tables[table])
 		if err != nil {
 			return nil, err
@@ -588,6 +589,19 @@ func remapArchiveAssetReferences(tables map[string]json.RawMessage, mapping map[
 					}
 				}
 				container[key] = values
+			}
+		}
+		if table == "task_intelligence" {
+			// 指纹以 (content + 排序去重 asset_ids) 为源，重映射后必须重算，
+			// 否则恢复行与库内已有情报既撞不上也错撞；status/confidence 原样保留，
+			// 人工定级不因恢复而丢。
+			for _, row := range rows {
+				raw, _ := json.Marshal(row)
+				var input IntelligenceInput
+				if err := json.Unmarshal(raw, &input); err != nil {
+					return nil, err
+				}
+				row["fingerprint"] = intelligenceFingerprint(input)
 			}
 		}
 		out[table], _ = json.Marshal(rows)
