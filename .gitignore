@@ -19,6 +19,9 @@ SHA256SUMS
 # 运行时自动下载（dev 跑 go run 时落在仓库根，见 internal/config/paths.go）
 /nuclei-templates/
 
+# 运行态模板树（老部署迁移/模板同步落在 internal/server 下，运行时目录不提交）
+/internal/server/nuclei-templates/
+
 # Go embed 编译产物（构建时生成，不提交）
 /internal/server/webui/dist/
 /internal/server/web/
