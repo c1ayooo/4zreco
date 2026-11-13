@@ -154,7 +154,10 @@ type Server struct {
 	// channel coalesces enqueue bursts; the database remains the source of truth.
 	archiveWake chan struct{}
 	archiveWG   sync.WaitGroup
-	side        *sideQuestionState
+	// credentialWake 唤醒凭据整理 agent 的消费循环（C2 凭据子阶段，移植自 ARTEX）：
+	// 缓冲 1 合并突发；持久化的租约队列才是事实源，慢 tick 兜底漏掉的通知。
+	credentialWake chan struct{}
+	side           *sideQuestionState
 }
 
 // provEntry is a cached provider + its config for one LLM profile id.
@@ -197,7 +200,7 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
-		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1)}
+		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1), credentialWake: make(chan struct{}, 1)}
 	s.jwtKey.Store(key)
 	if m.pg != nil {
 		m.pg.SetAuditKey(auditKey)
@@ -305,6 +308,16 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 		// seeded browser MCP on first run). Async so it never blocks startup.
 		go s.discoverEmptyMCPsOnStartup()
 		logSink.SetDB(ctx, m.pg) // restore last 100 log rows and enable async persistence
+		// 凭据整理 agent（C2 凭据子阶段，移植自 ARTEX）：credential 情报落库后的
+		// 唤醒只为降延迟——持久化的租约队列才是事实源，漏掉的通知由 30s 慢 tick 兜底。
+		agent.CredentialRecorded = func() {
+			select {
+			case s.credentialWake <- struct{}{}:
+			default:
+			}
+		}
+		s.seedCredentialProcessor()
+		go s.runCredentialProcessor()
 	}
 	// precedence: persisted DB config > env.
 	if cfg, ok := s.loadLLMConfig(); ok {
@@ -842,6 +855,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/intelligence", s.listIntelligence)
 	mux.HandleFunc("GET /api/tasks/{id}/intelligence/{intelID}", s.getIntelligence)
 	mux.HandleFunc("PATCH /api/tasks/{id}/intelligence/{intelID}", s.updateIntelligence)
+	// 凭据整理 agent（C2 凭据子阶段，移植自 ARTEX）：显式重排队 + 绑定流量的
+	// 原始报文读取（片段随 credential_analysis 持久化，原始流量被清理后仍可查看）。
+	mux.HandleFunc("POST /api/tasks/{id}/intelligence/{intelID}/credentials/retry", s.retryCredentials)
+	mux.HandleFunc("GET /api/tasks/{id}/intelligence/{intelID}/traffic/{trafficID}", s.credentialTrafficDetail)
+	mux.HandleFunc("GET /api/assets/{id}/intelligence/{intelID}/traffic/{trafficID}", func(w http.ResponseWriter, r *http.Request) {
+		r.SetPathValue("scope", "assets")
+		s.credentialTrafficDetail(w, r)
+	})
 	mux.HandleFunc("GET /api/assets/{id}/intelligence", func(w http.ResponseWriter, r *http.Request) {
 		r.SetPathValue("scope", "assets")
 		s.listIntelligence(w, r)
@@ -3693,6 +3714,10 @@ func (s *Server) settingsPayload() map[string]any {
 		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
 		// 任务情报采集（C2，移植自 ARTEX）：默认关；开关注入点见 putSettings / wireTools。
 		db.SettingTaskIntelligence: s.m.pg.GetBool(db.SettingTaskIntelligence, false),
+		// 凭据整理 agent（C2 凭据子阶段，移植自 ARTEX）：绑定流量只在 agent 开关开启时
+		// 才有意义，回显时随之折叠。
+		db.SettingCredentialAgent:   s.m.pg.GetBool(db.SettingCredentialAgent, false),
+		db.SettingCredentialTraffic: s.m.pg.GetBool(db.SettingCredentialAgent, false) && s.m.pg.GetBool(db.SettingCredentialTraffic, false),
 		"llm_record":               s.m.LLMRecordEnabled(),
 		"web_search_enabled":       on,
 		"web_search_backend":       backend,
@@ -3793,6 +3818,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		TrafficCapture      *bool `json:"traffic_capture"`
 		AgentTrafficBinding *bool `json:"agent_traffic_binding"`
 		TaskIntelligence    *bool `json:"task_intelligence_enabled"` // 任务情报采集（C2）；每次写回前重读，即时生效
+		// 凭据整理 agent（C2 凭据子阶段，移植自 ARTEX）：三开关依赖经
+		// SetIntelligenceSettings 原子提交（父关连动清子；非法依赖 400）。
+		CredentialAgent   *bool `json:"credential_agent_enabled"`
+		CredentialTraffic *bool `json:"credential_traffic_binding"`
 		LLMRecord           *bool `json:"llm_record"`                // LLM 录制开关（默认关）；即时生效，无需重建 agent
 		// Web search. WebSearchEnabled/Backend toggle the tool + backend; BraveKey/TavilyKey
 		// are optional — omit (null) to leave a stored key untouched, send "" to clear.
@@ -3889,9 +3918,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.TaskIntelligence != nil {
-		if err := s.m.pg.SetBool(db.SettingTaskIntelligence, *req.TaskIntelligence); err != nil {
-			writeErr(w, 500, err.Error())
+	if req.TaskIntelligence != nil || req.CredentialAgent != nil || req.CredentialTraffic != nil {
+		if err := s.m.pg.SetIntelligenceSettings(r.Context(), req.TaskIntelligence, req.CredentialAgent, req.CredentialTraffic); err != nil {
+			intelligenceError(w, err)
 			return
 		}
 	}

@@ -38,6 +38,9 @@ export default function SystemSettingsPage() {
   const [trafficProxyAlive, setTrafficProxyAlive] = React.useState(true);
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
   const [taskIntelligence, setTaskIntelligence] = React.useState(false);
+  // 凭据整理 agent（C2 凭据子阶段）：agent 开关依赖任务情报采集，绑定流量依赖 agent 开关。
+  const [credentialAgent, setCredentialAgent] = React.useState(false);
+  const [credentialBinding, setCredentialBinding] = React.useState(false);
   const [webSearch, setWebSearch] = React.useState(false);
   const [backend, setBackend] = React.useState("ddgs");
   const [braveKeySet, setBraveKeySet] = React.useState(false);
@@ -123,6 +126,8 @@ export default function SystemSettingsPage() {
     setTrafficProxyAlive(s.traffic_proxy_alive !== false);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
     setTaskIntelligence(!!s.task_intelligence_enabled);
+    setCredentialAgent(!!s.credential_agent_enabled);
+    setCredentialBinding(!!s.credential_traffic_binding);
     setWebSearch(!!s.web_search_enabled);
     setBackend(s.web_search_backend || "ddgs");
     setBraveKeySet(!!s.brave_key_set);
@@ -365,6 +370,20 @@ export default function SystemSettingsPage() {
         setTaskIntelligence(!v);
         toast.error(`保存失败：${(e as Error).message}`);
       })
+      .finally(() => setSaving(false));
+  };
+
+  // 凭据整理 agent 的两个子开关（C2 凭据子阶段）：后端原子提交依赖（父关连动清子），
+  // 保存后以后端回显为准。
+  const saveCredentialOptions = (patch: { credential_agent_enabled?: boolean; credential_traffic_binding?: boolean }) => {
+    setSaving(true);
+    api
+      .setSettings(patch)
+      .then((s) => {
+        apply(s);
+        toast.success("凭据整理设置已保存");
+      })
+      .catch((e) => toast.error(`保存失败：${(e as Error).message}`))
       .finally(() => setSaving(false));
   };
 
@@ -645,17 +664,54 @@ export default function SystemSettingsPage() {
                 开启后 Agent 将凭据、重要线索与敏感数据结构化写库；凭据发现不等于验证成功，人工定级不会被覆盖。
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex items-center justify-between gap-4">
-              <Label htmlFor="task-intelligence" className="font-normal text-muted-foreground text-sm">
-                {taskIntelligence ? "已开启 · 会增加少量 Token 消耗" : "已关闭"}
-              </Label>
-              <Switch
-                id="task-intelligence"
-                aria-describedby="task-intelligence-description"
-                checked={taskIntelligence}
-                disabled={!loaded || saving}
-                onCheckedChange={toggleTaskIntelligence}
-              />
+            <CardContent className="flex flex-col gap-5">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="task-intelligence" className="font-normal text-muted-foreground text-sm">
+                  {taskIntelligence ? "已开启 · 会增加少量 Token 消耗" : "已关闭"}
+                </Label>
+                <Switch
+                  id="task-intelligence"
+                  aria-describedby="task-intelligence-description"
+                  checked={taskIntelligence}
+                  disabled={!loaded || saving}
+                  onCheckedChange={toggleTaskIntelligence}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <Label htmlFor="credential-agent" className="font-normal text-sm">
+                    凭据整理 Agent
+                  </Label>
+                  <p className="text-muted-foreground text-xs">
+                    拆分并高亮已上报的账号、密码、Token、Cookie；不改变原始上报或验证状态。复杂文本会使用额外模型
+                    Token，可解析的 JSON 无需模型。模型可在「Agent → 凭据整理」中配置。
+                  </p>
+                </div>
+                <Switch
+                  id="credential-agent"
+                  checked={credentialAgent}
+                  disabled={!loaded || saving || !taskIntelligence}
+                  onCheckedChange={(v) => saveCredentialOptions({ credential_agent_enabled: v })}
+                />
+              </div>
+              {credentialAgent ? (
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <Label htmlFor="credential-traffic" className="font-normal text-sm">
+                      绑定流量
+                    </Label>
+                    <p className="text-muted-foreground text-xs">
+                      核对已抓取流量中的资产与凭据并保存匹配片段；不主动登录，也不把匹配流量视为验证成功。
+                    </p>
+                  </div>
+                  <Switch
+                    id="credential-traffic"
+                    checked={credentialBinding}
+                    disabled={!loaded || saving}
+                    onCheckedChange={(v) => saveCredentialOptions({ credential_traffic_binding: v })}
+                  />
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

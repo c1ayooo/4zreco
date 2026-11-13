@@ -244,6 +244,13 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		if err != nil {
 			return 0, err
 		}
+		if item.Kind == "credential" {
+			// 持久化的数据库行是事实源；唤醒只为降低延迟，漏掉的通知由
+			// 凭据整理循环的恢复 tick 兜底（C2 凭据子阶段）。
+			if agent.CredentialRecorded != nil {
+				agent.CredentialRecorded()
+			}
+		}
 		return item.ID, nil
 	}
 	// C1 归并工具的 db 入口：会话级 agent（reporter 等）的 ToolSet 没有探索图

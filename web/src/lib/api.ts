@@ -93,6 +93,7 @@ import type {
   RetestState,
   SessionTokenUsage,
   Settings,
+  CredentialTrafficDetail,
   IntelligencePage,
   TaskIntelligence,
   Severity,
@@ -1098,6 +1099,14 @@ export const api = {
     get<TaskIntelligence>(`/${scope}/${id}/intelligence/${intelligenceId}`),
   updateIntelligence: (taskId: number, intelligenceId: number, status: string) =>
     patch<{ updated: boolean }>(`/tasks/${taskId}/intelligence/${intelligenceId}`, { status }),
+  // 凭据整理 agent（C2 凭据子阶段）：重新排队一条凭据情报的整理 + 读取绑定流量的
+  // 原始报文（原始流量删除后仍返回持久化的匹配片段，unavailable=true 提示）。
+  retryCredentials: (taskId: number, intelligenceId: number) =>
+    post<{ queued: boolean }>(`/tasks/${taskId}/intelligence/${intelligenceId}/credentials/retry`),
+  credentialTraffic: (scope: "tasks" | "assets", scopeId: string, intelligenceId: number, trafficId: string) =>
+    get<CredentialTrafficDetail>(
+      `/${scope}/${scopeId}/intelligence/${intelligenceId}/traffic/${encodeURIComponent(trafficId)}`,
+    ),
 
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),

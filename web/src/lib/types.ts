@@ -1130,6 +1130,11 @@ export interface Settings {
   // 任务情报采集（C2，移植自 ARTEX）：开启后 agent 的 record_intelligence 工具与
   // record_fact 随附 intelligence 写回生效；每次写回前重读，即时生效。
   task_intelligence_enabled?: boolean;
+  // 凭据整理 agent（C2 凭据子阶段，移植自 ARTEX）：拆分/高亮已上报凭据，不改变
+  // 原始上报或验证状态；绑定流量核对已抓取流量并保存匹配片段。父开关关闭时
+  // 子开关被连动清掉（后端原子提交）。
+  credential_agent_enabled?: boolean;
+  credential_traffic_binding?: boolean;
   // ---- 漏洞 IM 推送（渠道本身是独立资源，见 /api/notify/*，这里只有三项全局配置）----
   notify_enabled?: boolean; // 推送总开关，默认开；用于维护期一键止血
   notify_public_base_url?: string; // 漏洞详情回链的外部访问地址；空=消息不带回链
@@ -2258,6 +2263,47 @@ export interface FindingCasePage {
 // ---- 任务情报（C2，移植自 ARTEX 0.3.29）----
 export type IntelligenceKind = "credential" | "lead" | "sensitive_data";
 
+// 凭据整理 agent 的派生展示（C2 凭据子阶段）：accounts 字段全部要求原文逐字存在。
+export interface CredentialAccount {
+  label?: string;
+  username?: string;
+  password?: string;
+  token?: string;
+  cookie?: string;
+  endpoint?: string;
+  protocol?: string;
+}
+// 验证过的流量引用与有界片段；原始流量删除后片段仍可查看。
+export interface CredentialTraffic {
+  id: string;
+  url: string;
+  method: string;
+  status: number;
+  side: string;
+  excerpt: string;
+  accounts: number[];
+}
+export interface CredentialAnalysis {
+  state: "queued" | "processing" | "ready" | "error";
+  method?: "rules" | "agent";
+  accounts: CredentialAccount[] | null;
+  traffic: CredentialTraffic[] | null;
+  traffic_state: string;
+  traffic_note?: string;
+  note?: string;
+  error?: string;
+  model?: string;
+  input_tokens: number;
+  output_tokens: number;
+  processed_at?: string;
+}
+export interface CredentialTrafficDetail {
+  reference: CredentialTraffic;
+  req?: string;
+  resp?: string;
+  unavailable: boolean;
+}
+
 export interface TaskIntelligence {
   id: number;
   task_id: number;
@@ -2276,6 +2322,8 @@ export interface TaskIntelligence {
   inherited: boolean;
   // 溯源走探索图（intent:<id> / plan），歧义或缺失时为空。
   source_session?: string;
+  // 凭据整理 agent 的派生结果（凭据子阶段）；原始情报行始终是权威数据。
+  credentials?: CredentialAnalysis;
 }
 
 export interface IntelligencePage {
@@ -2283,4 +2331,7 @@ export interface IntelligencePage {
   total: number;
   counts: Record<IntelligenceKind, number>;
   enabled: boolean;
+  // 凭据整理 agent 开关状态（前端凭据展示/重试按钮按此显隐）。
+  credential_agent_enabled: boolean;
+  credential_traffic_binding: boolean;
 }

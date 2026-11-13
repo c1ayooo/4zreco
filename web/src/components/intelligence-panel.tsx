@@ -6,6 +6,7 @@ import Link from "next/link";
 import { CopyIcon, RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { CredentialContent, CredentialTrafficViewer } from "@/components/credential-content";
 import { StatusBadge, ToneDot } from "@/components/status-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -24,8 +25,9 @@ import type { IntelligenceKind, IntelligencePage, TaskIntelligence } from "@/lib
 import { copyText } from "@/lib/utils";
 
 // 任务情报面板（C2，移植自 ARTEX 0.3.29）。三类 tab + 搜索 + 状态筛选 + 详情弹层 +
-// 人工定级；任务/资产两个维度共用（scope 区分）。凭据验证 agent 的派生展示属后续
-// 单独工单，这里只展示原始情报行（原始情报始终是权威数据）。
+// 人工定级；任务/资产两个维度共用（scope 区分）。凭据行经 CredentialContent 渲染
+// 整理 agent 的派生展示（掩码分组 + 原文高亮 + 绑定流量），带重试入口——原始情报
+// 行始终是权威数据。
 
 const KINDS: { value: IntelligenceKind; label: string }[] = [
   { value: "credential", label: "凭据" },
@@ -94,6 +96,8 @@ export function IntelligencePanel({
   const [refresh, setRefresh] = React.useState(0);
   const [selected, setSelected] = React.useState<TaskIntelligence | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const [retrying, setRetrying] = React.useState(false);
+  const [trafficTarget, setTrafficTarget] = React.useState<{ item: TaskIntelligence; id: string } | null>(null);
   React.useEffect(() => {
     if (data)
       setSelected((current) => (current ? (data.items.find((item) => item.id === current.id) ?? current) : null));
@@ -158,6 +162,18 @@ export function IntelligencePanel({
     }
   };
   const statusOptions = kind === "all" ? {} : STATUS[kind as IntelligenceKind];
+  const retry = async (item: TaskIntelligence) => {
+    setRetrying(true);
+    try {
+      await api.retryCredentials(item.task_id, item.id);
+      setRefresh((n) => n + 1);
+      toast.success("已加入凭据处理队列");
+    } catch (e) {
+      toast.error(`重试失败：${String((e as Error)?.message ?? e)}`);
+    } finally {
+      setRetrying(false);
+    }
+  };
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {data && !data.enabled && scope === "tasks" ? (
@@ -280,9 +296,12 @@ export function IntelligencePanel({
                     </TableCell>
                     <TableCell className="align-top whitespace-normal">
                       <div className="flex min-w-0 flex-col gap-2">
-                        <p className="max-h-24 overflow-hidden whitespace-pre-wrap break-all text-sm">
-                          {item.content}
-                        </p>
+                        <CredentialContent
+                          item={item}
+                          enabled={data.credential_agent_enabled}
+                          onDetails={() => open(item)}
+                          onTraffic={(id) => setTrafficTarget({ item, id })}
+                        />
                         <div className="flex flex-col gap-1 text-muted-foreground text-xs">
                           <span>证据</span>
                           <p className="whitespace-pre-wrap break-all">{item.evidence.length > 220 ? `${item.evidence.slice(0, 220)}…` : item.evidence}</p>
@@ -406,21 +425,36 @@ export function IntelligencePanel({
               )}
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm">内容</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={async () => {
-                    if (await copyText(selected.content)) toast.success("已复制");
-                    else toast.error("复制失败");
-                  }}
-                >
-                  <CopyIcon data-icon="inline-start" />
-                  复制
-                </Button>
+                {selected.kind === "credential" && scope === "tasks" && !selected.inherited && data?.credential_agent_enabled ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={retrying || selected.credentials?.state === "processing" || selected.credentials?.state === "queued"}
+                    onClick={() => void retry(selected)}
+                  >
+                    <RefreshCwIcon data-icon="inline-start" />
+                    重新处理凭据
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={async () => {
+                      if (await copyText(selected.content)) toast.success("已复制");
+                      else toast.error("复制失败");
+                    }}
+                  >
+                    <CopyIcon data-icon="inline-start" />
+                    复制
+                  </Button>
+                )}
               </div>
-              <pre className="max-h-48 overflow-auto rounded-lg bg-muted p-3 whitespace-pre-wrap break-all text-xs">
-                {selected.content}
-              </pre>
+              <CredentialContent
+                item={selected}
+                detail
+                enabled={data?.credential_agent_enabled}
+                onTraffic={(id) => setTrafficTarget({ item: selected, id })}
+              />
               <p className="text-sm">证据</p>
               <pre className="max-h-48 overflow-auto rounded-lg bg-muted p-3 whitespace-pre-wrap break-all text-xs">
                 {selected.evidence}
@@ -441,6 +475,13 @@ export function IntelligencePanel({
           ) : null}
         </DialogContent>
       </Dialog>
+      <CredentialTrafficViewer
+        scope={scope}
+        scopeId={scopeId}
+        item={trafficTarget?.item ?? null}
+        trafficId={trafficTarget?.id ?? null}
+        onClose={() => setTrafficTarget(null)}
+      />
     </div>
   );
 }

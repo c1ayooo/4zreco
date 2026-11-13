@@ -1371,6 +1371,8 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
         total: 0,
         counts: { credential: 0, lead: 0, sensitive_data: 0 },
         enabled: D.settings.task_intelligence_enabled,
+        credential_agent_enabled: D.settings.credential_agent_enabled,
+        credential_traffic_binding: D.settings.credential_agent_enabled && D.settings.credential_traffic_binding,
       };
     }
     throw new Error("情报不存在或不属于当前范围");
@@ -2268,6 +2270,13 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const patch = b as Partial<Settings> & { im_bot?: Partial<Settings["im_bot"]> };
     const next = { ...D.settings, ...patch };
     if (patch.im_bot) next.im_bot = { ...D.settings.im_bot, ...patch.im_bot };
+    // 凭据整理（C2 凭据子阶段）：与真实后端同构的开关依赖——父关连动清子。
+    if (!next.task_intelligence_enabled) {
+      next.credential_agent_enabled = false;
+    }
+    if (!next.credential_agent_enabled) {
+      next.credential_traffic_binding = false;
+    }
     return next;
   }
   if (path === "/settings/web-search/test") return { ok: true, count: 5, backend: D.settings.web_search_backend };

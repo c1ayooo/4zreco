@@ -14,6 +14,9 @@ import (
 // 不给模型任何 token 开销。每次写回前重读开关，运行中会话也能即时生效。
 var IntelligenceEnabled func() bool
 var IntelligenceRecord func(context.Context, int64, int64, string, db.IntelligenceInput) (int64, error)
+// CredentialRecorded 由宿主在 credential 情报落库后调用（凭据整理 agent 子阶段）：
+// 只为降低延迟，持久化的数据库行才是事实源；漏掉的通知由处理循环的慢 tick 兜底。
+var CredentialRecorded func()
 
 func intelligenceEnabled() bool { return IntelligenceEnabled != nil && IntelligenceEnabled() }
 

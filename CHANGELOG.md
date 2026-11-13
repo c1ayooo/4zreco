@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+### 新增：凭据验证 agent 与 credential_analysis 派生呈现——ARTEX 移植 C2 凭据子阶段
+
+- **行为**：`credential` 类情报落库后由后台「凭据整理」agent 自动拆分账号/密码/Token/Cookie
+  （可解析 JSON 零模型调用，散文内容恰一次有界模型调用，输出逐字接地校验——编造字段
+  整体拒绝）；流量绑定开启时核对已抓取流量并保存引用与匹配片段（只读已抓取数据，不登录、
+  不发起请求，匹配流量不代表验证成功）。原始情报行始终是权威数据，credential_analysis
+  只是派生展示；人工定级不受影响。
+- **db 层**：`internal/db/credentials.go` 租约状态机——`ClaimCredentialJob`
+  （FOR UPDATE SKIP LOCKED 单持久租约/记录，过期租约重启恢复，后补绑定 ready+off 重入队）、
+  `FinishCredentialJob`（租约不匹配的迟到完成丢弃；与开关切换 advisory lock 7337741006
+  串行化，关闭期间完成退回队列）、`RetryCredentialJob`（显式重排队置 force_extract，
+  processing 中拒绝）；`SetIntelligenceSettings` 三开关（采集总开关→agent 开关→流量绑定）
+  原子提交、父关连动清子；`Intelligence` 带 `Credentials` 派生字段、列表回传 agent 开关
+  状态；schema 零变更（C2 已建 `credential_analysis` 列，本票开始填）。
+- **agent 侧**：`internal/agent/credentials.go` 纯 Go 判定层（`CredentialSourceText`
+  URL 解码+JSON 串展开、`ValidateCredentialAccounts` 逐字接地 + 去重 + 上限 100 组、
+  `ParseCredentialJSON` 零 token 解析（嵌套对象独立成组不跨配）、`ExtractCredentials`
+  单次有界调用 maxTokens≤6000）；`agent.CredentialRecorded` 唤醒变量由宿主注入。
+- **server**：`internal/server/credentials.go`——消费循环（事件唤醒 + 30s 恢复 tick，
+  关开关取消进行中模型调用）、流量联动（资产主机集合 + 证据内流量 ID + 主机×凭据索引
+  查询，引用与片段上限 12，叠加不丢既有绑定）、`POST /api/tasks/{id}/intelligence/{intelID}/credentials/retry`
+  与 `GET /api/tasks/{id}/intelligence/{intelID}/traffic/{trafficID}`（任务/资产双 scope，
+  范围授权复用情报 API：task_relations 继承只读、原始流量删除后片段仍可看）；内置
+  「凭据整理」agent 播种（key=credential_processor，SeedPromptIfEmpty + maxTurns=1）；
+  settings 三开关走 `SetIntelligenceSettings`（非法依赖 400）；用量归账 llm_usage 的
+  credential-processor lane。
+- **前端**：`credential-content.tsx`（凭据分组掩码展示 + 原文高亮 + 关联流量引用，
+  i18n 剥离为中文文案）；intelligence-panel 内容列换 CredentialContent、详情弹层加
+  「重新处理凭据」按钮与流量查看器；settings 页凭据整理 Agent/绑定流量子开关（依赖
+  父开关禁用态）；api.ts retryCredentials/credentialTraffic + mock 同构开关依赖。
+- **测试**：db 1 用例（开关依赖级联/租约互斥/迟到完成不覆盖/关闭退回队列/过期恢复）
+  + agent 2 用例（结构化解析/接地校验/单次有界调用）+ server 4 用例（整理全流程与
+  范围授权/关闭取消进行中调用/Token 无用户名匹配/失败可显式重试），PG 门控无 DSN 时 skip。
+
 ### 新增：任务情报（task_intelligence）——ARTEX 移植 C2
 
 - **行为**：Agent 执行中实际获取的凭据、重要线索与敏感数据结构化写库（与共享资产

@@ -39,6 +39,9 @@ type Intelligence struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 	Inherited     bool      `json:"inherited"`
 	SourceSession string    `json:"source_session,omitempty"`
+	// Credentials 是凭据验证 agent 的派生展示（凭据整理 agent 子阶段写入）；
+	// 原始情报行始终是权威数据。kind='credential' 之外恒 nil。
+	Credentials *CredentialAnalysis `json:"credentials,omitempty"`
 }
 type IntelligenceFilter struct {
 	TaskID  int64
@@ -54,6 +57,10 @@ type IntelligencePage struct {
 	Total   int             `json:"total"`
 	Counts  map[string]int  `json:"counts"`
 	Enabled bool            `json:"enabled"`
+	// 凭据整理 agent 的开关状态随列表下发（前端凭据掩码展示/重试按钮按此显隐；
+	// 关闭时列表不再带 credentials 派生字段之外的数据——本字段只控前端展示）。
+	CredentialAgentEnabled   bool `json:"credential_agent_enabled"`
+	CredentialTrafficBinding bool `json:"credential_traffic_binding"`
 }
 
 func ValidIntelligenceStatus(kind, status string) bool {
@@ -138,7 +145,7 @@ func intelligenceFingerprint(in IntelligenceInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
-const intelligenceCols = `id,task_id,node_id,kind,title,content,evidence,confidence,status,asset_ids,worker,created_at,updated_at`
+const intelligenceCols = `id,task_id,node_id,kind,title,content,evidence,confidence,status,asset_ids,worker,created_at,updated_at,credential_analysis`
 
 // 溯源只认图谱事实，不认 worker 显示编号：节点本身是意图→intent:id；节点是被某个
 // 唯一意图 yield 出来的→该意图；worker=planner→plan。歧义/缺失则刻意不给精确会话，
@@ -151,8 +158,8 @@ const intelligenceSourceSession = `, COALESCE(
 
 func scanIntelligence(row interface{ Scan(...any) error }, withSource ...bool) (*Intelligence, error) {
 	item := &Intelligence{}
-	var assets []byte
-	dest := []any{&item.ID, &item.TaskID, &item.NodeID, &item.Kind, &item.Title, &item.Content, &item.Evidence, &item.Confidence, &item.Status, &assets, &item.Worker, &item.CreatedAt, &item.UpdatedAt}
+	var assets, credentials []byte
+	dest := []any{&item.ID, &item.TaskID, &item.NodeID, &item.Kind, &item.Title, &item.Content, &item.Evidence, &item.Confidence, &item.Status, &assets, &item.Worker, &item.CreatedAt, &item.UpdatedAt, &credentials}
 	if len(withSource) > 0 && withSource[0] {
 		dest = append(dest, &item.SourceSession)
 	}
@@ -162,6 +169,11 @@ func scanIntelligence(row interface{ Scan(...any) error }, withSource ...bool) (
 	}
 	if err = json.Unmarshal(assets, &item.AssetIDs); err != nil {
 		return nil, err
+	}
+	if len(credentials) > 0 && string(credentials) != "null" {
+		if err = json.Unmarshal(credentials, &item.Credentials); err != nil {
+			return nil, err
+		}
 	}
 	return item, nil
 }
@@ -241,6 +253,8 @@ func (d *DB) ListIntelligence(ctx context.Context, f IntelligenceFilter) (*Intel
 		f.Offset = 0
 	}
 	page := &IntelligencePage{Items: []*Intelligence{}, Counts: map[string]int{"credential": 0, "lead": 0, "sensitive_data": 0}, Enabled: d.GetBool(SettingTaskIntelligence, false)}
+	page.CredentialAgentEnabled = d.GetBool(SettingCredentialAgent, false)
+	page.CredentialTrafficBinding = page.CredentialAgentEnabled && d.GetBool(SettingCredentialTraffic, false)
 	scope := intelligenceScope()
 	args := []any{f.TaskID, f.AssetID}
 	rows, err := d.QueryContext(ctx, `SELECT kind,count(*)`+scope+` GROUP BY kind`, args...)
@@ -268,7 +282,7 @@ func (d *DB) ListIntelligence(ctx context.Context, f IntelligenceFilter) (*Intel
 		return nil, err
 	}
 	args = append(args, f.Limit, f.Offset)
-	cols := `i.id,i.task_id,i.node_id,i.kind,i.title,i.content,i.evidence,i.confidence,i.status,i.asset_ids,i.worker,i.created_at,i.updated_at`
+	cols := `i.id,i.task_id,i.node_id,i.kind,i.title,i.content,i.evidence,i.confidence,i.status,i.asset_ids,i.worker,i.created_at,i.updated_at,i.credential_analysis`
 	rows, err = d.QueryContext(ctx, `SELECT `+cols+intelligenceSourceSession+where+` ORDER BY i.id DESC LIMIT $6 OFFSET $7`, args...)
 	if err != nil {
 		return nil, err
@@ -285,7 +299,7 @@ func (d *DB) ListIntelligence(ctx context.Context, f IntelligenceFilter) (*Intel
 	return page, rows.Err()
 }
 func (d *DB) GetIntelligence(ctx context.Context, id int64) (*Intelligence, error) {
-	item, err := scanIntelligence(d.QueryRowContext(ctx, `SELECT i.id,i.task_id,i.node_id,i.kind,i.title,i.content,i.evidence,i.confidence,i.status,i.asset_ids,i.worker,i.created_at,i.updated_at`+intelligenceSourceSession+` FROM task_intelligence i JOIN tasks t ON t.id=i.task_id AND t.deleted_at IS NULL WHERE i.id=$1`, id), true)
+	item, err := scanIntelligence(d.QueryRowContext(ctx, `SELECT i.id,i.task_id,i.node_id,i.kind,i.title,i.content,i.evidence,i.confidence,i.status,i.asset_ids,i.worker,i.created_at,i.updated_at,i.credential_analysis`+intelligenceSourceSession+` FROM task_intelligence i JOIN tasks t ON t.id=i.task_id AND t.deleted_at IS NULL WHERE i.id=$1`, id), true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrIntelligenceNotFound
 	}
