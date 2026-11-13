@@ -302,6 +302,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV5(); err != nil {
 		return fmt.Errorf("seed intercept rules v5: %w", err)
 	}
+	if err := d.seedDefaultInterceptRulesV6(); err != nil {
+		return fmt.Errorf("seed intercept rules v6: %w", err)
+	}
 	if err := d.migrateListenerRuleTimeout(); err != nil {
 		return fmt.Errorf("migrate listener rule timeout: %w", err)
 	}
@@ -394,8 +397,8 @@ ON CONFLICT (agent_id, skill_name) DO NOTHING`, key, skillName); err != nil {
 // 声明并附带理由。这里只负责「插不插」。
 //
 // 分批是因为历史沿革：内置规则是逐批加上去的，每批有自己的 settings flag
-// （intercept_default_rules_v1…v4），已部署实例靠 flag 决定「这批还要不要插」。
-// 全新安装时四批依次执行，等价于一次性插全。
+// （intercept_default_rules_v1…v6），已部署实例靠 flag 决定「这批还要不要插」。
+// 全新安装时各批依次执行，等价于一次性插全。
 //
 // flag 已置 done 的实例直接跳过——用户后来的禁用/删除/改动作都不会被复活。
 func (d *DB) seedBuiltinInterceptRulesBatch(batch, flag string) error {
@@ -533,9 +536,10 @@ func mergeEnabledInterceptTools(raw string, additions ...string) (string, bool) 
 // migrateBuiltinRulePatterns 把两条实测误报的内置规则换成收窄后的正则。
 //
 // 误报（全部来自生产环境的拦截历史，都是合法的渗透探测命令）：
-//   rm -f /tmp_out.$$                     → 命中「删除系统关键目录」（裸 / 分支）
-//   rm -f /usr/share/nmap/scripts/_t.nse  → 同上
-//   for p in /api/.../reboot ...          → 命中「关机 / 重启」（路径里的 reboot）
+//
+//	rm -f /tmp_out.$$                     → 命中「删除系统关键目录」（裸 / 分支）
+//	rm -f /usr/share/nmap/scripts/_t.nse  → 同上
+//	for p in /api/.../reboot ...          → 命中「关机 / 重启」（路径里的 reboot）
 //
 // 规则是 first-insert only 的 seed，改代码对已部署实例无效，所以用一次性迁移
 // 同步 pattern。**只改 pattern，不改 action/enabled/priority**——用户自己把
@@ -694,6 +698,49 @@ ON CONFLICT DO NOTHING`,
 		return err
 	} else if ok {
 		if merged, changed := mergeEnabledInterceptTools(raw, "goal_met"); changed {
+			if err := d.SetSetting("intercept_enabled_tools", merged); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// seedDefaultInterceptRulesV6 brings the strong-action scanner tools
+// (zombie_weakpass / proton_secrets, AGENTS.md §5.5 P3) into the intercept
+// system：新增两条 ask 规则 + 按名补种 + 把两个工具名合进已保存的 enabled
+// 工具集（未保存的实例走代码默认 defaultEnabledTools，那里也已加入）。
+func (d *DB) seedDefaultInterceptRulesV6() error {
+	if err := d.seedBuiltinInterceptRulesBatch("v6", "intercept_default_rules_v6_scanners"); err != nil {
+		return err
+	}
+	// 按名补种：flag 早退也可能吞掉新规则（V4/V5 教训，见 seedDefaultInterceptRulesV5）。
+	for _, r := range builtinInterceptRules {
+		if r.seedBatch != "v6" {
+			continue
+		}
+		var exists bool
+		if err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM intercept_rules WHERE name=$1)`, r.name).Scan(&exists); err != nil {
+			return fmt.Errorf("probe v6 rule %q: %w", r.name, err)
+		}
+		if exists {
+			continue // 用户编辑过或已插入——不动
+		}
+		if _, err := d.Exec(`
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
+VALUES ($1, true, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT DO NOTHING`,
+			r.name, r.priority, r.target, r.typ, r.pattern, r.action, r.message,
+			r.timeoutEnabled, r.timeoutSeconds, r.timeoutAction,
+		); err != nil {
+			return fmt.Errorf("reseed v6 rule %q: %w", r.name, err)
+		}
+	}
+	// 已保存过 enabled 工具集的实例补两个新工具名（V4/V5 同款一次性 append）。
+	if raw, ok, err := d.GetSetting("intercept_enabled_tools"); err != nil {
+		return err
+	} else if ok {
+		if merged, changed := mergeEnabledInterceptTools(raw, "zombie_weakpass", "proton_secrets"); changed {
 			if err := d.SetSetting("intercept_enabled_tools", merged); err != nil {
 				return err
 			}

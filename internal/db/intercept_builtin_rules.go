@@ -76,11 +76,11 @@ type builtinRule struct {
 	message string
 	// priority 是优先级（高者先匹配）。
 	priority int
-	// seedBatch 是这条规则属于哪一批 seed（v1/v2/v3/v4）。
+	// seedBatch 是这条规则属于哪一批 seed（v1…v6）。
 	//
 	// 分批的原因是历史沿革：内置规则是逐批加上去的，每批有自己的 settings
-	// flag（intercept_default_rules_v1…v4），已部署实例靠 flag 决定「这批
-	// 还要不要插」。全新安装时四批依次执行，等价于一次性插全——所以批次只
+	// flag（intercept_default_rules_v1…v6），已部署实例靠 flag 决定「这批
+	// 还要不要插」。全新安装时各批依次执行，等价于一次性插全——所以批次只
 	// 影响「插不插」，不影响「插什么」：内容统一来自 builtinInterceptRules。
 	seedBatch string
 	// timeoutEnabled 声明本规则是否自带超时策略。
@@ -533,6 +533,43 @@ var builtinInterceptRules = []builtinRule{
 		timeoutSeconds: judgeTimeoutSeconds,
 		timeoutAction:  judgeTimeoutActionAllow,
 		priority:       90,
+	},
+
+	// ── 强动作扫描器（AGENTS.md §5.5 P3）：对目标发起真实认证 / 提取凭据原文 ──
+	// 这两条扩展了 ask 类的语义边界：classAsk 的原判据是「只改平台自身状态、与
+	// 目标资产无关」，而 zombie_weakpass / proton_secrets 是作用在【目标资产】上的
+	// 强动作——不能交模型研判（规则层与模型都看不到授权书），也不能默认放行，
+	// 只能转人工确认授权范围。这是 §5.5 明文规定（「强动作类必须走 ask 审批 +
+	// intercept 规则 seed 批次 v6」），故归入 ask 类并在 rationale 里注明依据。
+	{
+		name:           "[内置] 弱口令检测 zombie_weakpass",
+		seedBatch:      "v6",
+		target:         "tool_name",
+		typ:            "regex",
+		pattern:        `^zombie_weakpass$`,
+		action:         "ask",
+		class:          classAsk,
+		rationale:      "弱口令检测对目标发起真实认证尝试（失败日志、账户锁定风险），是「主动拿凭据」的强动作，超出只读发现类（gogo_scan/spray_finger）的边界；是否授权、字典规模多大只有人能判断（AGENTS.md §5.5：强动作类必须走 ask 审批）。",
+		message:        "zombie_weakpass 将对目标发起真实弱口令尝试；请确认目标在授权范围内、字典规模可控（大字典可能触发账户锁定、产生大量失败日志）",
+		priority:       120,
+		timeoutEnabled: true,
+		timeoutSeconds: 180,
+		timeoutAction:  "allow",
+	},
+	{
+		name:           "[内置] 敏感信息扫描 proton_secrets",
+		seedBatch:      "v6",
+		target:         "tool_name",
+		typ:            "regex",
+		pattern:        `^proton_secrets$`,
+		action:         "ask",
+		class:          classAsk,
+		rationale:      "敏感信息扫描会提取凭据/secret 明文（命中原文落证据附件），属凭据提取类强动作；对哪个目标/文件做提取、提取到的东西怎么流转，需要人工确认（AGENTS.md §5.5：强动作类必须走 ask 审批）。",
+		message:        "proton_secrets 将提取文本/文件中的凭据与 secret 明文（命中只落证据附件、不进对话）；请确认扫描对象在授权范围内",
+		priority:       120,
+		timeoutEnabled: true,
+		timeoutSeconds: 180,
+		timeoutAction:  "allow",
 	},
 }
 

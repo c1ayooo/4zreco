@@ -24,11 +24,45 @@ type Database struct {
 	SSLMode  string `json:"sslmode"`
 }
 
+// PassiveSearch is the credential set for cyberspace mapping search engines
+// (FOFA / Hunter 奇安信). Credentials live ONLY in the gitignored config.json
+// or ZRECO_* environment variables — never in any committed file (AGENTS.md §4:
+// 凭据只进运行时配置).
+type PassiveSearch struct {
+	// FofaEmail / FofaKey authenticate the FOFA REST API. Both are required by
+	// the uncover SDK's fofa agent even though the request URL itself only uses
+	// the key. Env overrides: ZRECO_FOFA_EMAIL / ZRECO_FOFA_KEY.
+	FofaEmail string `json:"fofa_email"`
+	FofaKey   string `json:"fofa_key"`
+	// HunterKey authenticates the Hunter (hunter.qianxin.com) open API.
+	// Env override: ZRECO_HUNTER_KEY.
+	HunterKey string `json:"hunter_key"`
+}
+
+// WebSearch is the generic web-search service used by the web_search domain
+// tool: a Tavily-compatible search API (endpoint + key). Endpoint defaults to
+// DefaultWebSearchEndpoint when empty. The key lives ONLY in the gitignored
+// config.json or ZRECO_* env vars.
+type WebSearch struct {
+	// Endpoint is the Tavily-compatible search endpoint (POST JSON).
+	// Env override: ZRECO_WEBSEARCH_ENDPOINT.
+	Endpoint string `json:"endpoint"`
+	// Key authenticates the endpoint (Tavily-compatible: api_key in the body).
+	// Env override: ZRECO_WEBSEARCH_KEY.
+	Key string `json:"key"`
+}
+
 // Config is the on-disk config file shape.
 type Config struct {
-	Database Database `json:"database"`
-	SkillDir string   `json:"skill_dir"`
+	Database Database      `json:"database"`
+	SkillDir string        `json:"skill_dir"`
+	Passive  PassiveSearch `json:"passive_search"`
+	Web      WebSearch     `json:"web_search"`
 }
+
+// DefaultWebSearchEndpoint is the Tavily-compatible endpoint assumed when the
+// web_search config supplies only a key.
+const DefaultWebSearchEndpoint = "https://api.tavily.com/search"
 
 // BaseDir is the directory that anchors all runtime artifacts (config.json and
 // the data/ store). It is the directory the running binary lives in, so a
@@ -124,6 +158,47 @@ func SkillDir() string {
 	}
 	_ = os.MkdirAll(d, 0o755)
 	return d
+}
+
+// LoadPassiveSearch resolves the FOFA/Hunter credentials with precedence:
+//
+//	ZRECO_FOFA_EMAIL / ZRECO_FOFA_KEY / ZRECO_HUNTER_KEY  >  config file (passive_search)
+//
+// Reading fresh on each call keeps the semantics identical to Load(): a config
+// file edited while the process runs takes effect on the next tool call, with
+// no restart. Empty fields simply mean "not configured".
+func LoadPassiveSearch() PassiveSearch {
+	c := Load().Passive
+	if v := strings.TrimSpace(os.Getenv("ZRECO_FOFA_EMAIL")); v != "" {
+		c.FofaEmail = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ZRECO_FOFA_KEY")); v != "" {
+		c.FofaKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ZRECO_HUNTER_KEY")); v != "" {
+		c.HunterKey = v
+	}
+	return c
+}
+
+// LoadWebSearch resolves the generic web-search endpoint+key with precedence:
+//
+//	ZRECO_WEBSEARCH_ENDPOINT / ZRECO_WEBSEARCH_KEY  >  config file (web_search)
+//
+// An empty endpoint falls back to DefaultWebSearchEndpoint (Tavily's own API).
+// Key empty = 搜索服务未配置.
+func LoadWebSearch() WebSearch {
+	c := Load().Web
+	if v := strings.TrimSpace(os.Getenv("ZRECO_WEBSEARCH_ENDPOINT")); v != "" {
+		c.Endpoint = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ZRECO_WEBSEARCH_KEY")); v != "" {
+		c.Key = v
+	}
+	if c.Endpoint == "" {
+		c.Endpoint = DefaultWebSearchEndpoint
+	}
+	return c
 }
 
 // PostgresDSN resolves the connection string with precedence:

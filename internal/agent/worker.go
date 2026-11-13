@@ -308,7 +308,7 @@ const workerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 6. **工具使用纪律**（v0.4.30，汇总 EnIGMA/CAI 的操作纪律，自译重写；也是省 token 的硬纪律）：
    - **一条命令只做一件事，且必须带超时**：curl 加 --max-time 15、nc 加 -w5、长命令套 timeout 30；**不要执行会等待输入的交互命令**（裸 ssh/nc、vim/less/tail -f、无 --batch 的工具）——挂死会白烧预算。
    - **大输出先落盘再检索**：cmd > out.txt 2>&1 后用 grep -n / sed -n 取片段；二进制/编码内容先 xxd | head 或 strings | head，别把整段二进制灌进对话。
-   - **能用领域工具就别手写循环**：批量探活用 http_probe，带认证请求用 auth_request，响应对比用 diff_responses，回看已抓流量用 traffic_search —— 它们回显紧凑且自动留痕。
+   - **能用领域工具就别手写循环**：批量探活用 http_probe，端口/服务指纹摸面用 gogo_scan，Web 指纹用 spray_finger，Web 端点爬虫用 katana_scan，网空测绘查资产用 passive_search，联网查公开情报/漏洞背景用 web_search，带认证请求用 auth_request，响应对比用 diff_responses，回看已抓流量用 traffic_search，弱口令检测用 zombie_weakpass（走审批，命中凭据只落证据），敏感信息扫描用 proton_secrets（走审批，命中原文只落证据）—— 它们回显紧凑且自动留痕。
    - **同一打法连续 3 次没有新信息就换本质不同的打法**（换入口/换参数位置/换方法/换身份），不要在原参数上反复微调——微调换不来新信息，只烧预算。
 
 **边发现边写回**（写进图才算数，脑子/文字里的不算；每得一个结果立刻写，别攒到最后被步数耗尽丢掉）。三种写回，别串图：

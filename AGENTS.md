@@ -166,6 +166,31 @@ eino 在 `feat/eino-migration` 分支，合并后 master 才有）。现状要�
 4zrec 生产实证为噪声管道（92% 审批是围栏 ask、其中 58% 是解析失败噪声）；本项目 ask 仅来自
 规则与 LLM judge，量小且每条自带裁决依据。
 
+## 5.5 扫描器领域工具接入（cyber-harness 借鉴，P1-P4 已落地）
+
+- **来源与许可**：工具形态借鉴 chainreactors/cyber-harness；gogo/spray 经其官方 Go SDK
+  （chainreactors/gogo、chainreactors/spray、chainreactors/sdk）进程内接入，不拉外部进程。
+  本项目 AGPL-3.0 与 SDK 的 GPL-3.0 同族兼容。SDK 版本一律精确锁死（pseudo-version 或
+  固定 tag 均可，两种形态等价——当前 zombie/katana/uncover/utils-parsers 是固定 tag，
+  sdk 主模块与 gogo/spray/zombie-sdk 子模块是 pseudo-version，见 go.mod；同 eino 版本锁
+  纪律，见 §5 版本锁定条），升级前重跑架构门禁与相关回归。注意：`check-eino-boundary.sh`
+  的版本锁机检目前只锁 eino，扫描器依赖无独立机检，靠 go.mod 精确值 + review 兜底。
+- **katana 体积注意**：katana 经 `pkg/engine/standard` 静态引入 go-rod（含 launcher，
+  约十余个包进二进制）——运行时 standard 引擎不启动浏览器（工具未设 Headless，
+  desc「不启动浏览器」成立），只有体积代价；在意体积可后续评估上游拆分/vendor 裁剪。
+- **注册三件套**：新领域工具必须同时进 tools.go/tools_insert.go 三张工具清单
+  （PlannerTools/WorkerTools/MainAgentTools）、toolcatalog.go 的 BuiltinToolSeeds、
+  提示词对应段落（§4「工具实现了必须注册」已有坑记录，此处只引用不重复）。
+- **审批与范围分层**：只读发现类（gogo_scan/spray_finger）用 readTool/readExpTool 包装
+  （防 writeTool 丢 ReadOnly/Concurrent 标记被调度串行化）；强动作类（zombie 弱口令、
+  proton 凭据提取，P3 本次一并实施）必须走 ask 审批 + intercept 规则 seed 批次 v6（按 §3 第 5 条：
+  批次 + 按名补种 + enabled 工具集合并）。
+- **证据纪律**：扫描原始结果落 evidence 版本化留存；trace/双图只写紧凑结论；凭据类输出
+  不得进 trace 明文（与 §4「不要在对话/报告里写凭据」同源要求）。
+- **路线图**：P1 hosttools 家底盘点 + 本节规范；P2 gogo_scan/spray_finger 领域工具；
+  P3 zombie + proton 领域工具 + 审批 seed 批次 v6；P4 katana SDK 化 / passive_search /
+  web_search——P1-P4 全部纳入本次实施。
+
 ## 6. 目录速览
 
 顶层只保留 8 个项目目录（2026-11-03 收缩：27 个 Go 包全部收入 `internal/` 与 `cmd/`，

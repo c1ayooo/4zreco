@@ -217,6 +217,19 @@ var catalog = []Tool{
 	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64。
 	{Name: "feroxbuster", Purpose: "目录/文件爆破(Rust 版,支持多线程与递归)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.tar.gz"},
+	// ── chainreactors 三件套（2026-11-12 实测最新 release 资产名）──
+	// 三家同构：裸二进制、无版本号、无扩展名，如 gogo_linux_amd64 /
+	// spray_linux_amd64 / zombie_linux_arm64，所以模板统一不带 {ver}。
+	// gogo：端口扫描+服务指纹（对应 nmap 的定位，Category 归 network）。
+	{Name: "gogo", Purpose: "端口扫描与服务指纹发现(高并发,支持被动指纹)", Kind: KindGitHub, Category: CatNetwork,
+		Repo: "chainreactors/gogo", AssetTmpl: "gogo_linux_{arch}"},
+	// spray：Web 批量探测+HTTP 指纹+路径检查（对应 httpx/whatweb 的定位）。
+	{Name: "spray", Purpose: "Web 批量探测(HTTP 指纹/路径检查/爆破口子发现)", Kind: KindGitHub, Category: CatWeb,
+		Repo: "chainreactors/spray", AssetTmpl: "spray_linux_{arch}"},
+	// zombie：常见服务（SSH/MySQL/Redis 等）的授权弱口令检测——仅用于
+	// 授权范围内测试，对应 hydra/netexec 的凭据爆破面。
+	{Name: "zombie", Purpose: "授权弱口令检测(SSH/SMB/MySQL/Redis 等常见服务)", Kind: KindGitHub, Category: CatCred,
+		Repo: "chainreactors/zombie", AssetTmpl: "zombie_linux_{arch}"},
 	// ── 红队后渗透补齐（2026-10-30）：权限保持/横向/隧道/凭据 ──
 	// socat：nc 的全能替代（双向管道、TLS、转发），反弹 shell 稳定化的标配。
 	{Name: "socat", Purpose: "多用途网络中继(反弹 shell 稳定化/端口转发)", Kind: KindApt, Category: CatPivot,
