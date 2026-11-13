@@ -73,3 +73,7 @@ __pycache__/
 *.pyc
 .build-tmp/
 peers/
+
+# 调研稿 / 设计稿类工作产物（不入库；若日后要留目录须同步 AGENTS.md §6 速览）
+/survey_work/
+/web/design-samples/
