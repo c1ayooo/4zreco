@@ -140,7 +140,7 @@ func TestParseRetryAfter(t *testing.T) {
 	if d := parseRetryAfter(h); d != 17*time.Second {
 		t.Fatalf("seconds form: want 17s got %v", d)
 	}
-	h.Set("Retry-After", "Mon, 11 Nov 2026 00:00:10 GMT")
+	h.Set("Retry-After", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
 	if d := parseRetryAfter(h); d <= 0 {
 		t.Fatalf("http-date form must yield positive duration, got %v", d)
 	}
