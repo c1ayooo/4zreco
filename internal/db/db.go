@@ -36,6 +36,19 @@ var schemaDeadlockRetryDelays = [...]time.Duration{
 	time.Second,
 }
 
+// defaultQueryTimeout 是「无 ctx 参数」核心路径的保守默认超时：PG 抖动（网络
+// 分区、连接池枯竭、长事务争锁）时这些调用改为最多挂起 30s 再报错，而不是
+// 无限等待拖死调用方（engine 循环 / HTTP handler）。已接收 caller ctx 的方法
+// 不走这里，照旧透传；schema 迁移的 advisory lock 长事务路径（Open 与迁移，
+// 见 withSchemaMigrationLock）刻意不加——迁移本来就慢。
+const defaultQueryTimeout = 30 * time.Second
+
+// queryCtx 返回带 defaultQueryTimeout 的后台上下文。只用于没有 caller ctx 的
+// 方法；调用方配 defer cancel 释放定时器，避免它挂到超时才回收。
+func queryCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), defaultQueryTimeout)
+}
+
 type schemaExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
@@ -129,7 +142,10 @@ func ensureDatabase(dsn string) error {
 	var exists bool
 	_ = admin.QueryRow(`SELECT true FROM pg_database WHERE datname=$1`, dbName).Scan(&exists)
 	if !exists {
-		if _, err := admin.Exec(`CREATE DATABASE "` + dbName + `"`); err != nil {
+		// 标识符里的内嵌双引号按 PG 规则翻倍转义（DSN 来自管理员配置而非用户
+		// 输入，实际不会命中——格式正确性补齐，见 2026-11-13 体检）。
+		quoted := strings.ReplaceAll(dbName, `"`, `""`)
+		if _, err := admin.Exec(`CREATE DATABASE "` + quoted + `"`); err != nil {
 			return fmt.Errorf("create database %q: %w", dbName, err)
 		}
 	}

@@ -416,10 +416,6 @@ const (
 	// 任务并发上限:开关 + 上限数。默认关闭;开启后默认上限 5(见 defaultConcurrencyLimit)。
 	settingConcurrencyOn    = "task_concurrency_enabled"
 	settingConcurrencyLimit = "task_concurrency_limit"
-	// 实验功能:noa 模型驱动上下文压缩(norma v0.4.0)。默认关闭——开启后平台接入的四类
-	// agent(planner/worker/主 agent/对话)由 noa 接管上下文压缩,取代内置 compaction。
-	// 每 run 读一次,切换只影响之后启动的 run。
-	settingNoaCompaction = "noa_compaction"
 	// defaultWebSearchBackend is used when web search is on but no backend was picked.
 	defaultWebSearchBackend = "ddgs"
 	// deepSeekWebSearchBackend borrows the active LLM profile instead of its own
@@ -758,6 +754,10 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	} else {
 		log.Printf("[vulnintel] 同步已关闭（settings.%s=false），agent 工具将返回未启用", settingVulnIntelOn)
 	}
+	// 追留清理（体检 O2）：server_logs/llm_records 历史裁剪，启动数分钟后先跑
+	// 一轮、之后每 24h 一轮；天数每轮重读 settings，改配置即时生效。失败只记
+	// 日志，不中断循环（下轮重试）。
+	go m.runRetentionSweep()
 	// 代理池主动健康检查：定时探测已启用上游，不通的立刻熔断。
 	// 间隔为 0 时关闭（设置项 proxypool_health_minutes）。
 	m.StartProxyPoolHealthCheck()
@@ -808,19 +808,6 @@ func (m *Manager) SetLLMRecordEnabled(on bool) error {
 	m.llmRecOn = on
 	m.mu.Unlock()
 	return nil
-}
-
-// NoaCompactionEnabled reports whether the experimental noa context-compression
-// mechanism is on (默认关；settings.noa_compaction). Read per agent run via the
-// injected resolver, so a toggle takes effect on the next run without rebuild.
-func (m *Manager) NoaCompactionEnabled() bool {
-	return m.pg.GetBool(settingNoaCompaction, false)
-}
-
-// SetNoaCompaction persists the noa toggle. Effective on the next agent run —
-// the resolver reads it per run, so no rebuild is needed.
-func (m *Manager) SetNoaCompaction(on bool) error {
-	return m.pg.SetBool(settingNoaCompaction, on)
 }
 
 // LLMPoolEnabled reports whether LLM failover ("轮询") is on (默认关；
@@ -1148,6 +1135,45 @@ func (m *Manager) runVulnIntelSync() {
 			cancel()
 		}
 		time.Sleep(defaultVulnIntelInterval)
+	}
+}
+
+// 追留清理节奏（体检 O2）：启动先等 5 分钟（避开启动风暴，与 vulnintel 同理），
+// 之后每 24h 一轮。无 shutdown channel，进程退出即回收——与 runVulnIntelSync 同款。
+const (
+	retentionSweepStartupDelay = 5 * time.Minute
+	retentionSweepInterval     = 24 * time.Hour
+)
+
+// runRetentionSweep 驱动 server_logs/llm_records 的周期追留清理。天数每轮重读
+// settings（retention_server_logs_days 缺省 30；retention_llm_records_days 缺省
+// 0=关闭），单表失败只记日志，不影响另一表、不中断循环。审批三表 append-only
+// 触发器禁删，本流程从不触碰。
+func (m *Manager) runRetentionSweep() {
+	time.Sleep(retentionSweepStartupDelay)
+	for {
+		m.retentionPass()
+		time.Sleep(retentionSweepInterval)
+	}
+}
+
+// retentionPass 跑一轮清理：两张表各自独立删、独立记日志。
+func (m *Manager) retentionPass() {
+	if days := m.pg.RetentionDays(pgdb.SettingRetentionServerLogsDays, pgdb.DefaultRetentionServerLogsDays); days > 0 {
+		n, err := m.pg.DeleteServerLogsOlderThan(time.Now().AddDate(0, 0, -days))
+		if err != nil {
+			log.Printf("[retention] server_logs 清理失败（保留 %d 天）: %v", days, err)
+		} else if n > 0 {
+			log.Printf("[retention] server_logs 清理 %d 行（保留 %d 天）", n, days)
+		}
+	}
+	if days := m.pg.RetentionDays(pgdb.SettingRetentionLLMRecordsDays, pgdb.DefaultRetentionLLMRecordsDays); days > 0 {
+		n, err := m.pg.DeleteLLMRecordsOlderThan(time.Now().AddDate(0, 0, -days))
+		if err != nil {
+			log.Printf("[retention] llm_records 清理失败（保留 %d 天）: %v", days, err)
+		} else if n > 0 {
+			log.Printf("[retention] llm_records 清理 %d 行（保留 %d 天）", n, days)
+		}
 	}
 }
 

@@ -220,7 +220,7 @@ export default function AssetInterceptPage() {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="hover:bg-transparent">
+                <TableRow>
                   <TableHead className="w-[130px]">类型</TableHead>
                   <TableHead>匹配内容</TableHead>
                   <TableHead>备注</TableHead>

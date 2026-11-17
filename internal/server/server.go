@@ -350,14 +350,6 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 	return s
 }
 
-// Close releases process-scoped resources owned by Server. It is safe to call
-// repeatedly; listener.Manager.Stop is idempotent.
-func (s *Server) Close() {
-	if s == nil {
-		return
-	}
-}
-
 // Restored deadline and worker loops must inherit the same context as new tasks,
 // including the side-question checkpoint publisher installed during startup.
 func (s *Server) restoreTaskRuntimes() {
@@ -605,7 +597,6 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	}
 	s.chatAgent.SetNonStreaming(nonStreamingResolver(cfg))
 	s.chatAgent.SetMaxTokens(maxTokensResolver(cfg))
-	s.chatAgent.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(每 run 读)
 	s.llmProv = prov
 	s.llmCfg = cfg
 	s.llmOn = true
@@ -749,7 +740,6 @@ func (s *Server) chatAgentForProfile(id int64) *agent.ChatAgent {
 	}
 	ca.SetNonStreaming(nonStreamingResolver(cfg))
 	ca.SetMaxTokens(maxTokensResolver(cfg))
-	ca.SetNoaEnabled(s.m.NoaCompactionEnabled) // 实验功能:noa 上下文压缩(每 run 读)
 	s.profMu.Lock()
 	if ex := s.profChatAgents[id]; ex != nil { // lost the race → keep the winner
 		ca = ex
@@ -996,7 +986,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/artifacts/{aid}/preview", s.regenerateArtifactPreview)
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
-	mux.HandleFunc("POST /api/gc", s.gc)
 	mux.HandleFunc("GET /api/traffic", s.getTraffic)
 	mux.HandleFunc("GET /api/traffic/hosts", s.getTrafficHosts)
 	mux.HandleFunc("DELETE /api/traffic", s.deleteTraffic)
@@ -3756,9 +3745,6 @@ func (s *Server) settingsPayload() map[string]any {
 		// 操作约束注入范围(默认都开):把本任务的 allow/deny 约束拼进对应 agent 的系统提示。
 		"constraints_inject_planner": s.constraintInjectPlanner(),
 		"constraints_inject_worker":  s.constraintInjectWorker(),
-		// 实验功能:noa 模型驱动上下文压缩(默认关)。开启后平台接入的四类 agent 由 noa
-		// 接管上下文压缩,取代内置 compaction;每 run 读一次,对之后启动的 run 生效。
-		"noa_compaction": s.m.NoaCompactionEnabled(),
 		// 会话/任务自动标题(auto_title,默认关)。会话=首条用户消息后异步 LLM 生成
 		// 会话标题;任务=spawn_task 建任务时内联同步生成任务名。
 		db.SettingChatAutoTitle: s.m.pg.GetBool(db.SettingChatAutoTitle, false),
@@ -3865,8 +3851,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 操作约束注入范围开关(默认都开);即时生效(planner/worker 每轮读),无需重建 agent。
 		ConstraintsInjectPlanner *bool `json:"constraints_inject_planner"`
 		ConstraintsInjectWorker  *bool `json:"constraints_inject_worker"`
-		// 实验功能:noa 上下文压缩开关(默认关);每 run 读,对之后启动的 run 生效,无需重建 agent。
-		NoaCompaction *bool `json:"noa_compaction"`
 		// 会话/任务自动标题开关(默认关);发送首条消息/建任务时读,改完即时生效,无需重建 agent。
 		ChatAutoTitle *bool `json:"chat_auto_title_enabled"`
 		TaskAutoTitle *bool `json:"task_auto_title_enabled"`
@@ -3895,13 +3879,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ConstraintsInjectWorker != nil {
 		if err := s.m.pg.SetBool(settingConstraintsInjectWorker, *req.ConstraintsInjectWorker); err != nil {
-			writeErr(w, 500, err.Error())
-			return
-		}
-	}
-	if req.NoaCompaction != nil {
-		// 每 run 读的解析器,切换即时对之后启动的 run 生效,无需 applyLLM 重建。
-		if err := s.m.SetNoaCompaction(*req.NoaCompaction); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
@@ -4525,11 +4502,6 @@ func (s *Server) getAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"entries": t.Guard.Audit(), "attributions": t.Guard.Attributions()})
-}
-
-// gc is a no-op stub (GC not yet implemented in the new asset store).
-func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"removed": 0})
 }
 
 // --- utils ---

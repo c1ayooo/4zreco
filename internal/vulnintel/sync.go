@@ -108,6 +108,7 @@ func syncPoCs(ctx context.Context, st *Store, cfg Config) error {
 	rows.Close()
 	fetched := 0
 	failures := 0
+pocLoop:
 	for _, cveID := range targets {
 		if err := ctx.Err(); err != nil {
 			break
@@ -122,7 +123,7 @@ func syncPoCs(ctx context.Context, st *Store, cfg Config) error {
 				}
 				select {
 				case <-ctx.Done():
-					break // outer
+					break pocLoop // 取消即退出查询循环，状态收尾走循环后的公共路径
 				case <-time.After(wait):
 				}
 				continue
@@ -140,7 +141,12 @@ func syncPoCs(ctx context.Context, st *Store, cfg Config) error {
 			}
 		}
 		fetched++
-		time.Sleep(2 * time.Second) // stay far under the 10/min search cap
+		// 限速等待感知取消（原 time.Sleep 不感知，取消要白等满 2s）。
+		select {
+		case <-ctx.Done():
+			break pocLoop
+		case <-time.After(2 * time.Second): // stay far under the 10/min search cap
+		}
 	}
 	state.LastSyncAt = nowPtr()
 	state.TotalSynced = int64(fetched)

@@ -49,12 +49,6 @@ func (e *Engine) markSettling(taskID, reason string) bool {
 	return !loaded
 }
 
-func (e *Engine) settleReason(taskID string) string {
-	v, _ := e.settling.Load(taskID)
-	s, _ := v.(string)
-	return s
-}
-
 // ---------- 在跑计数(worker.Execute + planner.Plan),用于 drain ----------
 
 func (e *Engine) inflightCounter(taskID string) *int64 {

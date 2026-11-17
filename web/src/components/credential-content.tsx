@@ -103,11 +103,20 @@ function TrafficList({
               className="group flex w-full min-w-0 flex-col gap-1.5 rounded-md border bg-background p-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <span className="flex w-full min-w-0 items-center gap-1.5">
-                <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                <Badge
+                  variant="outline"
+                  className="shrink-0 font-mono font-semibold text-[10px] tracking-wider uppercase"
+                >
                   {ref.method || "HTTP"}
                 </Badge>
                 {ref.status > 0 ? (
-                  <Badge variant="outline" className={cn("shrink-0 font-mono text-[10px]", toneClasses[tone])}>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "shrink-0 font-mono font-semibold text-[10px] tracking-wider uppercase",
+                      toneClasses[tone],
+                    )}
+                  >
                     {ref.status}
                   </Badge>
                 ) : null}

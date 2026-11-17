@@ -43,18 +43,36 @@ func captureRunSession(ctx context.Context, s *askernel.Session, input string, e
 	// eino 的 tools node 与事件泵有竞态——下一次工具调用的 judge 必须看到上一
 	// 次的结果上下文，所以绑定与结果上下文都在执行端同步落。
 	s.OnCallStart = func(callID, name string, inputJSON json.RawMessage) {
-		p.auditTrace.Start(callID, name, inputJSON)
+		// 观测面打码（F3 凭据纪律）：trace 的 tool_use 条目落打码后的输入；
+		// 关联摘要仍按原文计算（StartMasked），guard 链 WithCall 的 exact
+		// 关联与结果绑定不受影响。
+		p.auditTrace.StartMasked(callID, name, inputJSON, []byte(maskSensitiveInput(string(inputJSON))))
 	}
 	s.OnResult = func(callID, name, text string, isErr bool, extras []llm.Message) {
-		p.auditTrace.Complete(callID, text, isErr)
-		if !p.traceResults[callID] {
-			p.traceResults[callID] = true
-			p.auditTrace.Append(db.InterceptContextEntry{Kind: "tool_result", Tool: name, ToolUseID: callID, Text: text, IsError: isErr})
-		}
+		p.onResult(callID, name, text, isErr)
 	}
 	// p.ctx 携带 intercept 审计 trace（norma 时代的 ctx 重赋值同款）——guard 链的
 	// judge/ask 从这个 ctx 取审批上下文，必须传给 runner。
 	return runKernel(p.ctx, s, input, d, p)
+}
+
+// onResult 是 gate 的 OnResult 观测半边（captureRunSession 装配）：补完审计绑定，
+// 并把 tool_result 上下文条目按 callID 去重只落一次。traceResults 的全部读写都
+// 在 actMu 内——gate 在信号量释放【之后】的工具 goroutine 上触发 OnResult
+// （acllm/toolgate.go），并发工具执行下这里会被并发进入（F1，2026-11-13），
+// 裸 map 会直接 fatal 整个进程。
+func (p *capturePump) onResult(callID, name, text string, isErr bool) {
+	// 值形态打码（F3）：工具输出原文（auth_request 的 curl 命令等）在观测面
+	// （trace 条目 / 审批快照上下文）打码；模型侧返回值（toolgate 的 return
+	// text → DTO master）不经此处，模型所见仍是原文。
+	observed := maskCredentialText(text)
+	p.auditTrace.Complete(callID, observed, isErr)
+	p.actMu.Lock()
+	defer p.actMu.Unlock()
+	if !p.traceResults[callID] {
+		p.traceResults[callID] = true
+		p.auditTrace.Append(db.InterceptContextEntry{Kind: "tool_result", Tool: name, ToolUseID: callID, Text: observed, IsError: isErr})
+	}
 }
 
 // capturePump is the event → activity conversion shared by every run of one
@@ -69,6 +87,7 @@ type capturePump struct {
 	toolNames map[string]string // tool_use id -> name, to label results
 	// traceResults marks results whose audit context entry the gate's OnResult
 	// already appended synchronously — the pump skips its own (async) append.
+	// 并发访问纪律：OnResult 来自并发的工具 goroutine（F1），全部读写持 actMu。
 	traceResults map[string]bool
 
 	tbuf  strings.Builder
@@ -166,10 +185,13 @@ func (p *capturePump) drain(events iter.Seq2[harness.Event, error]) (*harness.Te
 			}
 			p.flush()
 			p.toolNames[ev.ToolUse.ID] = ev.ToolUse.Name
-			in := string(ev.ToolUse.Input)
+			// 观测面打码（F3 凭据纪律）：tool_use 活动的 Detail/Summary、中断渲染
+			// （runTrace）与 trace 条目一律用打码后的输入；trace 的关联摘要仍按
+			// 原文（StartMasked）。执行面（guard 链 / 工具本体）不经此处。
+			in := maskSensitiveInput(string(ev.ToolUse.Input))
 			p.lastTool.start(ev.ToolUse.ID, ev.ToolUse.Name, in)
 			if !p.auditTrace.HasCall(ev.ToolUse.ID) {
-				p.auditTrace.Start(ev.ToolUse.ID, ev.ToolUse.Name, ev.ToolUse.Input)
+				p.auditTrace.StartMasked(ev.ToolUse.ID, ev.ToolUse.Name, ev.ToolUse.Input, []byte(in))
 			}
 			p.rec(db.Activity{Kind: "tool_use", Tool: ev.ToolUse.Name, ToolUseID: ev.ToolUse.ID,
 				Summary: ev.ToolUse.Name + " " + firstLine(in, 200), Detail: in})
@@ -178,7 +200,7 @@ func (p *capturePump) drain(events iter.Seq2[harness.Event, error]) (*harness.Te
 				continue
 			}
 			p.flush()
-			out := blocksText(ev.ToolResult.Content)
+			out := maskCredentialText(blocksText(ev.ToolResult.Content))
 			p.lastTool.done(ev.ToolResult.ToolUseID)
 			// Complete/Append 已由 gate 的 OnResult 同步落（幂等：Complete 弹绑
 			// 定，二次调用 no-op；Append 由 traceResults 去重）。这里只补 UI 面。

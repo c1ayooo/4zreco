@@ -79,7 +79,7 @@ function MethodBadge({ method }: { method: string }) {
   return (
     <span
       className={cn(
-        "inline-block rounded px-1.5 py-0.5 font-mono font-semibold text-[10px] leading-none",
+        "inline-block rounded px-1.5 py-0.5 font-mono font-semibold text-[10px] leading-none tracking-wider uppercase",
         METHOD_COLOR[m] ?? "bg-muted text-muted-foreground",
       )}
     >
@@ -356,11 +356,7 @@ export default function AssetsPage() {
             </Button>
           )}
           {selected.size === 1 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIntelligenceAsset(Array.from(selected)[0])}
-            >
+            <Button variant="outline" size="sm" onClick={() => setIntelligenceAsset(Array.from(selected)[0])}>
               <KeyRoundIcon className="size-3.5" /> 关联情报
             </Button>
           ) : null}
@@ -657,7 +653,10 @@ export default function AssetsPage() {
                     <Checkbox checked={selected.has(a.id)} onCheckedChange={() => toggleSelect(a.id)} />
                   </TableCell>
                   <TableCell className="text-xs">
-                    <Badge variant={isHttp ? "default" : "secondary"} className="font-mono text-[10px]">
+                    <Badge
+                      variant={isHttp ? "default" : "secondary"}
+                      className="font-mono font-semibold text-[10px] tracking-wider uppercase"
+                    >
                       {svc || "—"}
                     </Badge>
                   </TableCell>
@@ -850,9 +849,7 @@ export default function AssetsPage() {
       >
         <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
-            <DialogTitle>
-              资产 #{intelligenceAsset} 的关联情报
-            </DialogTitle>
+            <DialogTitle>资产 #{intelligenceAsset} 的关联情报</DialogTitle>
             <DialogDescription>凭据、重要线索与敏感数据随任务执行自动登记；凭据发现不等于验证成功。</DialogDescription>
           </DialogHeader>
           {intelligenceAsset !== null ? (
@@ -1083,7 +1080,8 @@ function CompanyDialog({ onSaved }: { onSaved: () => void }) {
           <SheetTitle>新增企业</SheetTitle>
           <SheetDescription>配置企业及其资产范围。关键词只作为 Agent 提示，不会自动归属资产。</SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-y-auto p-6">
+        {/* min-h-0：flex 列子项默认 min-height:auto，长表单会撑破抽屉高度导致无法滚动。 */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="cn-name">企业名称</FieldLabel>

@@ -125,6 +125,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
+import { useStoredColumnWidths } from "@/lib/column-widths";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
@@ -286,6 +287,19 @@ const TASK_SORT_FIELDS: readonly TaskSortField[] = ["id", "created", "duration",
 const TASK_SORT_PREFERENCE_KEY = "4zreco_task_list_sort";
 const TASK_FILTER_PREFERENCE_KEY = "4zreco_task_list_filters";
 
+// 可拖列宽（名称/备注/描述/目标/Token）：数值列内容定宽不需要。table-fixed 下拖宽
+// 一列，其余自动列按比例让位，所以给能读出语义的下限；上限之外继续拖没有意义。
+const TASK_COL_WIDTHS_KEY = "4zreco_task_list_col_widths";
+type TaskColumnKey = "name" | "remark" | "description" | "goal" | "token";
+const TASK_COLUMN_MIN_WIDTHS: Record<TaskColumnKey, number> = {
+  name: 120,
+  remark: 90,
+  description: 90,
+  goal: 90,
+  token: 110,
+};
+const TASK_COLUMN_MAX_WIDTH = 560;
+
 const TASK_STATUS_RANK = new Map(STATUS_OPTIONS.map((option, index) => [option.value, index]));
 
 function taskIsPinned(task: Task): boolean {
@@ -346,6 +360,8 @@ export default function TasksPage() {
     "desc",
   );
   const { field: sortField, direction: sortDirection } = sortPreference;
+  const [columnWidths, setTaskColumnWidth, resetTaskColumnWidth] =
+    useStoredColumnWidths<TaskColumnKey>(TASK_COL_WIDTHS_KEY);
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(20);
   const [nowSec, setNowSec] = React.useState(() => Math.floor(Date.now() / 1000));
@@ -1057,10 +1073,52 @@ export default function TasksPage() {
                         className="hidden font-mono xl:table-cell"
                         onSort={sortTasksBy}
                       />
-                      <TableHead>名称</TableHead>
-                      <TableHead className="hidden xl:table-cell">备注</TableHead>
-                      <TableHead className="hidden sm:table-cell">描述</TableHead>
-                      <TableHead className="hidden lg:table-cell">目标</TableHead>
+                      <TableHead
+                        // 名称默认 14%：等分下只有 ~120px，长名截成单字不可读；拖过的
+                        // 列被 inline px 覆盖，此默认只对未调整过的会话生效。
+                        className="relative w-[14%]"
+                        style={columnWidths.name ? { width: columnWidths.name } : undefined}
+                      >
+                        名称
+                        <ColumnResizeHandle
+                          column="name"
+                          onResize={setTaskColumnWidth}
+                          onReset={resetTaskColumnWidth}
+                        />
+                      </TableHead>
+                      <TableHead
+                        className="relative hidden xl:table-cell"
+                        style={columnWidths.remark ? { width: columnWidths.remark } : undefined}
+                      >
+                        备注
+                        <ColumnResizeHandle
+                          column="remark"
+                          onResize={setTaskColumnWidth}
+                          onReset={resetTaskColumnWidth}
+                        />
+                      </TableHead>
+                      <TableHead
+                        className="relative hidden sm:table-cell"
+                        style={columnWidths.description ? { width: columnWidths.description } : undefined}
+                      >
+                        描述
+                        <ColumnResizeHandle
+                          column="description"
+                          onResize={setTaskColumnWidth}
+                          onReset={resetTaskColumnWidth}
+                        />
+                      </TableHead>
+                      <TableHead
+                        className="relative hidden lg:table-cell"
+                        style={columnWidths.goal ? { width: columnWidths.goal } : undefined}
+                      >
+                        目标
+                        <ColumnResizeHandle
+                          column="goal"
+                          onResize={setTaskColumnWidth}
+                          onReset={resetTaskColumnWidth}
+                        />
+                      </TableHead>
                       <SortableTaskHead
                         field="status"
                         label="状态"
@@ -1068,11 +1126,11 @@ export default function TasksPage() {
                         direction={sortDirection}
                         onSort={sortTasksBy}
                       />
-                      <TableHead className="hidden text-center xl:table-cell">目标进度</TableHead>
+                      <TableHead className="hidden text-center 2xl:table-cell">目标进度</TableHead>
                       <TableHead className="hidden text-center lg:table-cell" title="严重 / 高 / 中 / 低">
-                        漏洞 <span className="font-normal text-muted-foreground">严/高/中/低</span>
+                        漏洞
                       </TableHead>
-                      <TableHead className="hidden text-center xl:table-cell">运行中 Worker</TableHead>
+                      <TableHead className="hidden text-center 2xl:table-cell">运行中 Worker</TableHead>
                       <SortableTaskHead
                         field="created"
                         label="创建时间"
@@ -1088,10 +1146,21 @@ export default function TasksPage() {
                         activeField={sortField}
                         direction={sortDirection}
                         align="right"
-                        className="hidden xl:table-cell"
+                        className="hidden 2xl:table-cell"
                         onSort={sortTasksBy}
                       />
-                      <TableHead className="hidden text-right xl:table-cell">Token</TableHead>
+                      <TableHead
+                        className="relative hidden text-right 2xl:table-cell"
+                        style={columnWidths.token ? { width: columnWidths.token } : undefined}
+                        title="Token 入/缓存/输出"
+                      >
+                        Token
+                        <ColumnResizeHandle
+                          column="token"
+                          onResize={setTaskColumnWidth}
+                          onReset={resetTaskColumnWidth}
+                        />
+                      </TableHead>
                       <TableHead className="sticky right-0 z-10 w-44 bg-card text-right shadow-[-1px_0_0_0_var(--border)]">
                         操作
                       </TableHead>
@@ -1187,6 +1256,67 @@ function SortableTaskHead({
         {taskSortIcon(active, direction)}
       </button>
     </TableHead>
+  );
+}
+
+// ColumnResizeHandle 是表头右缘的拖动条：按住横向拖动调整列宽（table-fixed 取首行
+// th 的像素宽度），双击清除恢复自动分配。宽度经 useStoredColumnWidths 持久化；
+// 断点隐藏的列随 th 一起不渲染。纯鼠标/触控 affordance，内容不依赖它也可读。
+function ColumnResizeHandle({
+  column,
+  onResize,
+  onReset,
+}: {
+  column: TaskColumnKey;
+  onResize: (column: TaskColumnKey, width: number) => void;
+  onReset: (column: TaskColumnKey) => void;
+}) {
+  const [dragging, setDragging] = React.useState(false);
+
+  const startDrag = (event: React.PointerEvent<HTMLSpanElement>) => {
+    if (event.button !== 0) return;
+    const startWidth = event.currentTarget.closest("th")?.offsetWidth ?? 0;
+    if (startWidth <= 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    setDragging(true);
+    document.body.classList.add("select-none");
+
+    const handleMove = (move: PointerEvent) => {
+      const next = startWidth + (move.clientX - startX);
+      onResize(column, Math.min(TASK_COLUMN_MAX_WIDTH, Math.max(TASK_COLUMN_MIN_WIDTHS[column], Math.round(next))));
+    };
+    const handleUp = () => {
+      setDragging(false);
+      document.body.classList.remove("select-none");
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+  };
+
+  return (
+    <span
+      aria-hidden="true"
+      title="拖动调整列宽，双击重置"
+      onPointerDown={startDrag}
+      onDoubleClick={() => onReset(column)}
+      className={cn(
+        "absolute inset-y-0 -right-1 z-10 flex w-2.5 cursor-col-resize touch-none items-center justify-center",
+        dragging && "bg-primary/10",
+      )}
+    >
+      <span
+        className={cn(
+          "h-5 w-0.5 rounded-full bg-border transition-colors",
+          dragging ? "bg-primary" : "hover:bg-foreground/50",
+        )}
+      />
+    </span>
   );
 }
 
@@ -1318,18 +1448,20 @@ const TaskRow = React.memo(function TaskRow({
         <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{task.id}</code>
       </TableCell>
       <TableCell className="font-medium">
-        <div className="flex max-w-xs items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <TaskNameEditor task={task} onRename={onRename} />
           {task.active && <StarIcon className="size-4 shrink-0 fill-primary text-primary" />}
           {taskIsPinned(task) && <PinIcon className="size-4 shrink-0 text-primary" aria-label="已置顶" />}
           {projectName && (
             <Badge
               variant="secondary"
-              className="shrink-0 gap-1 px-1.5 py-0 font-normal text-xs"
+              // 基座带 w-fit shrink-0：长项目名会撑破 table-fixed 列宽压到相邻列，
+              // 这里必须覆盖成可收缩（shrink 胜过基座 shrink-0），内部文本再截断。
+              className="min-w-0 shrink gap-1 px-1.5 py-0 font-normal text-xs"
               title={`归属项目：${projectName}`}
             >
-              <FolderKanbanIcon className="size-3" />
-              {projectName}
+              <FolderKanbanIcon className="size-3 shrink-0" />
+              <span className="min-w-0 truncate">{projectName}</span>
             </Badge>
           )}
         </div>
@@ -1356,7 +1488,7 @@ const TaskRow = React.memo(function TaskRow({
       <TableCell>
         <StatusBadge domain="task" value={task.status} dot />
       </TableCell>
-      <TableCell className="hidden text-center text-muted-foreground text-xs tabular-nums xl:table-cell">
+      <TableCell className="hidden text-center text-muted-foreground text-xs tabular-nums 2xl:table-cell">
         {typeof task.goals_total === "number" && task.goals_total > 0 ? (
           `${task.goals_met}/${task.goals_total}`
         ) : (
@@ -1382,7 +1514,7 @@ const TaskRow = React.memo(function TaskRow({
           );
         })()}
       </TableCell>
-      <TableCell className="hidden text-center text-xs tabular-nums xl:table-cell">
+      <TableCell className="hidden text-center text-xs tabular-nums 2xl:table-cell">
         {task.in_flight && task.in_flight > 0 ? (
           <span className="font-medium text-foreground">{task.in_flight}</span>
         ) : task.status === "running" && taskStalled(task, nowSec) ? (
@@ -1408,7 +1540,7 @@ const TaskRow = React.memo(function TaskRow({
       <TableCell className="hidden whitespace-nowrap text-right text-muted-foreground text-xs tabular-nums md:table-cell">
         {fmtDateTime(task.created_unix)}
       </TableCell>
-      <TableCell className="hidden whitespace-nowrap text-right text-xs tabular-nums xl:table-cell">
+      <TableCell className="hidden whitespace-nowrap text-right text-xs tabular-nums 2xl:table-cell">
         {(() => {
           const secs = taskDuration(task, nowSec);
           if (secs <= 0) return <span className="text-muted-foreground">—</span>;
@@ -1420,7 +1552,7 @@ const TaskRow = React.memo(function TaskRow({
         })()}
       </TableCell>
       <TableCell
-        className="hidden whitespace-nowrap text-right text-xs tabular-nums xl:table-cell"
+        className="hidden whitespace-nowrap text-right text-xs tabular-nums 2xl:table-cell"
         title={
           task.tokens
             ? `输入 ${task.tokens.input_tokens} · 缓存 ${task.tokens.cache_read_tokens} · 输出 ${task.tokens.output_tokens}`
@@ -1428,11 +1560,13 @@ const TaskRow = React.memo(function TaskRow({
         }
       >
         {task.tokens ? (
-          <span className="text-muted-foreground">
-            入 <span className="text-foreground">{fmtTokens(task.tokens.input_tokens)}</span>
-            {" · 缓 "}
+          // 入/缓/出 用斜线紧凑格式（与漏洞列同惯用法）：nowrap 右对齐下列宽不足会向左
+          // 溢出压到运行时长列，紧凑格式在默认等宽分配下也放得下；明细在 title 里。
+          <span>
+            <span className="text-foreground">{fmtTokens(task.tokens.input_tokens)}</span>
+            <span className="text-muted-foreground">/</span>
             <span className="text-foreground">{fmtTokens(task.tokens.cache_read_tokens)}</span>
-            {" · 出 "}
+            <span className="text-muted-foreground">/</span>
             <span className="text-foreground">{fmtTokens(task.tokens.output_tokens)}</span>
           </span>
         ) : (
@@ -1503,7 +1637,7 @@ function TaskNameEditor({ task, onRename }: { task: Task; onRename: (task: Task,
           autoFocus
           disabled={saving}
           aria-label={`任务 #${task.id} 名称`}
-          className="h-7 min-w-28 max-w-48 px-2 font-medium"
+          className="h-7 min-w-0 max-w-48 flex-1 px-2 font-medium"
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setName(event.target.value)}
           onBlur={() => void finishEditing()}
@@ -3447,7 +3581,9 @@ function CreateTaskSheet({
           <SheetDescription>填写测试对象与目标，高级参数可按需展开。</SheetDescription>
         </SheetHeader>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        {/* min-h-0：flex 列子项默认 min-height:auto，长表单会把滚动区撑破抽屉高度，
+         overflow-y-auto 永不激活——抽屉内容够不着、无法滚动。 */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
           <div className="grid gap-5">
             {noProjectsAtAll && (
               <div className="flex items-center gap-3 rounded-lg border border-warning/50 bg-warning/15 p-4">
@@ -3753,7 +3889,10 @@ function CreateTaskSheet({
                       </div>
                       <div className="grid gap-2">
                         <Label htmlFor="no-result-min-severity">漏洞等级阈值</Label>
-                        <Select value={noResultMinSeverity || "any"} onValueChange={(v) => setNoResultMinSeverity(v === "any" ? "" : v)}>
+                        <Select
+                          value={noResultMinSeverity || "any"}
+                          onValueChange={(v) => setNoResultMinSeverity(v === "any" ? "" : v)}
+                        >
                           <SelectTrigger className="w-40">
                             <SelectValue />
                           </SelectTrigger>
@@ -3769,7 +3908,8 @@ function CreateTaskSheet({
                     </div>
                   )}
                   <p className="text-muted-foreground text-xs">
-                    开启后：活跃运行（暂停/排队不计时）满预算时做一次性检查，达标漏洞少于下限即触发收尾，任务进入 timeout 终态；达标则继续运行且不再检查。
+                    开启后：活跃运行（暂停/排队不计时）满预算时做一次性检查，达标漏洞少于下限即触发收尾，任务进入
+                    timeout 终态；达标则继续运行且不再检查。
                   </p>
                 </div>
                 <div className="grid gap-2">

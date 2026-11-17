@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/config"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hosttools"
 	"github.com/c1ayooo/4zreco/internal/intercept"
@@ -19,7 +19,6 @@ import (
 	"github.com/c1ayooo/4zreco/internal/kernel/termmap"
 	"github.com/c1ayooo/4zreco/internal/norma/harness"
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
-	"github.com/c1ayooo/4zreco/internal/norma/permission"
 	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/cloudwego/eino/adk"
@@ -109,10 +108,6 @@ type Worker struct {
 	// path. Read per run so a profile/task toggle takes effect without rebuilding
 	// the agent. nil = streaming (default).
 	nonStreamingFn func() bool
-	// noaEnabledFn resolves whether this run uses the experimental noa context-
-	// compression mechanism. Read per run, like nonStreaming. nil = off (built-in
-	// compaction).
-	noaEnabledFn func() bool
 	// maxTokensFn resolves the per-reply output cap in tokens, on the same
 	// per-run basis. nil or 0 = send no cap and let the endpoint decide.
 	maxTokensFn func() int
@@ -151,11 +146,6 @@ func hasWorkerChatMessage(messages []llm.Message, requestID string) bool {
 func (w *Worker) SetNonStreaming(fn func() bool) { w.nonStreamingFn = fn }
 
 func (w *Worker) nonStreaming() bool { return w.nonStreamingFn != nil && w.nonStreamingFn() }
-
-// SetNoaEnabled wires a resolver deciding whether runs use the experimental noa
-// context-compression mechanism. nil/unset = off (built-in compaction). Read per
-// run so the settings toggle takes effect without rebuilding the agent.
-func (w *Worker) SetNoaEnabled(fn func() bool) { w.noaEnabledFn = fn }
 
 // SetMaxTokens wires a resolver for the per-reply output cap. nil/unset or 0 =
 // send no cap and let the endpoint decide. Read per run, like nonStreaming.
@@ -348,13 +338,11 @@ func workerArtifactSpec(runDir string) string {
 // ensureRunDir builds and creates an agent's working directory under base:
 // <base>/tasks/<taskID> for planner/main; <base>/tasks/<taskID>/i<intentID> for a
 // worker (intentID<=0 → task dir only). The "tasks/" segment groups per-task dirs
-// symmetrically with the chat agent's "sessions/<sessionID>". Best-effort mkdir — on
+// symmetrically with the chat agent's "sessions/<sessionID>". 布局解析走
+// config.Paths（TaskRunDir；F4 2026-11-13 收敛）。Best-effort mkdir — on
 // failure, writes fail the same way an unwritable CWD would.
 func ensureRunDir(base string, taskID, intentID int64) string {
-	dir := filepath.Join(base, "tasks", strconv.FormatInt(taskID, 10))
-	if intentID > 0 {
-		dir = filepath.Join(dir, "i"+strconv.FormatInt(intentID, 10))
-	}
+	dir := config.DerivePaths(base).TaskRunDir(taskID, intentID)
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
 }
@@ -594,48 +582,35 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if tc.DeadlineUnix > 0 {
 		settle = wrapupSettlementForTask("worker", []string{"Bash"}, clamped)
 	}
-	opts := askernel.Options{
-		Model:          acllm.BridgeModel(w.prov),
-		SystemPrompt:   system,
-		Tools:          tools,
-		DeferredTools:  def.Deferred,
-		UnlockSet:      def.Unlock,
-		PermissionMode: permission.ModeBypass,
-		// WebFetch 走记录代理，其 HTTP 与 curl 一样被留痕；载入代理 CA 让经 MITM
-		// 重签的 HTTPS 证书能【正常校验通过】（而非关掉校验）。proxy 空则直连。
-		EnableWebFetch: true,
-		WebFetchProxy:  w.proxyAddr,
-		WebFetchCACert: w.proxyCACert,
-		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
-		// WebSearchProxy 是独立的出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
-		EnableWebSearch:       w.webSearch.Enabled,
-		WebSearchBackend:      w.webSearch.Backend,
-		BraveSearchAPIKey:     w.webSearch.BraveKey,
-		TavilySearchAPIKey:    w.webSearch.TavilyKey,
-		DeepSeekSearchBaseURL: w.webSearch.DeepSeekBaseURL,
-		DeepSeekSearchAPIKey:  w.webSearch.DeepSeekAPIKey,
-		DeepSeekSearchModel:   w.webSearch.DeepSeekModel,
-		WebSearchProxy:        w.webSearch.Proxy,
+	// O3：公共装配段收敛进 kernelOptions（kernel_options.go）；worker 的差异化
+	// 参数（任务级 UA 注入 BashEnv、12000 字符回显上限、会话级 TodoStore）留在
+	// 本调用点。
+	opts := kernelOptions(kernelOptionsSeed{
+		prov:        w.prov,
+		system:      system,
+		tools:       tools,
+		def:         def,
+		proxyAddr:   w.proxyAddr,
+		proxyCACert: w.proxyCACert,
+		webSearch:   w.webSearch,
 		// Bash 子命令的 HTTP 默认走记录代理 + 信任其 CA（工具无需 -x/-k）;另注入
 		// ZRECO_UA=本任务稳定分配的客户端 UA(curl/httpx 等统一使用,任务内不更换)。
-		BashEnv:    uaEnv(proxyEnv(w.proxyAddr, w.proxyCACert), w.uaForTask(taskID)),
-		WorkingDir: runDir,
-		MaxTurns:   w.maxTurns, // 0 = unlimited (configurable in agent management)
+		bashUA:     w.uaForTask(taskID),
+		workingDir: runDir,
+		maxTurns:   w.maxTurns, // 0 = unlimited (configurable in agent management)
 		// 墙钟预算,轮边界判,不打断半路;0 = 不限。有任务级 deadline 时夹逼到 min(自身预算,
 		// 距 deadline 剩余),让本 run 在任务到点时自然进收尾(见 taskclock.go)。
-		MaxDuration: maxDur,
-		// large tool output spills to cmd-output/ with a head + pointer (SDK tool.Capture);
-		// full output preserved on disk. 单次上限收到 12000 字符（v0.4.29，同行对比 P0b）：
-		// 任务 5 实测 Bash 6833 次、单意图均 300 万 input——单条 30k(≈7.5k token) 的
-		// 工具回显是主要放大源；12000 仍容纳一次 sqlmap/httpx 的关键输出，超长部分
-		// SDK 自动落盘并在回显里给绝对路径指针，模型需要时自行 grep/sed 回读。
-		ToolOutputDir:      cmdOutDir(runDir),
-		MaxToolOutputChars: workerToolOutputChars,
-		Compaction:         compactionConfig(w.compactionWindow()), // long tool-heavy runs stay within the window
-		Todos:              actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
-		NonStreaming:       w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:          w.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
-	}
+		maxDuration: maxDur,
+		// 单次工具回显上限收到 12000 字符（v0.4.29，同行对比 P0b）：任务 5 实测
+		// Bash 6833 次、单意图均 300 万 input——单条 30k(≈7.5k token) 的工具回显
+		// 是主要放大源；12000 仍容纳一次 sqlmap/httpx 的关键输出，超长部分 SDK
+		// 自动落盘并在回显里给绝对路径指针，模型需要时自行 grep/sed 回读。
+		maxToolOutputChars: workerToolOutputChars,
+		compactionWindow:   w.compactionWindow(),  // long tool-heavy runs stay within the window
+		todos:              actool.NewTodoStore(), // 会话级临时待办（TodoWrite），纯规划用，退出即丢
+		nonStreaming:       w.nonStreaming(),      // 该 profile 选非流式时走 Provider.Complete
+		maxTokens:          w.maxTokens(),         // 0 = 不发上限,由服务端默认值决定
+	})
 	// 命中预算(轮次 OR 时长)→ 收尾机制(runKernel 的 settlement 分支,隐藏 Bash),
 	// 把已识别的写回,避免烂尾。clamped(被任务 deadline 夹逼)时用 PromptByReason:
 	// 因超时=任务到点→任务超时词,因步数=夹逼窗口内步数先耗尽→回落 per-run 词。
@@ -684,8 +659,6 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		input = "开始执行 system 里领到的意图：只做它、只产生事实、assets、finding、做完即停。"
 	}
 
-	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警。
-	noaFallbackWarn(opts.OnWarn, w.noaEnabledFn, WorkerSessionID(ts.ID(), intent.ID))
 	ctx = attachSideCapture(ctx)
 	s := askernel.NewSession(opts)
 	defer s.Close() // release the session's background-task manager (temp dir + processes)

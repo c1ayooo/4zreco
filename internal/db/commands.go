@@ -176,6 +176,11 @@ CREATE TABLE IF NOT EXISTS llm_records (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_records_ts ON llm_records(ts);
 CREATE INDEX IF NOT EXISTS idx_llm_records_session ON llm_records(session_id);
+-- 补索引（体检 O1，docs/体检修复方案-2026-11-13.md）：model 等值过滤（ListLLMRecords）
+-- 与按任务的删除/过滤条件——全仓统一用 COALESCE(task_id,'') 表达式（tasks.go 删除
+-- 归账、DeleteLLMRecords、ListLLMRecords 过滤），表达式索引须逐字同形才能命中。
+CREATE INDEX IF NOT EXISTS idx_llm_records_model ON llm_records(model);
+CREATE INDEX IF NOT EXISTS idx_llm_records_task_coalesce ON llm_records(COALESCE(task_id,''));
 `
 
 // llmRecordsMigrate adds new columns to existing tables.

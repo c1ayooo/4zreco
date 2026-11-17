@@ -4,7 +4,6 @@ import * as React from "react";
 
 import {
   CpuIcon,
-  FlaskConicalIcon,
   GaugeIcon,
   KeyRoundIcon,
   KeyboardIcon,
@@ -86,8 +85,6 @@ export default function SystemSettingsPage() {
   // 操作约束注入范围(默认都开)。
   const [injectPlanner, setInjectPlanner] = React.useState(true);
   const [injectWorker, setInjectWorker] = React.useState(true);
-  // 实验功能:noa 上下文压缩(默认关)。
-  const [noaCompaction, setNoaCompaction] = React.useState(false);
   // 会话/任务自动标题(默认关)。
   const [taskAutoTitle, setTaskAutoTitle] = React.useState(false);
   const [chatAutoTitle, setChatAutoTitle] = React.useState(false);
@@ -142,7 +139,6 @@ export default function SystemSettingsPage() {
     setCompactorProfile(String(s.compactor_profile_id ?? 0));
     setInjectPlanner(s.constraints_inject_planner !== false);
     setInjectWorker(s.constraints_inject_worker !== false);
-    setNoaCompaction(!!s.noa_compaction);
     setTaskAutoTitle(!!s.task_auto_title_enabled);
     setChatAutoTitle(!!s.chat_auto_title_enabled);
     setAutoFinishEnabled(s.auto_finish_enabled !== false);
@@ -393,20 +389,6 @@ export default function SystemSettingsPage() {
       .setSettings({ constraints_inject_worker: v })
       .then(apply)
       .catch(() => setInjectWorker(!v)); // revert on failure
-  };
-
-  const toggleNoaCompaction = (v: boolean) => {
-    setNoaCompaction(v); // optimistic
-    api
-      .setSettings({ noa_compaction: v })
-      .then((s) => {
-        apply(s);
-        toast.success(v ? "已开启 noa 上下文压缩（对之后启动的运行生效）" : "已关闭 noa 上下文压缩（恢复内置压缩）");
-      })
-      .catch((e) => {
-        setNoaCompaction(!v); // revert on failure
-        toast.error(`保存失败：${(e as Error).message}`);
-      });
   };
 
   // 会话/任务自动标题开关（乐观更新，保存失败回滚）。下次发送首条消息/建任务时生效。
@@ -781,27 +763,6 @@ export default function SystemSettingsPage() {
                   onCheckedChange={toggleInjectWorker}
                 />
               </div>
-            </CardContent>
-          </Card>
-
-          <Card className="mb-4 break-inside-avoid md:mb-6">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <FlaskConicalIcon className="size-4" />
-                实验功能
-              </CardTitle>
-              <CardDescription>尚在验证中的机制，默认关闭；切换对之后启动的运行生效。</CardDescription>
-            </CardHeader>
-            <CardContent className="flex items-center justify-between gap-4">
-              <Label htmlFor="noa-compaction" className="font-normal text-muted-foreground text-sm">
-                noa 上下文压缩{noaCompaction ? " · 已开启" : " · 已关闭"}
-              </Label>
-              <Switch
-                id="noa-compaction"
-                checked={noaCompaction}
-                disabled={!loaded}
-                onCheckedChange={toggleNoaCompaction}
-              />
             </CardContent>
           </Card>
 

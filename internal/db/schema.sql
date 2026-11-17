@@ -1198,6 +1198,10 @@ CREATE TABLE IF NOT EXISTS intercept_pending (
     audit           JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_intercept_pending_task ON intercept_pending(task_id, created_at DESC);
+-- 补索引（体检 O1，docs/体检修复方案-2026-11-13.md）：审批历史按规则/按会话检索；
+-- FK 列可为 NULL（会话删除/规则删除后 SET NULL），走文件内 partial index 先例。
+CREATE INDEX IF NOT EXISTS idx_intercept_pending_rule ON intercept_pending(rule_id) WHERE rule_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_intercept_pending_conversation ON intercept_pending(conversation_id) WHERE conversation_id IS NOT NULL;
 -- 补旧库:reason/audit 列(已发版,加列要带 IF NOT EXISTS)。
 ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE intercept_pending ADD COLUMN IF NOT EXISTS audit JSONB;
@@ -1583,6 +1587,8 @@ CREATE TABLE IF NOT EXISTS server_logs (
     text       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_server_logs_id ON server_logs(id DESC);
+-- 补索引（体检 O1）：RecentLogs 之外的按时间裁剪（追留清理 O2 按 created_at 截止删除）。
+CREATE INDEX IF NOT EXISTS idx_server_logs_created_at ON server_logs(created_at);
 
 -- Independent /btw history and the latest provider-ready main checkpoint.
 -- 第四类 parent：审批旁问（approval_id，session_key='approval-{id}'）。互斥 CHECK

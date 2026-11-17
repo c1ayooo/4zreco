@@ -203,10 +203,12 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	if now.Before(l.globalUntil) {
 		return false, l.globalUntil.Sub(now)
 	}
-	// 惰性清理过期窗口，防 map 随扫描流量无限增长。
+	// 惰性清理过期窗口，防 map 随扫描流量无限增长：锁定已过期的 IP 若失败窗口
+	// 已空（空切片/nil——触发锁定的那次 recordFail 会把 fails 置 nil），两处条目一并删。
 	for k, until := range l.lockedUntil {
 		if now.After(until) && len(l.fails[k]) == 0 {
 			delete(l.lockedUntil, k)
+			delete(l.fails, k)
 		}
 	}
 	return true, 0

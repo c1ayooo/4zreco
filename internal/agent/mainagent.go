@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/hosttools"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
-	"github.com/c1ayooo/4zreco/internal/norma/permission"
 	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 )
@@ -34,14 +32,8 @@ type MainAgent struct {
 	steerWork       func(intentID int64, msg string) error // engine callback: steer a running work (nil = off)
 	attributions    func() map[string]any                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
 	nonStreamingFn  func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn    func() bool                            // resolver: use experimental noa compaction? (nil = off)
 	maxTokensFn     func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
 }
-
-// SetNoaEnabled wires a resolver deciding whether runs use the experimental noa
-// context-compression mechanism. nil/unset = off (built-in compaction). Read per
-// run so the settings toggle takes effect without rebuilding the agent.
-func (m *MainAgent) SetNoaEnabled(fn func() bool) { m.noaEnabledFn = fn }
 
 // SetNonStreaming wires a resolver deciding whether runs use the non-streaming
 // model path (true = non-streaming). nil/unset = streaming (default).
@@ -148,35 +140,24 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	system, _ := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
 	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（system 分段拼一条
 	// system message，缓存交 provider 侧）。
-	opts := askernel.Options{
-		Model:          acllm.BridgeModel(m.prov),
-		SystemPrompt:   system,
-		Tools:          tools,
-		DeferredTools:  def.Deferred,
-		UnlockSet:      def.Unlock,
-		PermissionMode: permission.ModeBypass,
-		EnableWebFetch: true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:  m.proxyAddr,
-		WebFetchCACert: m.proxyCACert,
-		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
-		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
-		EnableWebSearch:       m.webSearch.Enabled,
-		WebSearchBackend:      m.webSearch.Backend,
-		BraveSearchAPIKey:     m.webSearch.BraveKey,
-		TavilySearchAPIKey:    m.webSearch.TavilyKey,
-		DeepSeekSearchBaseURL: m.webSearch.DeepSeekBaseURL,
-		DeepSeekSearchAPIKey:  m.webSearch.DeepSeekAPIKey,
-		DeepSeekSearchModel:   m.webSearch.DeepSeekModel,
-		WebSearchProxy:        m.webSearch.Proxy,
-		BashEnv:               proxyEnv(m.proxyAddr, m.proxyCACert), // Bash 子命令默认走代理+信任 CA
-		WorkingDir:            mainDir,                              // 本任务工作目录 <workDir>/tasks/<taskID>
-		ToolOutputDir:         cmdOutDir(mainDir),
-		MaxTurns:              m.maxTurns,                             // 0 = unlimited (configurable in agent management)
-		Compaction:            compactionConfig(m.compactionWindow()), // long chats stay within the window
-		Todos:                 actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
-		NonStreaming:          m.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:             m.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
-	}
+	// O3：公共装配段收敛进 kernelOptions（kernel_options.go）；mainagent 的差异化
+	// 参数（工作目录、压缩窗口 resolver、会话级 TodoStore、不设 MaxDuration）留在
+	// 本调用点。
+	opts := kernelOptions(kernelOptionsSeed{
+		prov:             m.prov,
+		system:           system,
+		tools:            tools,
+		def:              def,
+		proxyAddr:        m.proxyAddr,
+		proxyCACert:      m.proxyCACert,
+		webSearch:        m.webSearch,
+		workingDir:       mainDir,               // 本任务工作目录 <workDir>/tasks/<taskID>
+		maxTurns:         m.maxTurns,            // 0 = unlimited (configurable in agent management)
+		compactionWindow: m.compactionWindow(),  // long chats stay within the window
+		todos:            actool.NewTodoStore(), // 会话级临时待办（TodoWrite），纯规划用，退出即丢
+		nonStreaming:     m.nonStreaming(),      // 该 profile 选非流式时走 Provider.Complete
+		maxTokens:        m.maxTokens(),         // 0 = 不发上限,由服务端默认值决定
+	})
 	// 工具调用可观测：与 planner 同理，此前 journal 里看不到 mainagent 的动作。
 	// 同一条链喂两处：gate 的 Pre/Post 半边 + driver 的 Stop 半边。
 	hooks := toolLogSink(KindMain)
@@ -193,9 +174,6 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 			opts.SessionID = fmt.Sprintf("exp%d-main-s%d", ts.ID(), mainSeg)
 		}
 	}
-	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
-	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警。
-	noaFallbackWarn(opts.OnWarn, m.noaEnabledFn, fmt.Sprintf("exp%d-main", ts.ID()))
 	ctx = attachSideCapture(ctx)
 	s := askernel.NewSession(opts)
 	defer s.Close()

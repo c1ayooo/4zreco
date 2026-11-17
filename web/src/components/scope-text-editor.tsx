@@ -22,7 +22,7 @@ export function ScopeTextEditor({
   onValueChange,
   parsed,
   label = "资产范围",
-  description = "每行一条，自动识别域名、IP、CIDR、ICP 备案和企业关键词。",
+  description = "每行一条，自动识别域名、IP、CIDR、ICP 备案和企业关键词；*.example.com 即主域及其全部子域。",
 }: {
   id: string;
   value: string;

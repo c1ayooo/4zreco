@@ -447,11 +447,17 @@ export default function LLMRecordsPage() {
                       </TableCell>
                       <TableCell>
                         {rec.status === "ok" ? (
-                          <Badge variant="secondary" className="text-success text-xs">
+                          <Badge
+                            variant="secondary"
+                            className="font-mono font-semibold text-[10px] tracking-wider uppercase text-success"
+                          >
                             OK
                           </Badge>
                         ) : (
-                          <Badge variant="destructive" className="text-xs">
+                          <Badge
+                            variant="destructive"
+                            className="font-mono font-semibold text-[10px] tracking-wider uppercase"
+                          >
                             Error
                           </Badge>
                         )}

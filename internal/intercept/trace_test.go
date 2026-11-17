@@ -133,3 +133,53 @@ func TestTraceConcurrentDistinctCalls(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// StartMasked（F3 观测面凭据打码，2026-11-13）：上下文条目落打码后的输入，
+// 但关联摘要仍按原文计算——guard 链 WithCall 用原文 input，exact 关联必须不受
+// 观测面打码影响。
+func TestTraceStartMaskedKeepsRawDigestAndMasksEntry(t *testing.T) {
+	prior := db.InterceptContextEntry{Kind: "user", Text: "prior message"}
+	ctx, trace := WithTrace(context.Background(), "凭据复用", []db.InterceptContextEntry{prior})
+	raw := []byte(`{"asset_id":1,"password":"hunter2"}`)
+	masked := []byte(`{"asset_id":1,"password":"******"}`)
+	trace.StartMasked("call-m", "auth_request", raw, masked)
+
+	if len(trace.entries) == 0 {
+		t.Fatal("no entry appended")
+	}
+	entry := trace.entries[len(trace.entries)-1]
+	if entry.Kind != "tool_use" || entry.ToolUseID != "call-m" {
+		t.Fatalf("wrong entry: %+v", entry)
+	}
+	if entry.Text != string(masked) {
+		t.Fatalf("entry text must be the masked input: %q", entry.Text)
+	}
+
+	a := auditFor(WithCall(ctx, "auth_request", raw), Decision{Action: "ask"}, raw, "pending")
+	if a.Correlation != "exact" || a.ToolUseID != "call-m" {
+		t.Fatalf("masking broke raw-digest correlation: %+v", a)
+	}
+	// 快照是本调用【之前】的上下文（prior），不含自己的 tool_use 条目。
+	if len(a.Context) != 1 || a.Context[0].Text != "prior message" {
+		t.Fatalf("unexpected snapshot: %+v", a.Context)
+	}
+
+	// 后续调用的快照必须携带打码后的 tool_use 条目（凭据不进审批上下文）。
+	trace.StartMasked("call-n", "Read", []byte(`{"path":"a"}`), []byte(`{"path":"a"}`))
+	b := auditFor(WithCall(ctx, "Read", []byte(`{"path":"a"}`)), Decision{Action: "ask"}, []byte(`{"path":"a"}`), "pending")
+	var maskedSeen bool
+	for _, e := range b.Context {
+		if e.Kind == "tool_use" && e.ToolUseID == "call-m" {
+			maskedSeen = e.Text == string(masked)
+		}
+	}
+	if !maskedSeen {
+		t.Fatalf("later snapshot must carry the masked tool_use entry: %+v", b.Context)
+	}
+
+	// 打码后的文本不能反向关联（原文摘要 ≠ 打码摘要）。
+	c := auditFor(WithCall(ctx, "auth_request", masked), Decision{Action: "ask"}, masked, "pending")
+	if c.Correlation == "exact" {
+		t.Fatal("masked input must not correlate to the raw-digest binding")
+	}
+}

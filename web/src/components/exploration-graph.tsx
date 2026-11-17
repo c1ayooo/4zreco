@@ -329,7 +329,7 @@ function ExploreNode({ data, selected }: NodeProps<ExploreRFNode>) {
         selected ? "border-ring" : isLive ? "border-primary/50" : "border-transparent",
       )}
     >
-      <div className="group relative rounded-[14px] border border-border bg-card shadow-sm transition-shadow hover:shadow-lg">
+      <div className="group relative rounded-lg border border-border bg-card shadow-sm transition-shadow hover:shadow-lg">
         <Handle
           type="target"
           position={Position.Left}

@@ -32,6 +32,7 @@ type sideRun struct {
 type sideQuestionState struct {
 	mu           sync.Mutex
 	commands     sync.Mutex // short admission / clear operations only, never inference
+	flushMu      sync.Mutex // 串行化 flush 的落库阶段，避免并发 flush 对同一 key 重复写库
 	pending      map[string]sidequestion.Snapshot
 	latest       map[string]sidequestion.Snapshot
 	seen         map[string][2]int64
@@ -94,20 +95,29 @@ func (s *Server) flushSideSnapshots() {
 	if s.side == nil || s.m.pg == nil {
 		return
 	}
+	// flushMu 只串行化 flush 自身（防并发 flush 重复写同一 key）；commands 锁
+	// 仅覆盖快照取出——DB 写全程不持有它，避免卡住准入/清除操作。
+	s.side.flushMu.Lock()
+	defer s.side.flushMu.Unlock()
 	s.side.commands.Lock()
-	defer s.side.commands.Unlock()
 	s.side.mu.Lock()
 	pending := s.side.pending
 	s.side.pending = map[string]sidequestion.Snapshot{}
 	s.side.mu.Unlock()
+	s.side.commands.Unlock()
 	for key, snap := range pending {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		err := s.m.pg.SaveSideSnapshot(ctx, snap)
 		cancel()
+		// 失败重试：按新旧版本比较后放回 pending（新版已排队时丢弃旧版重试）。
 		s.side.mu.Lock()
 		if err == nil || errors.Is(err, db.ErrSideParentGone) {
 			if cur, ok := s.side.latest[key]; ok && cur.RunID == snap.RunID && cur.Version == snap.Version {
 				delete(s.side.latest, key)
+				// seen 与 latest 同生共死（发布时成对写入）：终态快照已落库
+				// （或父会话已消失）后去重记录随之清除，防止 map 无界增长。
+				// 同 run 内 version 严格递增且各发布一次，清除后不影响去重。
+				delete(s.side.seen, key)
 			}
 		} else if newer, ok := s.side.pending[key]; !ok || newer.RunID < snap.RunID || newer.RunID == snap.RunID && newer.Version < snap.Version {
 			s.side.pending[key] = snap

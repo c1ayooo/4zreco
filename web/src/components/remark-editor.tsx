@@ -5,8 +5,8 @@ import * as React from "react";
 import { PencilIcon } from "lucide-react";
 import { toast } from "sonner";
 
-import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MAX_TASK_REMARK_RUNES } from "@/lib/types";
@@ -87,7 +87,7 @@ function InlineTextEditor({ value = "", label, onSave, maxCharacters }: EditorPr
           aria-label={`编辑${label}的备注`}
           aria-invalid={Boolean(error)}
           aria-describedby={error ? errorID : undefined}
-          className="max-h-40 min-h-7 resize-none px-2 py-1 [overflow-wrap:anywhere]"
+          className="max-h-40 min-h-7 w-full min-w-0 resize-none px-2 py-1 [overflow-wrap:anywhere]"
           title="Shift+Enter 换行，Enter 保存，Esc 取消"
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => {
@@ -123,7 +123,9 @@ function InlineTextEditor({ value = "", label, onSave, maxCharacters }: EditorPr
     setEditing(true);
   };
   return (
-    <div className="group/inline-editor flex w-fit max-w-32 min-w-0 items-center gap-1 font-medium sm:max-w-48">
+    // max-w-full：表格固定列宽场景下容器跟随列宽截断（展示态文本已 truncate），
+    // 固定 max-w 会在列被拖窄后溢出叠到相邻列。
+    <div className="group/inline-editor flex w-fit max-w-full min-w-0 items-center gap-1 font-medium">
       <button
         type="button"
         className="min-w-0 truncate rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -132,7 +134,7 @@ function InlineTextEditor({ value = "", label, onSave, maxCharacters }: EditorPr
         onClick={startEditing}
       >
         {value.length > 0 ? (
-          <span className="block truncate">{value}</span>
+          <span className="block max-w-full truncate">{value}</span>
         ) : (
           <span className="text-muted-foreground">添加备注</span>
         )}

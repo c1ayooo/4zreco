@@ -11,6 +11,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 
@@ -48,7 +49,11 @@ func (t *ToolSet) evaluateHoneypot(assetID int64, v honeydetect.ServiceView) {
 		return
 	}
 	if t.as != nil {
-		_ = t.as.SetHoneypotScore(assetID, score, evidence)
+		// best-effort 链路（F5，2026-11-13）：失败不回滚资产登记，但也不能静默——
+		// 蜜罐标记丢了会让 planner 态势里看不到疑点，至少留一条排查线索。
+		if err := t.as.SetHoneypotScore(assetID, score, evidence); err != nil {
+			log.Printf("[honeypot] 资产 #%d 蜜罐评分回写失败（不影响资产登记）: %v", assetID, err)
+		}
 	}
 	if t.ts == nil || t.taskID <= 0 {
 		return
@@ -64,7 +69,9 @@ func (t *ToolSet) evaluateHoneypot(assetID int64, v honeydetect.ServiceView) {
 		"honeypot_confidence": conf,
 		"honeypot_signatures": evidence,
 	}
-	_, _ = t.ts.AddNode(db.KindFact, payload, 5, "confirmed", t.worker, []int64{assetID})
+	if _, err := t.ts.AddNode(db.KindFact, payload, 5, "confirmed", t.worker, []int64{assetID}); err != nil {
+		log.Printf("[honeypot] 疑似蜜罐资产 #%d 的 fact 节点写入失败（不影响资产登记）: %v", assetID, err)
+	}
 }
 
 // urlPort 从 URL 取端口(缺省按 scheme)，取不到返回 0。

@@ -4,6 +4,148 @@
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-11-17
+
+### 修复：C2 SSH 隧道四缺陷返工 + server 层四处——工作流批量缺陷清偿
+
+- **C2 SSH 隧道（c2_relay.go，四缺陷叠加致「停止」与「重连」两条路径均为死代码）**：
+  进程用 `exec.Command`（非 CommandContext）且 `cmd.Cancel` 置空函数——stdlib watchCtx
+  不启动，`stopRelayTunnel` 只 cancel 无人消费的 ctx，点停止后 ssh/sshpass 孤儿进程继续
+  持有远端 `-R` 转发（C2 回连通道保持打开）；重连 `nxt := *cmd` 按值复制已 Start 的 Cmd
+  （startCalled 已置 1）必报 "already started"，断线永不恢复；调用点传 `r.Context()`
+  （HTTP 响应返回即取消），重连 goroutine 毫秒级失效；key/sshpass 认证分支 `args[1:]`
+  off-by-one 丢 `-N`（额外请求远端 shell，nologin 场景隧道秒断）。返工为
+  `exec.CommandContext`（server 生命周期 ctx）+ 重连全新构造 Cmd + 统一参数构造（三分支
+  完整保留 `-N -T`）；listeners_api.go 调用点改传 `s.ctx`。
+- **审批旁问（side_questions.go）**：flushSideSnapshots 持「仅限短操作」的 commands 锁
+  跨越 N 次带 3s 超时的 DB 写（最坏 N×3s 卡住准入接口）——锁收窄到快照取出、DB 写移锁外，
+  新增 flushMu 保留 flush 间互斥，失败重试语义不变；`side.seen` map 只增不删（进程级无界
+  增长）——与 latest 成对删除，生命周期对齐，去重保护经验证不受影响。
+- **证据导出（artifacts.go）**：zip 成员写入错误被 `_, _ =` 丢弃——坏盘/断连产出静默截断
+  的 200 响应且 manifest 照列。改为临时文件完整构建（全程查错、任一成员失败即 500）再回传，
+  路由/认证/Content-Disposition 不变。
+- **agent 设置（server_mgmt.go）**：`_ = s.applyLLM(cfg)` 吞错后无条件返回 `ok:true`——
+  LLM 配置非法时用户看到成功、实际仍跑旧 provider；失败现按同文件惯例 500 带原因返回。
+- **日历调度（calendar_schedule.go）**：`time.LoadLocation("Asia/Shanghai")` 吞错静默回退
+  UTC——补失败日志，回退行为不变。
+- **前端依赖**：移除 0 引用的 `@antv/graphin`（装包体积白增）。
+
+### 新增：范围输入支持域名通配符 *.example.com
+
+- **行为**：项目/公司/任务三条范围轴的域名输入接受前导 `*.` 通配——`*.example.com` 与
+  `example.com` 等价（domain 规则本就按 root_domain 相等匹配根域及全部子域，通配符实为
+  语法糖）。深层通配（`*.api.example.com`）、通配 IP/网段、多层/中间通配显式拒绝并给原因
+  （子域级规则在 root_domain 相等语义下永远命不中，不存死规则）；`*.裸公共后缀` 守卫照常
+  生效。raw 字段保留用户原始写法。
+- **落点**：`db.ParseScopeLine` 前缀剥离与守卫；前端 `company-scope.ts` 解析同步（实时
+  预览不再标红）；三处范围编辑器描述补通配示例。回归测试 8 例（含自动分类路径）。
+
+### 修复：anthropic 流并行工具调用锚定——GLM（bigmodel anthropic 端点）跑任务必炸
+
+- **行为**：norma anthropic 适配器不解析 SSE 事件级 `index`，所有工具调用事件 ToolIndex
+  恒 0——模型一轮发多个并行工具调用时（GLM-5.3-flash 常态），BridgeModel 转发的分片
+  同 index 不同 id，内核 `schema.ConcatMessages` 拒绝合并，报 "cannot concat ToolCalls
+  with different tool id"，规划轮/工作意图全部报错收场。单工具调用轮次不受影响（连通性
+  测试、对话正常，真实任务必炸）——「GLM 配了用不了」的根因。
+- **落点**：`norma/llm/anthropic.go` 解析事件 index + `anthropicToolState` 按块序锚定
+  （模拟端不带 index 时按最近调用回退）——与 `responsesToolState`（openai_responses）
+  修复同构，`[fork fix]` 注释；DTO 落盘 JSON 形状不变。回归测试 2 例（真实 GLM 流形状
+  重放 + 无 index 回退）。
+
+### 移除：noa 实验压缩开关与 Server.Close 空桩——体检 D4 遗留清理
+
+- **noa 开关**：noa 是已退役 norma agentcore 生态的实验压缩机制（noaadapter），P4 删 norma
+  时随之移除、从未随 eino 内核移植——设置页开关开着也只产生一条回退告警，实际始终走内置
+  compaction（内核 ViewMiddleware + acllm.Compactor，默认 1M 窗口）。经决策放弃移植，连根
+  清理：`internal/agent/noa.go`、四 agent 的 `SetNoaEnabled`/`noaEnabledFn`、manager 的
+  `NoaCompactionEnabled/SetNoaCompaction`、settings API 的 `noa_compaction` 读写、`NoaRoot()`
+  路径方法、设置页「实验功能」卡片。**上下文压缩行为不变**——内置 compaction 一直默认启用。
+  留有该键的历史 settings 行不影响启动（读取方已不存在，成为惰性残留数据）。
+- **Server.Close 空桩**：函数体只有 nil 防卫、注释承诺的资源释放从未实现——删除该函数与
+  main.go 两处调用。优雅停机语义不变：`mgr.Close()`（流量代理 + PG 连接池）+ httpSrv
+  Shutdown(5s) + 进程退出收走其余 goroutine，本就是现行设计。
+
+### 新增：server_logs / llm_records 追留自动清理——体检 O2
+
+- **行为**：settings 键 `retention_server_logs_days`（默认 30 启用）/ `retention_llm_records_days`
+  （默认 0=关闭，录制数据可能需长期保留）；按 created_at/ts 截止删除，启动延迟数分钟首跑 +
+  每 24h 一轮，失败记日志不中断服务。审批三表（append-only 触发器禁删）永不纳入清理。
+- **落点**：新 `internal/db/retention.go` + `server/manager.go` 装配；DSN 门控单测。
+
+### 修复：工具并发下 traceResults 裸 map 写崩——体检 F1
+
+- **行为**：并发工具执行下 `traceResults` 裸 map 触发 concurrent map write（进程级 fatal）——
+  改用已有 `actMu` 保护全部读写（含泵循环读点），补并发回归测试并以 `go test -race` 验证。
+
+### 修复：server 层三处静默失败——体检 F2/F6/F9
+
+- **C2 隧道**（c2_relay.go）：`cmd.Start()` 错误被 `_ =` 吞掉、隧道未起也报「已建立」——
+  错误上抛并反映到返回状态。
+- **HITL 映射**（engine_hitl.go 七处）：`ConsumeHitlMapping` 失败静默——补带 pendingID/taskID
+  的失败日志，不改语义。
+- **登录限速**（auth.go）：`fails` map 只删 lockedUntil 不删条目——失败计数清零时空条目一并清理。
+
+### 修复：凭据观测面打码（工具输入敏感键不落 trace）——体检 F3
+
+- **行为**：auth_request 等工具输入含明文凭据落 trace/activity，违反「凭据不进 trace」纪律——
+  观测面（audit trace / activity 的 tool_use 记录）对输入 JSON 敏感键（password/passwd/
+  secret/token/api_key/apikey/access_token/refresh_token/authorization/credential，
+  大小写不敏感、深度≤4）打码为 `******`；执行面不动（§5.5 纪律与 zombie/proton 先例），
+  补单测。
+- **行为（同日追加：值形态打码）**：键名打码够不到「凭据藏在值里」的携带形态——
+  auth_request 的 curl 命令（`-H 'Authorization/Cookie: …'`、`-u 'user:pass'`，含 `'\''`
+  转义）、自由文本认证头、URL userinfo、内嵌 JSON 敏感键、表单/查询串字段——在输入
+  字符串值与工具输出原文的观测面上同样打码；模型所见（DTO master / 工具返回值）与
+  执行面不变。known limitation：模型自己写进最终回答散文里的凭据不属机械打码范围
+  （工具描述已约束），维持原状。
+
+### 修复：蜜罐打分与 fact 节点写入失败静默——体检 F5
+
+- **行为**：honeypot.go 两处 `_ =` 静默丢弃失败——补最小日志，不改控制流。
+
+### 修复：listener stop 确定性收尾——体检 F7
+
+- **行为**：stop 后 `time.Sleep(200ms)` 猜收尾、快照状态可能不真实——改 done channel/
+  WaitGroup 确定性收尾（保留 2s 防御上界），不引入短 sleep 同步。
+
+### 修复：vulnintel 同步循环两处——体检 F8/F12
+
+- **行为**：select 内 `break // outer` 实际只跳出 select、注释误导——与同文件正确写法对齐；
+  限速 sleep 不感知 ctx——改 select ctx.Done/time.After，取消即时生效。
+
+### 修复：web EventSource 清理与裸 fetch 401——体检 F10/O5
+
+- **行为**：更新卡 EventSource 卸载不清理——ref 持有 + useEffect cleanup close；
+  上传/下载/导出等裸 fetch 绕过 `http()` 的 401 处理——新增 rawFetch 包装（401 与
+  http() 同样清退跳登录）并替换全部裸调用点，不做其他重构。
+
+### 修复：db 层无 caller ctx 核心路径补 30s 默认超时——体检 O4
+
+- **行为**：db.go 新增 `defaultQueryTimeout=30s` + `queryCtx()`，给「无 caller ctx」核心路径加
+  保守默认超时——审批 Resolve/Complete 与决定写入事务、checkpoint 保存/加载/验签、logs 三处、
+  任务收尾与状态写入；已收 caller ctx 的透传路径与 Open/迁移 advisory lock 长事务路径不动
+  （拦截审计链 helper 签名未改，由事务 BeginTx ctx 在语句边界兜底）。
+
+### 优化：拦截/日志/录制表补幂等索引——体检 O1
+
+- **行为**：schema 全部 IF NOT EXISTS 追加——`intercept_pending(rule_id)`、
+  `intercept_pending(conversation_id)`（partial WHERE NOT NULL）、`server_logs(created_at)`、
+  `llm_records(model)`、`llm_records(COALESCE(task_id,''))` 表达式索引。
+
+### 重构：运行时子目录路径收敛走 paths.go——体检 F4
+
+- **行为**：agent/worker.go、agent/chat.go、server/artifacts.go 三处手写 `tasks`/`sessions`/
+  `artifacts` 子目录改走 Paths（按 paths.go 现有命名风格补齐缺失方法）；行为逐字节等价，
+  不移动数据。
+
+### 重构：四处 askernel.Options 装配收敛 kernelOptions——体检 O3
+
+- **行为**：planner/worker/mainagent/chat 四处近逐字重复的 askernel.Options 装配块收敛为新
+  `internal/agent/kernel_options.go` 的 `kernelOptions(kernelOptionsSeed)`——公共段（模型桥接/
+  工具面/代理 CA/WebSearch/BashEnv/目录/上限压缩等）统一装配，差异化参数（worker 的 uaForTask
+  与回显上限、planner 的 todoFor、chat 的 ws 门控与按轮时长、mainagent 不设 MaxDuration）留
+  调用点；逐字段核对行为逐字节等价，四文件孤儿 import 顺带清理。
+
 ### 新增：凭据验证 agent 与 credential_analysis 派生呈现——ARTEX 移植 C2 凭据子阶段
 
 - **行为**：`credential` 类情报落库后由后台「凭据整理」agent 自动拆分账号/密码/Token/Cookie

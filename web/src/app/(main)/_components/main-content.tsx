@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { api } from "@/lib/api";
+import { useGlobalKeys } from "@/lib/hooks/use-global-keys";
 import { cn } from "@/lib/utils";
 
 import { OpsPulse } from "./ops-pulse";
@@ -33,6 +34,8 @@ function isFullBleed(pathname: string) {
 export function MainContent({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [version, setVersion] = useState("");
+  // 全局键盘快捷键（`/` 搜索、`g` 前缀导航）；挂在早退分支前，任务详情全幅页同样生效。
+  useGlobalKeys();
 
   useEffect(() => {
     api
@@ -49,7 +52,7 @@ export function MainContent({ children }: { children: ReactNode }) {
     <>
       <header
         className={cn(
-          "flex h-12 shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12",
+          "flex h-12 shrink-0 items-center gap-2 border-b transition-[width,height] ease-base group-has-data-[collapsible=icon]/sidebar-wrapper:h-12",
           "[html[data-navbar-style=sticky]_&]:sticky [html[data-navbar-style=sticky]_&]:top-0 [html[data-navbar-style=sticky]_&]:z-50 [html[data-navbar-style=sticky]_&]:overflow-hidden [html[data-navbar-style=sticky]_&]:rounded-t-[inherit] [html[data-navbar-style=sticky]_&]:bg-background/50 [html[data-navbar-style=sticky]_&]:backdrop-blur-md",
         )}
       >

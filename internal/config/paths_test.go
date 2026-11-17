@@ -30,7 +30,6 @@ func TestPathsLayout(t *testing.T) {
 		{"Traffic", p.Traffic(), "/opt/4zreco/data/traffic"},
 		{"Evidence", p.Evidence(), "/opt/4zreco/data/evidence"},
 		{"Transcripts", p.Transcripts(), "/opt/4zreco/data/transcripts"},
-		{"NoaRoot", p.NoaRoot(), "/opt/4zreco/data/noa"},
 		{"HoneypotSignatures", p.HoneypotSignatures(), "/opt/4zreco/data/signatures/honeypot.json"},
 		{"DeleteStaging", p.DeleteStaging(), "/opt/4zreco/data/.delete-staging"},
 		{"TaskArchivesRoot", p.TaskArchivesRoot(), "/opt/4zreco/data/archives/tasks"},
@@ -38,6 +37,13 @@ func TestPathsLayout(t *testing.T) {
 		{"TaskUploads", p.TaskUploads("42"), "/opt/4zreco/data/tasks/42/uploads"},
 		{"SessionUploads", p.SessionUploads("conv-7"), "/opt/4zreco/data/sessions/conv-7/uploads"},
 		{"DraftUploads", p.DraftUploads("d1"), "/opt/4zreco/data/drafts/d1/uploads"},
+		// F4（2026-11-13）补齐的三类方法：期望值与旧手写拼接逐字节一致
+		//（ensureRunDir / chat SessionDir / artifacts Storage 列的原始形态）。
+		{"TaskRunDir planner/main", p.TaskRunDir(42, 0), "/opt/4zreco/data/tasks/42"},
+		{"TaskRunDir worker", p.TaskRunDir(42, 7), "/opt/4zreco/data/tasks/42/i7"},
+		{"TaskArtifacts", p.TaskArtifacts("42"), "/opt/4zreco/data/tasks/42/artifacts"},
+		{"TaskArtifactRel", p.TaskArtifactRel("42", "1731500000000000000-shot.png"),
+			"tasks/42/artifacts/1731500000000000000-shot.png"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

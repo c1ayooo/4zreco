@@ -47,8 +47,7 @@ import (
 // Options configures a Session — the norma agentcore.Options surface the four
 // agent assemblies (worker/planner/mainagent/chat) already speak, narrowed to
 // what the eino kernel implements. Fields the norma SDK had but 4zreco never
-// set (Plan/Memory/Skills/AskUser/TokenBudget/EscalateMaxTokens) are dropped;
-// noa 尚未随 eino 迁移（宿主侧回退内置 compaction 并告警）。
+// set (Plan/Memory/Skills/AskUser/TokenBudget/EscalateMaxTokens) are dropped.
 type Options struct {
 	// Model is the chat model the loop calls. The host hands
 	// acllm.BridgeModel(norma provider) — the provider stack beneath (failover,

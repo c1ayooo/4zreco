@@ -30,6 +30,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
+import { isOverlayOpen, isTypingTarget } from "@/lib/hooks/use-global-keys";
 import { listenMedia } from "@/lib/media-query";
 import type {
   AuditChainStatus,
@@ -684,12 +685,15 @@ function ApprovalTable({
   decide,
   revision,
   label,
+  cursorIndex,
 }: {
   rows: InterceptApprovalRow[];
   busy: boolean;
   decide: Decide;
   revision: number;
   label: string;
+  // 键盘光标行下标（仅待处理队列传入）；高亮与行选中同色系（bg-accent）。
+  cursorIndex?: number;
 }) {
   const [expanded, setExpanded] = React.useState<Set<number>>(() => new Set());
   const columns = React.useSyncExternalStore(subscribeColumns, visibleColumnCount, serverColumnCount);
@@ -720,14 +724,16 @@ function ApprovalTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((row) => {
+        {rows.map((row, index) => {
           const open = expanded.has(row.id);
           const panelID = `${prefix}-${row.id}`;
+          const cursorRow = cursorIndex === index;
           return (
             <React.Fragment key={row.id}>
               <TableRow
                 data-state={open ? "selected" : undefined}
-                className="cursor-pointer"
+                data-approval-cursor={cursorRow ? "true" : undefined}
+                className={cn("cursor-pointer", cursorRow && "bg-accent hover:bg-accent")}
                 onClick={() => toggle(row.id)}
               >
                 <TableCell>
@@ -811,6 +817,13 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
   const request = React.useRef(0);
   const decisionLock = React.useRef(false);
   const filterID = React.useId();
+  // 待处理队列键盘光标（j/k 移动，a 允许，r 拒绝）；ref 镜像供单次挂载的
+  // keydown 监听读取最新值（与上方 latestLoad 同一模式）。
+  const [pendingCursor, setPendingCursor] = React.useState(0);
+  const pendingQueueRef = React.useRef<InterceptApprovalRow[]>([]);
+  const pendingCursorRef = React.useRef(0);
+  const pendingDecideRef = React.useRef<Decide | undefined>(undefined);
+  const pendingScrollRef = React.useRef(false);
   const filtered = Boolean(filter.status || filter.ask_source || filter.decision_source || filter.q || filter.from || filter.to);
 
   // A task can stay mounted while the user switches between task details.
@@ -958,6 +971,46 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
       ...historyById.get(row.id),
       ...row,
     }));
+  pendingQueueRef.current = pending;
+  pendingCursorRef.current = pendingCursor;
+  pendingDecideRef.current = decide;
+
+  // 待处理队列键盘光标：仅该表已渲染（有行）且焦点不在输入框、无弹层打开时生效。
+  React.useEffect(() => {
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTypingTarget(e.target) || isOverlayOpen()) return;
+      const queue = pendingQueueRef.current;
+      if (!queue.length) return;
+      const clamp = (v: number) => Math.max(0, Math.min(queue.length - 1, v));
+      if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        const next = clamp(pendingCursorRef.current + (e.key === "j" ? 1 : -1));
+        pendingCursorRef.current = next;
+        pendingScrollRef.current = true;
+        setPendingCursor(next);
+        return;
+      }
+      if (e.key !== "a" && e.key !== "r") return;
+      if (e.repeat) return;
+      e.preventDefault();
+      const row = queue[clamp(pendingCursorRef.current)];
+      if (row) void pendingDecideRef.current?.(row.id, e.key === "a" ? "allowed" : "denied");
+    };
+    document.addEventListener("keydown", onKeydown);
+    return () => document.removeEventListener("keydown", onKeydown);
+  }, []);
+  // 队列变化（裁决后行被移除、轮询重排）时把光标收回界内。
+  React.useEffect(() => {
+    setPendingCursor((prev) => Math.min(prev, Math.max(0, pending.length - 1)));
+  }, [pending.length]);
+  // 仅在 j/k 移动后把光标行滚入视野；首屏渲染不滚动。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingCursor 驱动重跑以滚动入视野，效果体只读取 ref。
+  React.useEffect(() => {
+    if (!pendingScrollRef.current) return;
+    pendingScrollRef.current = false;
+    document.querySelector('[data-approval-cursor="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [pendingCursor]);
   const title = "拦截审批"; // 三处入口（侧栏/任务 tab/会话内嵌）统一一个名字，别让用户建两个心智
   return (
     <div className="flex min-w-0 flex-col gap-5">
@@ -1089,7 +1142,14 @@ export function ApprovalRecords({ taskId }: { taskId?: string }) {
             <ShieldAlertIcon className="size-4" />
             待处理（{pending.length}）
           </div>
-          <ApprovalTable rows={pending} busy={deciding} decide={decide} revision={revision} label="待处理审批" />
+          <ApprovalTable
+            rows={pending}
+            busy={deciding}
+            decide={decide}
+            revision={revision}
+            label="待处理审批"
+            cursorIndex={pendingCursor}
+          />
         </section>
       ) : null}
       <section className="overflow-hidden rounded-xl border">

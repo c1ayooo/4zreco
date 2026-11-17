@@ -102,7 +102,11 @@ export function companyScopeRuleError(rule: CompanyScopeRule): string {
   }
   if (rule.kind === "domain") {
     if (/\s/.test(value)) return "请输入不含空格的有效域名或 URL";
-    const hostname = domainHostname(value);
+    // 前导 *. 通配符：与后端 ParseScopeLine 对齐，剥掉后按普通域名校验
+    // （domain 规则本就按根域+全部子域后缀匹配，*.example.com 与 example.com 等价）。
+    let candidate = value;
+    if (candidate.startsWith("*.")) candidate = candidate.slice(2);
+    const hostname = domainHostname(candidate);
     if (!hostname || ipVersion(hostname) !== null) return "请输入有效域名或 URL";
     const labels = hostname.split(".");
     if (

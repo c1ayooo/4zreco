@@ -56,9 +56,11 @@ func (s *Server) listenerStart(w http.ResponseWriter, r *http.Request) {
 	}
 	// ssh 中继模式：为该监听器托管一条 SSH 反向隧道（失败不回滚监听——
 	// 本机端口已在收，隧道可后续修；错误随响应带出）。
+	// 刻意用 s.ctx（server 生命周期）而不是 r.Context()：HTTP 响应一写完
+	// 请求 ctx 就取消了，挂在上面的隧道 goroutine 会随即失效。
 	cb := s.ResolveConnectBack(l.Port)
 	if s.c2RelayConfig().Mode == "ssh" {
-		if terr := s.startRelayTunnel(l.Name, l.Port, r.Context()); terr != nil {
+		if terr := s.startRelayTunnel(l.Name, l.Port, s.ctx); terr != nil {
 			cb.Via = "中继隧道建立失败: " + terr.Error()
 		}
 	}

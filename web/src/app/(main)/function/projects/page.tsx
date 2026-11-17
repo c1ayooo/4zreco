@@ -375,7 +375,7 @@ export default function ProjectsPage() {
             onValueChange={setScopeText}
             parsed={parseCompanyScopeText(scopeText)}
             label="追加范围"
-            description="每行一条，自动识别域名、IP、CIDR、ICP 备案和关键词。"
+            description="每行一条，自动识别域名、IP、CIDR、ICP 备案和关键词；*.example.com 即主域及其全部子域。"
           />
           <label className="flex flex-col gap-1.5">
             <span className="text-muted-foreground text-xs">归属依据（可选，记录为什么这条范围属于本项目）</span>

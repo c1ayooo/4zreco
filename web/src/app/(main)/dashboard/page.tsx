@@ -888,7 +888,7 @@ export default function DashboardPage() {
               sortedTasks.map((t) => {
                 const goalsPct = t.goals_total ? Math.round(((t.goals_met ?? 0) / t.goals_total) * 100) : null;
                 return (
-                  <tr key={t.id} className="border-b transition-colors last:border-0 hover:bg-muted/30">
+                  <tr key={t.id} className="border-b transition-colors last:border-0 hover:bg-muted/50">
                     <td className="max-w-xs px-4 py-3">
                       <Link href={`/function/tasks/detail?id=${t.id}`} className="group flex flex-col">
                         <span className="truncate font-medium group-hover:underline">{t.description}</span>

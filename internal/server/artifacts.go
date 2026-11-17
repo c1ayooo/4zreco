@@ -14,6 +14,7 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -105,7 +106,7 @@ func sanitizeArtifactName(name string) string {
 
 // taskArtifactsDir 任务的附件目录（data/tasks/<taskID>/artifacts）。
 func (s *Server) taskArtifactsDir(taskID string) string {
-	return filepath.Join(s.m.dirs().TaskDir(taskID), "artifacts")
+	return s.m.dirs().TaskArtifacts(taskID)
 }
 
 // RecordArtifact 把任务工作目录里的一个文件登记为证据附件：校验路径边界与
@@ -420,44 +421,83 @@ func (s *Server) exportTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "该任务没有证据附件")
 		return
 	}
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="task-%s-artifacts.zip"`, taskID))
-	zw := zip.NewWriter(w)
-	defer zw.Close()
+	// 取证场景不允许静默产出截断的 zip：每任务附件总量限额可达 500MB
+	// （maxTaskArtifactBytes），不走内存缓冲，先在临时文件里完整构建归档，
+	// 任一成员写入失败都以错误收场；构建成功后才设置响应头回传。
+	tmp, err := os.CreateTemp("", "4zreco-artifacts-*.zip")
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
 	manifest := make([]map[string]any, 0, len(list))
 	seen := map[string]int{}
-	for _, a := range list {
-		abs := filepath.Join(s.m.dir, a.Storage)
-		data, err := os.ReadFile(abs)
+	buildErr := func() error {
+		zw := zip.NewWriter(tmp)
+		for _, a := range list {
+			abs := filepath.Join(s.m.dir, a.Storage)
+			data, err := os.ReadFile(abs)
+			if err != nil {
+				continue // 文件丢失的登记跳过，manifest 里如实缺席
+			}
+			name := a.Name
+			if n := seen[name]; n > 0 {
+				ext := filepath.Ext(name)
+				name = strings.TrimSuffix(name, ext) + fmt.Sprintf("-%d", n+1) + ext
+			}
+			seen[a.Name]++
+			fw, err := zw.Create("artifacts/" + name)
+			if err != nil {
+				return fmt.Errorf("创建 zip 成员 %s 失败：%w", name, err)
+			}
+			if _, err := fw.Write(data); err != nil {
+				return fmt.Errorf("写入 zip 成员 %s 失败：%w", name, err)
+			}
+			manifest = append(manifest, map[string]any{
+				"id": a.ID, "finding_id": a.FindingID, "file": "artifacts/" + name, "name": a.Name, "kind": a.Kind,
+				"mime": a.Mime, "size_bytes": a.SizeBytes, "sha256": a.SHA256,
+				"source_url": a.SourceURL, "note": a.Note,
+				"created_at": a.CreatedAt.Format(time.RFC3339),
+			})
+		}
+		mf, err := json.MarshalIndent(map[string]any{
+			"task_id":     taskID,
+			"exported_at": time.Now().UTC().Format(time.RFC3339),
+			"policy":      "样本策略：仅保存证明性样本，全量数据不回传；附件随报告分发前请确认脱敏。",
+			"artifacts":   manifest,
+		}, "", "  ")
 		if err != nil {
-			continue // 文件丢失的登记跳过，manifest 里如实缺席
+			return fmt.Errorf("序列化 manifest 失败：%w", err)
 		}
-		name := a.Name
-		if n := seen[name]; n > 0 {
-			ext := filepath.Ext(name)
-			name = strings.TrimSuffix(name, ext) + fmt.Sprintf("-%d", n+1) + ext
-		}
-		seen[a.Name]++
-		fw, err := zw.Create("artifacts/" + name)
+		fw, err := zw.Create("manifest.json")
 		if err != nil {
-			continue
+			return fmt.Errorf("创建 zip 成员 manifest.json 失败：%w", err)
 		}
-		_, _ = fw.Write(data)
-		manifest = append(manifest, map[string]any{
-			"id": a.ID, "finding_id": a.FindingID, "file": "artifacts/" + name, "name": a.Name, "kind": a.Kind,
-			"mime": a.Mime, "size_bytes": a.SizeBytes, "sha256": a.SHA256,
-			"source_url": a.SourceURL, "note": a.Note,
-			"created_at": a.CreatedAt.Format(time.RFC3339),
-		})
+		if _, err := fw.Write(mf); err != nil {
+			return fmt.Errorf("写入 zip 成员 manifest.json 失败：%w", err)
+		}
+		return zw.Close()
+	}()
+	if buildErr != nil {
+		_ = tmp.Close()
+		writeErr(w, 500, buildErr.Error())
+		return
 	}
-	mf, _ := json.MarshalIndent(map[string]any{
-		"task_id":     taskID,
-		"exported_at": time.Now().UTC().Format(time.RFC3339),
-		"policy":      "样本策略：仅保存证明性样本，全量数据不回传；附件随报告分发前请确认脱敏。",
-		"artifacts":   manifest,
-	}, "", "  ")
-	if fw, err := zw.Create("manifest.json"); err == nil {
-		_, _ = fw.Write(mf)
+	if err := tmp.Close(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="task-%s-artifacts.zip"`, taskID))
+	w.WriteHeader(http.StatusOK)
+	// 归档已在临时文件完整落盘，此处失败只会是客户端断连，归档本身无损，记日志即可。
+	if _, err := io.Copy(w, tmp); err != nil {
+		log.Printf("[artifacts] task %s 证据包回传中断：%v", taskID, err)
 	}
 }
 
@@ -531,7 +571,8 @@ func (s *Server) recordArtifactAbs(abs, taskKey string, findingID int64, name, k
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("创建附件目录失败：%w", err)
 	}
-	storage := filepath.Join("tasks", taskKey, "artifacts",
+	// Storage 列存相对 Data 根的相对路径（F4：布局解析收敛到 config.Paths）。
+	storage := s.m.dirs().TaskArtifactRel(taskKey,
 		fmt.Sprintf("%d-%s", time.Now().UnixNano(), name))
 	dst := filepath.Join(s.m.dir, storage)
 	if err := os.WriteFile(dst, data, 0o600); err != nil {

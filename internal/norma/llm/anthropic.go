@@ -124,6 +124,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req CompletionRequest) i
 		}
 		defer resp.Body.Close()
 		scan := newSSEScanner(resp.Body)
+		tools := newAnthropicToolState()
 		for {
 			_, data, serr := scan.next()
 			if serr == io.EOF {
@@ -136,13 +137,19 @@ func (p *anthropicProvider) Stream(ctx context.Context, req CompletionRequest) i
 			if data == "" {
 				continue
 			}
-			ev, ok, perr := parseAnthropicFrame(data)
+			ev, blockIdx, ok, perr := parseAnthropicFrame(data)
 			if perr != nil {
 				yield(StreamEvent{}, perr)
 				return
 			}
 			if !ok {
 				continue
+			}
+			switch ev.Type {
+			case SEToolUseStart:
+				ev.ToolIndex = tools.started(blockIdx)
+			case SEToolInputJSON:
+				ev.ToolIndex = tools.anchor(blockIdx)
 			}
 			if !yield(ev, nil) {
 				return
@@ -232,9 +239,57 @@ func parseAnthropicResponse(raw []byte) (Message, string, Usage, error) {
 	return Message{Role: RoleAssistant, Content: blocks}, r.StopReason, usage, nil
 }
 
-func parseAnthropicFrame(data string) (StreamEvent, bool, error) {
+// anthropicToolState anchors tool_use blocks across one Anthropic stream.
+// Parallel tool calls must carry DISTINCT StreamEvent.ToolIndex values: the
+// neutral events feed acllm.BridgeModel, whose chunks eino's
+// schema.ConcatMessages folds BY INDEX — two calls anchored on the same index
+// surface as "cannot concat ToolCalls with different tool id" and kill the
+// run. The event's block index is the primary anchor (unique per block, and
+// not necessarily 0-based: thinking/text blocks occupy earlier slots); the
+// most recent call covers emulations that omit the index. [fork fix —
+// upstream norma v0.4.4 leaves ToolIndex at the zero value on every Anthropic
+// tool event; single-call turns hid it, parallel calls (GLM batched
+// get_worker_trace was the live trigger) died with the concat error.]
+type anthropicToolState struct {
+	blockIdx map[int]int // wire block index → tool ordinal
+	lastOrd  int         // ordinal of the most recent tool call
+	seen     bool
+}
+
+func newAnthropicToolState() *anthropicToolState {
+	return &anthropicToolState{blockIdx: map[int]int{}}
+}
+
+// started anchors a newly announced tool_use block and returns its ordinal.
+func (s *anthropicToolState) started(blockIdx *int) int {
+	ord := 0
+	if s.seen {
+		ord = s.lastOrd + 1
+	}
+	if blockIdx != nil {
+		s.blockIdx[*blockIdx] = ord
+	}
+	s.lastOrd, s.seen = ord, true
+	return ord
+}
+
+// anchor resolves the tool call an input_json_delta belongs to.
+func (s *anthropicToolState) anchor(blockIdx *int) int {
+	if blockIdx != nil {
+		if ord, ok := s.blockIdx[*blockIdx]; ok {
+			return ord
+		}
+	}
+	if s.seen {
+		return s.lastOrd
+	}
+	return 0
+}
+
+func parseAnthropicFrame(data string) (StreamEvent, *int, bool, error) {
 	var f struct {
 		Type         string `json:"type"`
+		Index        *int   `json:"index"`
 		ContentBlock struct {
 			Type string `json:"type"`
 			ID   string `json:"id"`
@@ -257,7 +312,7 @@ func parseAnthropicFrame(data string) (StreamEvent, bool, error) {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(data), &f); err != nil {
-		return StreamEvent{}, false, nil // tolerate non-JSON keepalives
+		return StreamEvent{}, nil, false, nil // tolerate non-JSON keepalives
 	}
 	switch f.Type {
 	case "message_start":
@@ -275,22 +330,22 @@ func parseAnthropicFrame(data string) (StreamEvent, bool, error) {
 			// not an echo of anything and MergeEcho would add it to the real count.
 			u := f.Message.Usage.norm()
 			u.OutputTokens = 0
-			return StreamEvent{Type: SEMessageStart, Usage: u}, true, nil
+			return StreamEvent{Type: SEMessageStart, Usage: u}, f.Index, true, nil
 		}
 	case "content_block_start":
 		if f.ContentBlock.Type == "tool_use" {
-			return StreamEvent{Type: SEToolUseStart, ToolID: f.ContentBlock.ID, ToolName: f.ContentBlock.Name}, true, nil
+			return StreamEvent{Type: SEToolUseStart, ToolID: f.ContentBlock.ID, ToolName: f.ContentBlock.Name}, f.Index, true, nil
 		}
 	case "content_block_delta":
 		switch f.Delta.Type {
 		case "text_delta":
-			return StreamEvent{Type: SETextDelta, Text: f.Delta.Text}, true, nil
+			return StreamEvent{Type: SETextDelta, Text: f.Delta.Text}, f.Index, true, nil
 		case "thinking_delta":
-			return StreamEvent{Type: SEThinkingDelta, Text: f.Delta.Thinking}, true, nil
+			return StreamEvent{Type: SEThinkingDelta, Text: f.Delta.Thinking}, f.Index, true, nil
 		case "signature_delta":
-			return StreamEvent{Type: SEThinkingSignature, Text: f.Delta.Signature}, true, nil
+			return StreamEvent{Type: SEThinkingSignature, Text: f.Delta.Signature}, f.Index, true, nil
 		case "input_json_delta":
-			return StreamEvent{Type: SEToolInputJSON, Text: f.Delta.PartialJSON}, true, nil
+			return StreamEvent{Type: SEToolInputJSON, Text: f.Delta.PartialJSON}, f.Index, true, nil
 		}
 	case "message_delta":
 		ev := StreamEvent{Type: SEMessageDelta, StopReason: f.Delta.StopReason}
@@ -301,17 +356,17 @@ func parseAnthropicFrame(data string) (StreamEvent, bool, error) {
 			// zeros in message_start get their real input counts recovered here.
 			ev.Usage = f.Usage.norm()
 		}
-		return ev, true, nil
+		return ev, f.Index, true, nil
 	case "message_stop":
-		return StreamEvent{Type: SEMessageStop}, true, nil
+		return StreamEvent{Type: SEMessageStop}, f.Index, true, nil
 	case "error":
 		msg := "stream error"
 		if f.Error != nil {
 			msg = f.Error.Message
 		}
-		return StreamEvent{}, false, fmt.Errorf("anthropic: %s", msg)
+		return StreamEvent{}, nil, false, fmt.Errorf("anthropic: %s", msg)
 	}
-	return StreamEvent{}, false, nil
+	return StreamEvent{}, nil, false, nil
 }
 
 type anthropicUsage struct {

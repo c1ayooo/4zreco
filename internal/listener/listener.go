@@ -11,7 +11,8 @@
 //     走 hostd 或端口转发）。
 //
 // 并发模型：每个 listener 一个 accept goroutine + 每连接一个读 goroutine；
-// Manager.mu 保护 listeners map。Stop 优雅关闭（关 accept、关全部连接）。
+// Manager.mu 保护 listeners map。Stop 优雅关闭（关 accept、关全部连接），
+// 并经 WaitGroup 同步等全部 goroutine 退出后再返回快照（2s 防御性上界）。
 package listener
 
 import (
@@ -51,10 +52,12 @@ type Listener struct {
 	StartedAt time.Time  `json:"started_at"`
 	Sessions  []*Session `json:"sessions"`
 
-	mu   sync.Mutex
-	ln   net.Listener
-	ctx  context.Context
-	stop context.CancelFunc
+	mu    sync.Mutex
+	ln    net.Listener
+	ctx   context.Context
+	stop  context.CancelFunc
+	conns map[net.Conn]struct{} // 活跃连接集合，Stop 时统一定向关闭
+	wg    sync.WaitGroup        // acceptLoop + 全部 handleConn 的收尾栅栏
 }
 
 // appendSession 记录新连接。
@@ -120,14 +123,17 @@ func (m *Manager) Start(name string, port int) (*Listener, error) {
 		return nil, fmt.Errorf("绑定 :%d 失败: %w", port, err)
 	}
 	ctx, stop := context.WithCancel(context.Background())
-	l := &Listener{Name: name, Port: port, StartedAt: time.Now(), ln: ln, ctx: ctx, stop: stop}
+	l := &Listener{Name: name, Port: port, StartedAt: time.Now(), ln: ln, ctx: ctx, stop: stop,
+		conns: map[net.Conn]struct{}{}}
 	m.listeners[name] = l
+	l.wg.Add(1)
 	go l.acceptLoop()
 	return l, nil
 }
 
 // acceptLoop 接受回连，每个连接一个读 goroutine。
 func (l *Listener) acceptLoop() {
+	defer l.wg.Done()
 	for {
 		conn, err := l.ln.Accept()
 		if err != nil {
@@ -137,13 +143,31 @@ func (l *Listener) acceptLoop() {
 			_ = conn.Close()
 			return
 		}
+		// 计数在 acceptLoop 存活期间恒 ≥1，此 Add 不会与 Stop 的 Wait 竞争。
+		l.wg.Add(1)
 		go l.handleConn(conn)
 	}
+}
+
+// addConn/removeConn 维护活跃连接集合，供 Stop 定向关闭。
+func (l *Listener) addConn(c net.Conn) {
+	l.mu.Lock()
+	l.conns[c] = struct{}{}
+	l.mu.Unlock()
+}
+
+func (l *Listener) removeConn(c net.Conn) {
+	l.mu.Lock()
+	delete(l.conns, c)
+	l.mu.Unlock()
 }
 
 // handleConn 捕获一个会话：远端地址、时间、有界预览。连接保持打开（回连的
 // shell/banner 通常保持连接），远端关闭或监听器停止时收尾。
 func (l *Listener) handleConn(conn net.Conn) {
+	defer l.wg.Done()
+	l.addConn(conn)
+	defer l.removeConn(conn)
 	s := &Session{
 		ID:          fmt.Sprintf("%d", time.Now().UnixNano()),
 		Remote:      conn.RemoteAddr().String(),
@@ -152,7 +176,9 @@ func (l *Listener) handleConn(conn net.Conn) {
 	}
 	l.appendSession(s)
 	defer func() {
+		l.mu.Lock() // Open 标记的收尾写也走 mu，避免与并发 Snapshot 读竞争
 		s.Open = false
+		l.mu.Unlock()
 		_ = conn.Close()
 	}()
 	buf := make([]byte, 4096)
@@ -201,11 +227,37 @@ func (m *Manager) Stop(name string) ([]Session, error) {
 	}
 	delete(m.listeners, name)
 	m.mu.Unlock()
+	l.shutdown()
+	// 确定性收尾：连接已被定向关闭，accept/读循环会立即退出，这里同步等全部
+	// goroutine 结束后再取快照，保证 Open 状态是真实终态（不再靠 sleep 猜）。
+	// 2s 上界只是防御性兜底——正常路径不会等满；超时说明有个别 goroutine 卡在
+	// 不可中断的 I/O 里，其迟到收尾仍会把 Open 置 false，只是本次快照早于它。
+	done := make(chan struct{})
+	go func() {
+		l.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+	return l.Snapshot(), nil
+}
+
+// shutdown 取消 ctx、关监听器、关全部活跃连接，让 accept/读循环立即退出
+// （读循环阻塞在 Read 上，单靠 ctx 取消要等最多一个读周期才自查到）。
+func (l *Listener) shutdown() {
 	l.stop()
 	_ = l.ln.Close()
-	// 给读 goroutine 一点时间收尾标记 Open=false。
-	time.Sleep(200 * time.Millisecond)
-	return l.Snapshot(), nil
+	l.mu.Lock()
+	conns := make([]net.Conn, 0, len(l.conns))
+	for c := range l.conns {
+		conns = append(conns, c)
+	}
+	l.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
 }
 
 // Get 返回一个监听器的会话快照。

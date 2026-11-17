@@ -70,8 +70,17 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
         } as React.CSSProperties
       }
     >
+      {/* 键盘跳转入口（design skill B10）：首个可聚焦元素，直达主内容区 */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:font-medium focus:text-primary-foreground focus:text-sm"
+      >
+        跳到主内容
+      </a>
       <ProjectStoreProvider>
-        <AppSidebar variant={variant} collapsible={collapsible} />
+        <nav aria-label="主导航" className="contents">
+          <AppSidebar variant={variant} collapsible={collapsible} />
+        </nav>
         <SidebarInset
           className={cn(
             "[html[data-content-layout=centered]_&>*]:mx-auto",
@@ -82,7 +91,9 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
             "min-w-0 overflow-x-hidden",
           )}
         >
-          <MainContent>{children}</MainContent>
+          <main id="main-content" className="contents">
+            <MainContent>{children}</MainContent>
+          </main>
         </SidebarInset>
       </ProjectStoreProvider>
     </SidebarProvider>

@@ -42,7 +42,8 @@ ZRECO_SKIP_FRONTEND=1 ZRECO_SKIP_NPM_CI=1 ZRECO_COMPRESS=0 ZRECO_PACKAGE=0 \
 
 ## 1.5 本机开发环境速查（2026-11-06 启动时记录）
 
-本机 **系统 PostgreSQL 18**（`127.0.0.1:5432`，systemd 管理）上建了本项目专用角色与库；
+本机 **系统 PostgreSQL**（`127.0.0.1:5432`，systemd 管理；版本不写死，以 `/usr/lib/postgresql/`
+实际目录为准，2026-11-13 实测为 16）上建了本项目专用角色与库；
 DSN 已落 `config.json`（.gitignore 已覆盖该文件），启动**不需要**再 export `ZRECO_PG_DSN`：
 
 - 库/角色：`4zreco`（名字以数字开头，SQL 里必须双引号包裹，见 §1 末尾的坑）
@@ -50,7 +51,7 @@ DSN 已落 `config.json`（.gitignore 已覆盖该文件），启动**不需要*
   关联远端时已按下方警示从本节移除明文）
 - 本机无 Docker、无 sudo 常规可用（sudo 密码属用户本人，勿写入任何文件）；
   全量测试连库方案（按需三选一）：(a) 系统 PG 上的 `4zreco_ci` 库（角色无 CREATEDB，
-  需用户本人手工建）；(b) `/usr/lib/postgresql/18/bin` 的 initdb 在 /tmp 起一次性
+  需用户本人手工建）；(b) `/usr/lib/postgresql/<版本>/bin` 的 initdb 在 /tmp 起一次性
   trust 集群（15432 端口，测完即删，不碰系统 PG）；(c) §1 的 Docker 容器（有 Docker 时）。
 - ⚠️ 任何本机凭据（PG 密码、API key）一律不得写入本文件或任何入库文件。
 
@@ -88,7 +89,7 @@ DSN 已落 `config.json`（.gitignore 已覆盖该文件），启动**不需要*
    （CI 里跑的 `npm run build:static` 与之等价、next.config 未开 ignoreBuildErrors 故含类型检查；
    Windows 本地仍按 §1 用环境变量前缀形式，不要用该 script）。
 4. **提示词改动会随 `SeedPromptVersioned` 自动下发**已部署实例（用户手改过的不受影响）——改 worker/planner 默认模板不用写迁移。
-5. **拦截规则新增走 seed 批次**（v1…v5 先例）：除 `seedBuiltinInterceptRulesBatch` 外**必须**配按名补种 + enabled 工具集合并（v4/v5 有真实升级路径缺陷教训：flag 早退会吞掉新规则）。
+5. **拦截规则新增走 seed 批次**（v1…v6 先例，v6=zombie/proton 审批规则，`internal/db/db.go:713-750` 一带）：除 `seedBuiltinInterceptRulesBatch` 外**必须**配按名补种 + enabled 工具集合并（v4/v5 有真实升级路径缺陷教训：flag 早退会吞掉新规则）。
 6. git push 对 github.com 常因本机代理抖动失败——`git -c http.proxy= -c https.proxy= push` 直连 + 重试循环（30-45s 间隔）+ `git ls-remote` 确认落地。
 
 ## 4. 关键坑（真实踩过的）
@@ -202,7 +203,7 @@ internal/            全部 Go 业务包（import 路径 github.com/c1ayooo/4zre
   config/            配置加载 + Paths（运行时目录唯一解析点，改布局只动它）
   agent/             多 Agent 层（planner/worker/mainagent；提示词是 Go 字符串常量
                      在 prompt.go/promptcatalog.go；三张工具清单在 tools.go/tools_insert.go）
-  db/                PostgreSQL 唯一存储（schema.sql 幂等迁移；拦截规则 seed 批次 v1-v5；
+  db/                PostgreSQL 唯一存储（schema.sql 幂等迁移；拦截规则 seed 批次 v1-v6；
                      审批三表 append-only + HMAC 哈希链 + v_intercept 视图，P0 随本轮引入）
   server/            HTTP 面与引擎调度（全部路由注册在 server.go 的 Handler() 起，:724 一带）
   kernel/            eino 内核（askernel/ Session/Run/HITL 续跑；termmap/ 13 终态映射）
@@ -220,6 +221,9 @@ internal/            全部 Go 业务包（import 路径 github.com/c1ayooo/4zre
   selfupdate/        自更新（三次启动协议）；honeydetect/ 蜜罐识别（内嵌签名库+可选覆盖）
   listener/          回连接收器；enrich/ 资产富化；docpreview/ 文档取样转图片
   mcphttp/           MCP HTTP 封装；proxyprobe/ 代理探测
+  imhub/             IM 双向对话机器人网关（飞书/钉钉/Telegram/企微消息接进平台对话链路，
+                     每 IM 会话映射平台会话；v0.3.17 由 commit 80012c2 移植加入，已接线
+                     server/im.go:44 与 server.go:76）
 skills/              内置 skill（随 zip 与 Docker 镜像分发，挂载覆盖容器内 /app/skills）
 web/                 Next.js 前端（src/app 路由；lib/api.ts 单一 API 封装）
 assets/              静态资源（logo + README 截图 screenshots/）

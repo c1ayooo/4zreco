@@ -221,6 +221,26 @@ func ParseScopeLine(line string) (ParsedScope, error) {
 	if raw == "" {
 		return r, fmt.Errorf("空行")
 	}
+	// 域名通配符：前导 "*." 是语法糖 —— domain 规则的匹配语义本就是「根域及全部
+	// 子域」（company_scope 归属与 project_scope 继承任务范围都按 root_domain 相等
+	// 比较），"*.example.com" 与 "example.com" 等价，剥掉前缀走普通域名解析即可。
+	// 其余形态没有对应的匹配语义，显式拒绝而不是存进永远命不中的死规则：
+	// 深层通配（*.api.example.com）因为资产的 root_domain 恒为 eTLD+1，匹配不上；
+	// 通配 IP/网段、中间通配、多层通配均无意义。
+	wildcard := strings.HasPrefix(raw, "*.")
+	if wildcard {
+		sub := strings.TrimPrefix(raw, "*.")
+		if strings.Contains(sub, "*") {
+			return r, fmt.Errorf("只支持前导 *. 通配: %s", r.Raw)
+		}
+		if net.ParseIP(sub) != nil || looksLikeIPAddress(sub) {
+			return r, fmt.Errorf("通配符仅支持域名: %s", r.Raw)
+		}
+		if _, _, err := net.ParseCIDR(sub); err == nil {
+			return r, fmt.Errorf("通配符仅支持域名: %s", r.Raw)
+		}
+		raw = sub
+	}
 	// CIDR first because URL parsing treats its slash as a path separator.
 	if _, ipnet, err := net.ParseCIDR(raw); err == nil {
 		ones, bits := ipnet.Mask.Size()
@@ -266,6 +286,13 @@ func ParseScopeLine(line string) (ParsedScope, error) {
 	d := DomainKey(host)
 	if suf, icann := publicsuffix.PublicSuffix(d); icann && suf == d {
 		return r, fmt.Errorf("不能用裸 TLD 作为范围: %s", raw)
+	}
+	// 通配只接受注册域级别：子域级通配剥掉 "*." 后得到的域名 ≠ 其 eTLD+1，
+	// 而 domain 规则匹配的是 root_domain 相等，这类规则永远命中不了任何资产。
+	if wildcard {
+		if root, _ := RootDomain(d); root != d {
+			return r, fmt.Errorf("通配符仅支持注册域级别(如 *.example.com): %s", r.Raw)
+		}
 	}
 	r.Kind, r.Domain = "domain", d
 	return r, nil

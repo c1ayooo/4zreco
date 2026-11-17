@@ -27,7 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { api, sseUrl } from "@/lib/api";
+import { api, rawFetch, sseUrl } from "@/lib/api";
 import type { UpdateCheck, UpdateProgress } from "@/lib/types";
 
 /** 等待新版本上线的最长时间。一次升级要经过三次进程启动（暂存 → 换装 → 新版），
@@ -57,6 +57,16 @@ export function UpdateCard() {
   const [busy, setBusy] = React.useState(false);
   const [confirmUpdate, setConfirmUpdate] = React.useState(false);
   const [confirmRollback, setConfirmRollback] = React.useState(false);
+
+  // SSE 连接句柄：更新下载期间离开设置页时由卸载清理关闭，避免连接悬挂。
+  const streamRef = React.useRef<EventSource | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      streamRef.current?.close();
+      streamRef.current = null;
+    };
+  }, []);
 
   // quiet 同时决定要不要绕过后端缓存：进页面时的自动检查用缓存（顶栏刚查过），
   // 用户手动点「检查更新」则强制回源，否则刚发布的版本要等缓存过期才看得到。
@@ -93,7 +103,7 @@ export function UpdateCard() {
       await sleep(2000);
       try {
         // /api/health 已去身份（公网指纹治理）：版本查询走鉴权的 /api/version。
-        const r = await fetch("/api/version", { cache: "no-store" });
+        const r = await rawFetch("/api/version", { cache: "no-store" });
         if (r.ok) {
           const j = (await r.json()) as { version?: string };
           if (j.version && j.version !== fromVersion) {
@@ -115,6 +125,7 @@ export function UpdateCard() {
   const openStream = React.useCallback(
     (fromVersion: string) => {
       const es = new EventSource(sseUrl("/api/update/stream"));
+      streamRef.current = es;
       es.onmessage = (ev) => {
         let p: UpdateProgress;
         try {

@@ -6,6 +6,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,12 @@ func scheduleLocation(mode string) *time.Location {
 	if mode == "system" {
 		return time.Local
 	}
-	loc, _ := time.LoadLocation("Asia/Shanghai")
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		// tzdata 已内嵌,正常不会走到这里;一旦触发(编译裁剪掉 tzdata 等)降级为 UTC 并留痕
+		log.Printf("[schedule] 加载 Asia/Shanghai 时区失败,回退 UTC: %v", err)
+		return time.UTC
+	}
 	return loc
 }
 

@@ -266,3 +266,137 @@ func TestOpenAIChatParallelToolCallArgsRouteByIndex(t *testing.T) {
 		t.Fatalf("call_1 wrong: %+v", tc)
 	}
 }
+
+// anthropicFrames renders the GLM-shaped Anthropic stream: a thinking block at
+// wire index 0, then parallel tool_use blocks at 1..n. With blockIndex=false
+// the frames omit the event-level index entirely (emulation fallback).
+func anthropicFrames(t *testing.T, blockIndex bool, calls []struct {
+	block int
+	id    string
+	args  string
+}) string {
+	frame := func(payload map[string]any) string {
+		return sseFrame(t, "", payload)
+	}
+	frames := ""
+	start := func(idx int, block map[string]any) string {
+		if blockIndex {
+			return frame(map[string]any{"type": "content_block_start", "index": idx, "content_block": block})
+		}
+		return frame(map[string]any{"type": "content_block_start", "content_block": block})
+	}
+	delta := func(idx int, delta map[string]any) string {
+		if blockIndex {
+			return frame(map[string]any{"type": "content_block_delta", "index": idx, "delta": delta})
+		}
+		return frame(map[string]any{"type": "content_block_delta", "delta": delta})
+	}
+	stop := func(idx int) string {
+		if blockIndex {
+			return frame(map[string]any{"type": "content_block_stop", "index": idx})
+		}
+		return frame(map[string]any{"type": "content_block_stop"})
+	}
+	frames += frame(map[string]any{"type": "message_start", "message": map[string]any{"usage": map[string]int{"input_tokens": 10, "output_tokens": 1}}})
+	frames += start(0, map[string]any{"type": "thinking"})
+	frames += delta(0, map[string]any{"type": "thinking_delta", "thinking": "let me check the traces"})
+	frames += stop(0)
+	for _, c := range calls {
+		frames += start(c.block, map[string]any{"type": "tool_use", "id": c.id, "name": "get_worker_output"})
+		frames += delta(c.block, map[string]any{"type": "input_json_delta", "partial_json": c.args})
+		frames += stop(c.block)
+	}
+	frames += frame(map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "tool_use"}, "usage": map[string]int{"input_tokens": 10, "output_tokens": 5}})
+	frames += frame(map[string]any{"type": "message_stop"})
+	return frames
+}
+
+// TestAnthropicParallelToolCallsAnchorsByBlockIndex: the GLM-shaped Anthropic
+// stream (thinking block at 0, three parallel tool_use at 1/2/3). Upstream
+// norma left ToolIndex at zero on every tool event, so the kernel's
+// schema.ConcatMessages died with "cannot concat ToolCalls with different tool
+// id" the moment the model emitted parallel calls — task 1541's planner rounds
+// were the live trigger.
+func TestAnthropicParallelToolCallsAnchorsByBlockIndex(t *testing.T) {
+	frames := anthropicFrames(t, true, []struct {
+		block int
+		id    string
+		args  string
+	}{
+		{1, "call_aaa", `{"intent": 1}`},
+		{2, "call_bbb", `{"intent": 2}`},
+		{3, "call_ccc", `{"intent": 3}`},
+	})
+	srv := sseServer(t, frames)
+	prov, err := llm.NewProvider(llm.Config{Format: llm.FormatAnthropic, BaseURL: srv.URL, Model: "glm-5.3-flash", APIKey: "test"})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	// Provider level: three starts with distinct anchors; every args delta
+	// carries the anchor of its own call.
+	evs := streamEvents(t, prov)
+	starts := map[int]string{}
+	for _, ev := range evs {
+		switch ev.Type {
+		case llm.SEToolUseStart:
+			if _, dup := starts[ev.ToolIndex]; dup {
+				t.Fatalf("two tool_use_start events anchored at index %d", ev.ToolIndex)
+			}
+			starts[ev.ToolIndex] = ev.ToolID
+		case llm.SEToolInputJSON:
+			if _, known := starts[ev.ToolIndex]; !known {
+				t.Fatalf("tool_input_delta anchored at unknown index %d", ev.ToolIndex)
+			}
+		}
+	}
+	if len(starts) != 3 || starts[0] != "call_aaa" || starts[1] != "call_bbb" || starts[2] != "call_ccc" {
+		t.Fatalf("want starts {0:call_aaa, 1:call_bbb, 2:call_ccc}, got %v", starts)
+	}
+
+	// eino side: the exact kernel fold must yield three well-formed calls —
+	// pre-fix this is "cannot concat ToolCalls with different tool id".
+	final := bridgeConcat(t, prov)
+	if len(final.ToolCalls) != 3 {
+		t.Fatalf("want 3 tool calls, got %d: %+v", len(final.ToolCalls), final.ToolCalls)
+	}
+	if tc := toolCallByID(t, final, "call_aaa"); tc.Function.Arguments != `{"intent": 1}` {
+		t.Fatalf("call_aaa wrong: %+v", tc)
+	}
+	if tc := toolCallByID(t, final, "call_bbb"); tc.Function.Arguments != `{"intent": 2}` {
+		t.Fatalf("call_bbb wrong: %+v", tc)
+	}
+	if tc := toolCallByID(t, final, "call_ccc"); tc.Function.Arguments != `{"intent": 3}` {
+		t.Fatalf("call_ccc wrong: %+v", tc)
+	}
+}
+
+// TestAnthropicParallelToolCallsFallbacksWithoutBlockIndex: an emulation that
+// omits the event-level index still gets distinct anchors via the sequential
+// fallback, and each delta routes to the call in flight.
+func TestAnthropicParallelToolCallsFallbacksWithoutBlockIndex(t *testing.T) {
+	frames := anthropicFrames(t, false, []struct {
+		block int
+		id    string
+		args  string
+	}{
+		{0, "call_0", `{"n": 1}`},
+		{0, "call_1", `{"n": 2}`},
+	})
+	srv := sseServer(t, frames)
+	prov, err := llm.NewProvider(llm.Config{Format: llm.FormatAnthropic, BaseURL: srv.URL, Model: "m", APIKey: "test"})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	final := bridgeConcat(t, prov)
+	if len(final.ToolCalls) != 2 {
+		t.Fatalf("want 2 tool calls, got %d: %+v", len(final.ToolCalls), final.ToolCalls)
+	}
+	if tc := toolCallByID(t, final, "call_0"); tc.Function.Arguments != `{"n": 1}` {
+		t.Fatalf("call_0 args wrong: %+v", tc)
+	}
+	if tc := toolCallByID(t, final, "call_1"); tc.Function.Arguments != `{"n": 2}` {
+		t.Fatalf("call_1 args wrong: %+v", tc)
+	}
+}

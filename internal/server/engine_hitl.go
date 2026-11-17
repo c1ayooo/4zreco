@@ -88,7 +88,9 @@ func (e *Engine) deliverDecidedHitl(pendingID int64, taskID string) (*db.HitlRes
 	allowed := db.HitlAllowedFromDecision(decision, action)
 	resume := pg.SignHitlResume(pendingID, decisionID, allowed)
 	// 钥匙一次性：自投递即消费（重放同一决定被钥匙删除挡住）。
-	_ = pg.ConsumeHitlMapping(pendingID)
+	if err := pg.ConsumeHitlMapping(pendingID); err != nil {
+		log.Printf("[hitl] 审批 #%d 钥匙消费失败（停靠自投递，task %s）: %v", pendingID, taskID, err)
+	}
 	log.Printf("[hitl] 审批 #%d 决定已先行落库(%s)，停靠自投递（task %s）", pendingID, decision, taskID)
 	return resume, true
 }
@@ -121,7 +123,9 @@ func (e *Engine) hitlParkHook(taskID int64, hitl *askernel.HitlInterrupt) (*db.H
 		select {
 		case resume := <-park.ch:
 			// 钥匙一次性：投递即消费（重放同一决定被钥匙删除挡住）。
-			_ = pg.ConsumeHitlMapping(hitl.PendingID)
+			if err := pg.ConsumeHitlMapping(hitl.PendingID); err != nil {
+				log.Printf("[hitl] task %s 审批 #%d 钥匙消费失败（决定投递后）: %v", tid, hitl.PendingID, err)
+			}
 			return resume, true
 		case <-time.After(hitlParkPoll):
 			// 任务终止/删除 → 停靠被打断，审批按取消收尾（决定行）。
@@ -166,7 +170,9 @@ func (e *Engine) ChatHitlPark(ctx context.Context, hitl *askernel.HitlInterrupt)
 	for {
 		select {
 		case resume := <-park.ch:
-			_ = pg.ConsumeHitlMapping(hitl.PendingID)
+			if err := pg.ConsumeHitlMapping(hitl.PendingID); err != nil {
+				log.Printf("[hitl] chat 审批 #%d 钥匙消费失败（决定投递后）: %v", hitl.PendingID, err)
+			}
 			return resume, true
 		case <-ctx.Done():
 			e.settleHitl(db.PendingHitlApproval{
@@ -245,12 +251,16 @@ func (e *Engine) hitlResumeSeed(sessionID, fingerprint string) []askernel.Resume
 		_, version, ok, err := pg.HitlCheckpointMeta(r.CheckpointID)
 		if err != nil || !ok || version != db.CheckpointVersion {
 			log.Printf("[hitl] 审批 #%d checkpoint 不可用/版本不匹配(%d)，P2-6 回退（需重跑）", r.PendingID, version)
-			_ = pg.ConsumeHitlMapping(r.PendingID)
+			if err := pg.ConsumeHitlMapping(r.PendingID); err != nil {
+				log.Printf("[hitl] 审批 #%d P2-6 回退钥匙消费失败（会话 %s）: %v", r.PendingID, sessionID, err)
+			}
 			continue
 		}
 		if r.Fingerprint != "" && r.Fingerprint != fingerprint {
 			log.Printf("[hitl] 审批 #%d 装配指纹不匹配，P2-6 回退（需重跑）", r.PendingID)
-			_ = pg.ConsumeHitlMapping(r.PendingID)
+			if err := pg.ConsumeHitlMapping(r.PendingID); err != nil {
+				log.Printf("[hitl] 审批 #%d 指纹回退钥匙消费失败（会话 %s）: %v", r.PendingID, sessionID, err)
+			}
 			continue
 		}
 		allowed := db.HitlAllowedFromDecision(r.Decision, r.Action)
@@ -345,7 +355,9 @@ func (e *Engine) settleHitl(r db.PendingHitlApproval, source string, allow bool,
 		case v.(*hitlPark).ch <- resume:
 		case <-time.After(time.Second):
 		}
-		_ = pg.ConsumeHitlMapping(r.PendingID)
+		if err := pg.ConsumeHitlMapping(r.PendingID); err != nil {
+			log.Printf("[hitl] 审批 #%d 收尾钥匙消费失败（task %s）: %v", r.PendingID, r.TaskID, err)
+		}
 		log.Printf("[hitl] 审批 #%d 已按 %s 收尾并唤醒停靠运行", r.PendingID, source)
 		return
 	}
@@ -353,7 +365,9 @@ func (e *Engine) settleHitl(r db.PendingHitlApproval, source string, allow bool,
 	if r.CheckpointID != "" {
 		_ = pg.DeleteCheckpoint(context.Background(), r.CheckpointID)
 	}
-	_ = pg.ConsumeHitlMapping(r.PendingID)
+	if err := pg.ConsumeHitlMapping(r.PendingID); err != nil {
+		log.Printf("[hitl] 审批 #%d 收尾钥匙消费失败（task %s，无停靠运行）: %v", r.PendingID, r.TaskID, err)
+	}
 	log.Printf("[hitl] 审批 #%d 已按 %s 收尾（无停靠运行，运行侧需重跑）", r.PendingID, source)
 }
 

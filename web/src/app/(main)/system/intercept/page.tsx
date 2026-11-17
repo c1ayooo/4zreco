@@ -726,7 +726,7 @@ export default function InterceptPage() {
               ) : (
                 <Table className="table-fixed">
                   <TableHeader>
-                    <TableRow className="hover:bg-transparent">
+                    <TableRow>
                       <TableHead className="hidden w-[72px] md:table-cell">优先级</TableHead>
                       <TableHead>名称</TableHead>
                       <TableHead className="hidden w-[90px] sm:table-cell">目标</TableHead>

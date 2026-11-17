@@ -1,6 +1,9 @@
 package config
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strconv"
+)
 
 // Paths 是全部运行时目录的**唯一解析点**：所有「根目录 + 字面量子目录」的拼接
 // 都必须走这里的方法，禁止在业务代码里再手写 filepath.Join(root, "字面量")。
@@ -72,7 +75,6 @@ func (p Paths) ProtectedWorkspaceDirs() []string { return []string{"traffic", "e
 func (p Paths) Traffic() string     { return filepath.Join(p.Data, "traffic") }
 func (p Paths) Evidence() string    { return filepath.Join(p.Data, "evidence") }
 func (p Paths) Transcripts() string { return filepath.Join(p.Data, "transcripts") }
-func (p Paths) NoaRoot() string     { return filepath.Join(p.Data, "noa") }
 
 // SignaturesDir / HoneypotSignatures 是蜜罐签名库的位置（可选覆盖文件，缺失回落
 // 内嵌库）。
@@ -101,3 +103,23 @@ func (p Paths) TaskUploads(taskID string) string  { return filepath.Join(p.TaskD
 func (p Paths) SessionDir(id string) string       { return filepath.Join(p.SessionsRoot(), id) }
 func (p Paths) SessionUploads(id string) string   { return filepath.Join(p.SessionDir(id), "uploads") }
 func (p Paths) DraftUploads(id string) string     { return filepath.Join(p.DraftsRoot(), id, "uploads") }
+
+// TaskRunDir 任务内单个 agent run 的工作目录：planner/mainagent 用任务目录本身
+// （intentID<=0），worker 用意图专属子目录 i<intentID>（与 sessions/<id> 的会话
+// 隔离对称）。
+func (p Paths) TaskRunDir(taskID, intentID int64) string {
+	dir := p.TaskDir(strconv.FormatInt(taskID, 10))
+	if intentID > 0 {
+		dir = filepath.Join(dir, "i"+strconv.FormatInt(intentID, 10))
+	}
+	return dir
+}
+
+// TaskArtifacts 任务附件目录（tasks/<id>/artifacts）。
+func (p Paths) TaskArtifacts(taskID string) string { return filepath.Join(p.TaskDir(taskID), "artifacts") }
+
+// TaskArtifactRel 任务附件文件相对 Data 根的落盘路径（DB TaskArtifact.Storage
+// 列存的就是这个相对形态；读取侧以 Data 为根还原绝对路径）。
+func (p Paths) TaskArtifactRel(taskID, file string) string {
+	return filepath.Join("tasks", taskID, "artifacts", file)
+}

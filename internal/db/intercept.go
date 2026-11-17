@@ -189,21 +189,25 @@ func (d *DB) CreateDecidedIntercept(ruleID, convID int64, taskID, agentName, too
 	if ruleID != 0 {
 		ruleIDPtr = &ruleID
 	}
-	tx, err := d.Begin()
+	// 无 caller ctx 的观测行写入：整条事务受 defaultQueryTimeout 约束（同
+	// ResolveIntercept），PG 抖动/链锁争用时最多挂 30s 而非无限。
+	ctx, cancel := queryCtx()
+	defer cancel()
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback() //nolint:errcheck
 	// 观测行接链：锚行缺失时先补（与 ResolveIntercept 同一串行化前提由
 	// appendChainDecisionTx 的链头 FOR UPDATE + 本事务的 INSERT 顺序保证）。
-	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('intercept_chain'))`); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('intercept_chain'))`); err != nil {
 		return 0, err
 	}
 	if err := d.ensureAuditAnchorTx(tx); err != nil {
 		return 0, err
 	}
 	var id int64
-	err = tx.QueryRow(`
+	err = tx.QueryRowContext(ctx, `
 INSERT INTO intercept_pending(rule_id, conversation_id, task_id, agent_name, tool_name, tool_input, reason, ask_source, kind, audit)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
 		ruleIDPtr, convIDPtr, taskIDPtr, agentName, toolName, raw, reason, askSourceFor(ruleID), normalizeKind(ruleID, kind), firstAudit(audits)).Scan(&id)

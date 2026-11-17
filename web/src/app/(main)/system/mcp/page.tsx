@@ -391,7 +391,7 @@ export default function MCPPage() {
               <div className="flex items-center gap-2">
                 <ServerIcon className="size-4 shrink-0 text-muted-foreground" />
                 <CardTitle className="truncate text-base">{s.name}</CardTitle>
-                <Badge variant="outline" className="uppercase">
+                <Badge variant="outline" className="font-mono font-semibold text-[10px] tracking-wider uppercase">
                   {s.transport}
                 </Badge>
                 <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>

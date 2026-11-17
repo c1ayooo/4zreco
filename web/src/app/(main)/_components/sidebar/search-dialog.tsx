@@ -17,6 +17,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { OPEN_SEARCH_EVENT } from "@/lib/hooks/use-global-keys";
 import type { NavMainItem } from "@/navigation/sidebar/sidebar-items";
 import { sidebarItems } from "@/navigation/sidebar/sidebar-items";
 
@@ -91,6 +92,13 @@ export function SearchDialog() {
     };
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
+  }, []);
+
+  // 全局 `/` 经 useGlobalKeys 派发此事件打开搜索；组件未挂载时事件落空。
+  React.useEffect(() => {
+    const openSearch = () => setOpen(true);
+    window.addEventListener(OPEN_SEARCH_EVENT, openSearch);
+    return () => window.removeEventListener(OPEN_SEARCH_EVENT, openSearch);
   }, []);
 
   const handleOpenChange = (value: boolean) => {

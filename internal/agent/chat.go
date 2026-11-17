@@ -3,17 +3,15 @@ package agent
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/c1ayooo/4zreco/internal/acllm"
+	"github.com/c1ayooo/4zreco/internal/config"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/c1ayooo/4zreco/internal/norma/harness"
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
-	"github.com/c1ayooo/4zreco/internal/norma/permission"
 	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 	"github.com/cloudwego/eino/adk"
@@ -36,7 +34,6 @@ type ChatAgent struct {
 	webSearch      WebSearchOpts
 	guard          *guard.Guard // optional; nil disables intercept hooks for chat
 	nonStreamingFn func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn   func() bool  // resolver: use experimental noa compaction? (nil = off)
 	maxTokensFn    func() int   // resolver: per-reply output cap (nil/0 = send no cap)
 	// hitlFn 是 hitl_mode=eino 的 chat 半边（P2，engine 接线）：返回本 run 的
 	// checkpoint store 与停靠钩子（store nil = channel 语义照旧）。每次 Chat 读
@@ -53,11 +50,6 @@ func NewChatAgent(prov llm.Provider, model, workDir string, tx *transcript.Store
 func (c *ChatAgent) SetNonStreaming(fn func() bool) { c.nonStreamingFn = fn }
 
 func (c *ChatAgent) nonStreaming() bool { return c.nonStreamingFn != nil && c.nonStreamingFn() }
-
-// SetNoaEnabled wires a resolver deciding whether chat runs use the experimental
-// noa context-compression mechanism. nil/unset = off (built-in compaction). Read
-// per run so the settings toggle takes effect without rebuilding the agent.
-func (c *ChatAgent) SetNoaEnabled(fn func() bool) { c.noaEnabledFn = fn }
 
 // SetMaxTokens wires a resolver for the per-reply output cap. nil/unset or 0 =
 // send no cap and let the endpoint decide. Read per run, like nonStreaming.
@@ -129,7 +121,8 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 
 	// Per-session working directory: <workDir>/sessions/<sessionID>/
 	// Isolates file writes across conversations, mirroring how workers use i<intentID>/.
-	sessionWorkDir := filepath.Join(c.workDir, "sessions", sessionID)
+	// 布局解析走 config.Paths（SessionDir；F4 2026-11-13 收敛）。
+	sessionWorkDir := config.DerivePaths(c.workDir).SessionDir(sessionID)
 	_ = os.MkdirAll(sessionWorkDir, 0o755)
 	ctx = intercept.WithReviewWorkingDirectory(ctx, sessionWorkDir)
 
@@ -144,38 +137,26 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	system, _ := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
 	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃——system 分段在内核侧
 	// 拼成一条 system message，缓存交 provider 侧。
-	opts := askernel.Options{
-		Model:          acllm.BridgeModel(c.prov),
-		SystemPrompt:   system,
-		Tools:          tools,
-		DeferredTools:  def.Deferred,
-		UnlockSet:      def.Unlock,
-		PermissionMode: permission.ModeBypass,
-		EnableWebFetch: true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:  c.proxyAddr,
-		WebFetchCACert: c.proxyCACert,
-		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
-		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
-		EnableWebSearch:       ws.Enabled,
-		WebSearchBackend:      ws.Backend,
-		BraveSearchAPIKey:     ws.BraveKey,
-		TavilySearchAPIKey:    ws.TavilyKey,
-		DeepSeekSearchBaseURL: ws.DeepSeekBaseURL,
-		DeepSeekSearchAPIKey:  ws.DeepSeekAPIKey,
-		DeepSeekSearchModel:   ws.DeepSeekModel,
-		WebSearchProxy:        ws.Proxy,
-		BashEnv:               proxyEnv(c.proxyAddr, c.proxyCACert), // Bash 子命令默认走代理+信任 CA
-		WorkingDir:            sessionWorkDir,
-		MaxTurns:              maxTurns,
-		MaxDuration:           maxDuration,
-		Compaction:            compactionConfig(c.window),
-		Todos:                 actool.NewTodoStore(),
-		// large tool output spills to cmd-output/ under the session dir.
-		// 截断上限用 SDK 默认(tool.Capture 的 30000 字符)。
-		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
-		NonStreaming:  c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:     c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
-	}
+	// O3：公共装配段收敛进 kernelOptions（kernel_options.go）；chat 的差异化参数
+	// （按 agent key 门控的搜索开关 ws、按轮重置的墙钟预算、SDK 默认回显上限）留在
+	// 本调用点。
+	opts := kernelOptions(kernelOptionsSeed{
+		prov:             c.prov,
+		system:           system,
+		tools:            tools,
+		def:              def,
+		proxyAddr:        c.proxyAddr,
+		proxyCACert:      c.proxyCACert,
+		webSearch:        ws,
+		workingDir:       sessionWorkDir,
+		maxTurns:         maxTurns,
+		maxDuration:      maxDuration,
+		compactionWindow: c.window,
+		todos:            actool.NewTodoStore(),
+		// 截断上限留 SDK 默认(tool.Capture 的 30000 字符)，不设 maxToolOutputChars。
+		nonStreaming: c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
+		maxTokens:    c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
+	})
 	// 命中预算(步数)→ 收尾机制(runKernel 的 settlement 分支):输出一句总结。
 	// Prompt 与收尾轮数按本 agent key 后台可编辑
 	// (自定义 agent 各自一份;留空/0 用通用默认:10 轮)。
@@ -199,9 +180,6 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		opts.Transcript = c.tx
 		opts.SessionID = sessionID
 	}
-	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警（noa 自己的
-	// 接入失败回退同款语义）。
-	noaFallbackWarn(opts.OnWarn, c.noaEnabledFn, "chat-"+sessionID)
 	ctx = attachSideCapture(ctx)
 	s := askernel.NewSession(opts)
 	defer s.Close()

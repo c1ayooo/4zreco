@@ -124,20 +124,24 @@ func (d *DB) GetInterceptDetail(id int64) (*InterceptDetail, error) {
 // credential identity (empty for automatic paths); decisionSource classifies
 // the decision (human/auto/timeout/auto_cancel/legacy/archive).
 func (d *DB) ResolveIntercept(id int64, decision, action, reason, decidedBy, decisionSource string) (bool, error) {
-	tx, err := d.Begin()
+	// 无 caller ctx 的 decide 路径：整条事务（取连接 + 各语句边界）受
+	// defaultQueryTimeout 约束，链锁被别的实例长时间占住时最多等 30s 而非无限。
+	ctx, cancel := queryCtx()
+	defer cancel()
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback() //nolint:errcheck
 	// Serialize concurrent decides so two chains never fork and seq has no gaps.
-	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('intercept_chain'))`); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('intercept_chain'))`); err != nil {
 		return false, err
 	}
 	if err := d.ensureAuditAnchorTx(tx); err != nil {
 		return false, err
 	}
 	var claimed int
-	if err := tx.QueryRow(`SELECT 1 FROM intercept_decisions WHERE pending_id=$1`, id).Scan(&claimed); err == nil {
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM intercept_decisions WHERE pending_id=$1`, id).Scan(&claimed); err == nil {
 		return false, nil // already decided — first decision wins
 	} else if err != sql.ErrNoRows {
 		return false, err
@@ -145,7 +149,7 @@ func (d *DB) ResolveIntercept(id int64, decision, action, reason, decidedBy, dec
 	// 不存在的 pending id 同样按「已处理或不存在」收口（409）：否则 INSERT 会
 	// 以 decisions.pending_id FK 违规透出 500 + PG 原始错误文本。
 	var exists int
-	if err := tx.QueryRow(`SELECT 1 FROM intercept_pending WHERE id=$1`, id).Scan(&exists); err == sql.ErrNoRows {
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM intercept_pending WHERE id=$1`, id).Scan(&exists); err == sql.ErrNoRows {
 		return false, nil
 	} else if err != nil {
 		return false, err
@@ -164,7 +168,9 @@ func (d *DB) ResolveIntercept(id int64, decision, action, reason, decidedBy, dec
 // 语义)。It only lands for the exact recorded call after it was allowed: a
 // blocked or uncorrelated call must never present a fabricated execution.
 func (d *DB) CompleteIntercept(id int64, runID, toolUseID, status, output string, truncated bool) error {
-	_, err := d.Exec(`INSERT INTO intercept_executions(pending_id, run_id, tool_use_id, execution_status, output, output_truncated, ended_at)
+	ctx, cancel := queryCtx()
+	defer cancel()
+	_, err := d.ExecContext(ctx, `INSERT INTO intercept_executions(pending_id, run_id, tool_use_id, execution_status, output, output_truncated, ended_at)
 SELECT $1, $2, $3, $4, $5, $6, now()
 FROM intercept_pending ip
 WHERE ip.id=$1 AND ip.audit->>'run_id'=$2 AND ip.audit->>'tool_use_id'=$3

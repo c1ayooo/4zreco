@@ -204,6 +204,22 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 
+// rawFetch：不走 http() 的流式路径（FormData 上传 / blob 下载 / 报告导出）共用的
+// 薄包装。响应解析留给调用方，但 401 清退必须与 http() 同源——会话过期时清
+// token 与 cookie 并跳 /login，而不是让上传/下载只显示一句失败文案。
+export async function rawFetch(input: string, init?: RequestInit): Promise<Response> {
+  const r = await apiFetch(input, init);
+  if (r.status === 401) {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("4zreco_token");
+      document.cookie = "4zreco_token=; path=/; max-age=0";
+      window.location.href = "/login";
+    }
+    throw new Error("未授权");
+  }
+  return r;
+}
+
 // sseUrl builds a URL for Server-Sent Events streams.
 //
 // Production (static export / Docker): the Go backend serves the web UI *and* the
@@ -587,7 +603,7 @@ export const api = {
     }
     const action = archive ? "archive" : "download";
     const token = getToken();
-    const response = await apiFetch(`/api/tasks/${id}/files/${action}?path=${encodeURIComponent(path)}`, {
+    const response = await rawFetch(`/api/tasks/${id}/files/${action}?path=${encodeURIComponent(path)}`, {
       method: "HEAD",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
@@ -615,7 +631,7 @@ export const api = {
     const fd = new FormData();
     for (const f of files) fd.append("file", f);
     const token = getToken();
-    const r = await fetch(`/api/workspace/upload?path=${encodeURIComponent(dir)}`, {
+    const r = await rawFetch(`/api/workspace/upload?path=${encodeURIComponent(dir)}`, {
       method: "POST",
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: fd,
@@ -629,7 +645,7 @@ export const api = {
       blob = new Blob([`（demo）${path} 的下载内容示例。`], { type: "text/plain" });
     } else {
       const token = getToken();
-      const r = await fetch(`/api/workspace/download?path=${encodeURIComponent(path)}`, {
+      const r = await rawFetch(`/api/workspace/download?path=${encodeURIComponent(path)}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
       if (!r.ok) throw new Error(`下载失败: ${r.status}`);
@@ -806,7 +822,7 @@ export const api = {
       if (opts.includeOriginals) p.set("include_originals", "true");
     }
     const token = getToken();
-    const r = await fetch(`/api/exploration/findings/export?${p.toString()}`, {
+    const r = await rawFetch(`/api/exploration/findings/export?${p.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) throw new Error(`export: ${r.status}`);
@@ -879,7 +895,7 @@ export const api = {
     contextTask?: string,
   ) => {
     const token = getToken();
-    const response = await fetch(
+    const response = await rawFetch(
       `/api/exploration/findings/${id}/traffic/${bindingId}/body?side=${side}&download=1${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
       { headers: token ? { Authorization: `Bearer ${token}` } : {} },
     );
@@ -1236,7 +1252,7 @@ export const api = {
   report: async (task?: string) => {
     if (MOCK) return mockReport(task);
     const token = getToken();
-    const r = await fetch(`/api/report${tq(task)}`, {
+    const r = await rawFetch(`/api/report${tq(task)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) throw new Error(`report: ${r.status}`);
@@ -1245,7 +1261,7 @@ export const api = {
   // 任务总报告 Word 导出(浏览器侧触发下载;需带 JWT)
   downloadTaskDocx: async (task: string) => {
     const token = getToken();
-    const r = await fetch(`/api/report/export${tq(task)}`, {
+    const r = await rawFetch(`/api/report/export${tq(task)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) throw new Error(`docx: ${r.status}`);
@@ -1259,7 +1275,7 @@ export const api = {
   // 单漏洞 Word 导出
   downloadFindingDocx: async (id: number | string) => {
     const token = getToken();
-    const r = await fetch(`/api/findings/${id}/export`, {
+    const r = await rawFetch(`/api/findings/${id}/export`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) throw new Error(`docx: ${r.status}`);
@@ -1292,7 +1308,7 @@ export const api = {
     const fd = new FormData();
     for (const f of files) fd.append("file", f);
     const token = getToken();
-    const r = await fetch(`/api/chat/upload?scope=${scope}&id=${encodeURIComponent(id)}`, {
+    const r = await rawFetch(`/api/chat/upload?scope=${scope}&id=${encodeURIComponent(id)}`, {
       method: "POST",
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: fd,
@@ -1573,7 +1589,7 @@ export const api = {
     const fd = new FormData();
     fd.append("file", file);
     const token = getToken();
-    const r = await fetch(`/api/skills/upload${overwrite ? "?overwrite=true" : ""}`, {
+    const r = await rawFetch(`/api/skills/upload${overwrite ? "?overwrite=true" : ""}`, {
       method: "POST",
       body: fd,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -1666,7 +1682,7 @@ export const api = {
   interceptGetToolConfig: async (): Promise<{ enabled_tools: string[] }> => {
     if (MOCK) return { enabled_tools: ["bash"] };
     const token = getToken();
-    const r = await fetch("/api/intercept/tool-config", {
+    const r = await rawFetch("/api/intercept/tool-config", {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) throw new Error(await r.text());
@@ -1675,7 +1691,7 @@ export const api = {
   interceptSetToolConfig: async (enabledTools: string[]): Promise<void> => {
     if (MOCK) return;
     const token = getToken();
-    const r = await fetch("/api/intercept/tool-config", {
+    const r = await rawFetch("/api/intercept/tool-config", {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",

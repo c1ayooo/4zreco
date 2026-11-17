@@ -74,6 +74,18 @@ func (t *Trace) Append(e db.InterceptContextEntry) {
 }
 
 func (t *Trace) Start(id, tool string, input []byte) {
+	t.start(id, tool, input, input)
+}
+
+// StartMasked 是 Start 的观测面打码变体（F3 凭据纪律，2026-11-13 体检修复）：
+// 关联摘要（calls key / InputDigest）仍按原始 input 计算，guard 链 WithCall 的
+// exact 关联与结果绑定不受影响；上下文条目里 tool_use 的文本落 maskedInput
+// （敏感键值已替换），凭据不进 trace 明文。capture 层 OnCallStart 使用。
+func (t *Trace) StartMasked(id, tool string, input, maskedInput []byte) {
+	t.start(id, tool, input, maskedInput)
+}
+
+func (t *Trace) start(id, tool string, input, entryInput []byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.calls[id] = &tracedCall{key: tool + ":" + digestInput(input), audit: db.InterceptAudit{
@@ -81,7 +93,7 @@ func (t *Trace) Start(id, tool string, input []byte) {
 		UserMessage: t.user, UserTruncated: t.userCut, CapturedAt: time.Now().UTC(),
 		Context: append([]db.InterceptContextEntry{}, t.entries...), ContextTruncated: t.cut,
 	}}
-	t.append(db.InterceptContextEntry{Kind: "tool_use", Tool: tool, ToolUseID: id, Text: string(input)})
+	t.append(db.InterceptContextEntry{Kind: "tool_use", Tool: tool, ToolUseID: id, Text: string(entryInput)})
 }
 
 // WithCall claims the event before model review starts, so subsequent tools

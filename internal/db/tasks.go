@@ -539,7 +539,9 @@ func (d *DB) GetTask(id int64) (*Task, error) {
 // SetPaused persists a task's paused flag. Pausing folds any open execution
 // segment into active_run_seconds（A8 活跃计时：暂停不计时）.
 func (d *DB) SetPaused(id int64, paused bool) error {
-	_, err := d.Exec(`UPDATE tasks
+	ctx, cancel := queryCtx()
+	defer cancel()
+	_, err := d.ExecContext(ctx, `UPDATE tasks
 SET paused=$1,
     active_run_seconds=active_run_seconds + CASE WHEN $1 AND run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
     run_segment_started_at=CASE WHEN $1 THEN NULL ELSE run_segment_started_at END
@@ -553,7 +555,9 @@ func (d *DB) Enqueue(id int64, mode string) error {
 	if mode != "bootstrap" && mode != "resume" {
 		return fmt.Errorf("invalid queue mode %q", mode)
 	}
-	_, err := d.Exec(`UPDATE tasks
+	ctx, cancel := queryCtx()
+	defer cancel()
+	_, err := d.ExecContext(ctx, `UPDATE tasks
 SET queued=true,
     queued_at=CASE WHEN queued THEN COALESCE(queued_at, now()) ELSE now() END,
     active_run_seconds=active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
@@ -569,7 +573,9 @@ WHERE id=$1`, id, mode)
 // Dequeue removes the concurrency hold. clearMode is false when a user pauses a
 // queued task, preserving whether its next admission must bootstrap or resume.
 func (d *DB) Dequeue(id int64, clearMode bool) error {
-	_, err := d.Exec(`UPDATE tasks
+	ctx, cancel := queryCtx()
+	defer cancel()
+	_, err := d.ExecContext(ctx, `UPDATE tasks
 SET queued=false,
     queued_at=NULL,
     queue_mode=CASE WHEN $2 THEN '' ELSE queue_mode END
@@ -592,7 +598,9 @@ func (d *DB) SetQueued(id int64, queued bool) error {
 // finish time — it also clears stop_reason（A8：复原即清掉终态原因）. Terminal
 // transitions fold any open execution segment into active_run_seconds（A8 活跃计时）.
 func (d *DB) SetStatus(id int64, status string) error {
-	_, err := d.Exec(`
+	ctx, cancel := queryCtx()
+	defer cancel()
+	_, err := d.ExecContext(ctx, `
 UPDATE tasks
    SET status = $1,
        completed_at = CASE WHEN $1 IN ('done','failed','timeout') THEN COALESCE(completed_at, now()) ELSE NULL END,
@@ -619,7 +627,11 @@ func (d *DB) SetTerminalStatusGuardedReason(id int64, status, reason string) (wo
 	if status != "timeout" {
 		reason = ""
 	}
-	res, err := d.Exec(`
+	// 收尾路径：终态写入受 defaultQueryTimeout 约束，PG 抖动时任务收场最多
+	// 挂 30s 而非把 engine 循环无限拖住。
+	ctx, cancel := queryCtx()
+	defer cancel()
+	res, err := d.ExecContext(ctx, `
 UPDATE tasks
    SET status = $1,
        completed_at = COALESCE(completed_at, now()),
@@ -640,7 +652,9 @@ UPDATE tasks
 // leaves deadline_at NULL (不限时). Returns the resulting deadline (nil = 不限/未变).
 func (d *DB) StampFirstRun(id int64, timeoutSeconds int) (*time.Time, error) {
 	var deadline *time.Time
-	err := d.QueryRow(`
+	ctx, cancel := queryCtx()
+	defer cancel()
+	err := d.QueryRowContext(ctx, `
 UPDATE tasks
    SET first_run_at = COALESCE(first_run_at, now()),
        deadline_at  = CASE

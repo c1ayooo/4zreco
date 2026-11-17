@@ -94,7 +94,7 @@ function MethodBadge({ method }: { method: string }) {
   return (
     <span
       className={cn(
-        "inline-block rounded px-1.5 py-0.5 font-mono font-semibold text-xs leading-none",
+        "inline-block rounded px-1.5 py-0.5 font-mono font-semibold text-[10px] leading-none tracking-wider uppercase",
         METHOD_COLOR[normalized] ?? "bg-muted text-muted-foreground",
       )}
     >
@@ -328,7 +328,7 @@ function AddTaskAssetsSheet({
             onValueChange={setScopeText}
             parsed={parsedScope}
             label="测试资产与范围"
-            description="每行一条，自动识别域名、IP、CIDR、ICP 备案和关键词。"
+            description="每行一条，自动识别域名、IP、CIDR、ICP 备案和关键词；*.example.com 即主域及其全部子域。"
           />
         </div>
         <SheetFooter>

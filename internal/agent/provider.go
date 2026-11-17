@@ -468,11 +468,26 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) 
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
-	return &http.Client{Transport: quotaAwareTransport{
+	// Go 默认 UA（"Go-http-client/2.0"）会被部分网关的 Cloudflare bot 防护直接
+	// 403（实测 inferaichat.com 2026-11-13：curl UA 与自定义 UA 均放行，Go UA
+	// 一律 "Access denied"）。出站请求没有 UA 时补一个产品标识。
+	return &http.Client{Transport: uaTransport{base: quotaAwareTransport{
 		base:             transport,
 		sessionHeaderKey: strings.TrimSpace(sessionHeaderKey),
 		gov:              newAdaptiveGovernor(nil), // 每 provider 一个调节器（即每 profile 一个）
-	}}, nil
+	}}}, nil
+}
+
+// uaTransport 为缺失 User-Agent 的出站请求补产品 UA（见 quotaAwareHTTPClient）。
+type uaTransport struct {
+	base http.RoundTripper
+}
+
+func (t uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", "4zreco-llm/1.0")
+	}
+	return t.base.RoundTrip(req)
 }
 
 // logTestConnection prints the raw HTTP status code(s) and response body of a

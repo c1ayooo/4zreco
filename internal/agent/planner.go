@@ -7,12 +7,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/c1ayooo/4zreco/internal/acllm"
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
-	"github.com/c1ayooo/4zreco/internal/norma/permission"
 	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/norma/transcript"
 )
@@ -38,7 +36,6 @@ type Planner struct {
 	workDir           string                                 // shared work dir (surfaced in prompt as artifact-output target)
 	injectConstraints func() bool                            // resolver: inject task operation constraints into system prompt? (nil = yes)
 	nonStreamingFn    func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn      func() bool                            // resolver: use experimental noa compaction? (nil = off)
 	maxTokensFn       func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
 	compactor         *Compactor                             // cold-node compaction (§7); nil = disabled
 
@@ -66,11 +63,6 @@ func (p *Planner) SetCompactor(c *Compactor) { p.compactor = c }
 func (p *Planner) SetNonStreaming(fn func() bool) { p.nonStreamingFn = fn }
 
 func (p *Planner) nonStreaming() bool { return p.nonStreamingFn != nil && p.nonStreamingFn() }
-
-// SetNoaEnabled wires a resolver deciding whether runs use the experimental noa
-// context-compression mechanism. nil/unset = off (built-in compaction). Read per
-// run so the settings toggle takes effect without rebuilding the agent.
-func (p *Planner) SetNoaEnabled(fn func() bool) { p.noaEnabledFn = fn }
 
 // SetMaxTokens wires a resolver for the per-reply output cap. nil/unset or 0 =
 // send no cap and let the endpoint decide. Read per run, like nonStreaming.
@@ -452,37 +444,25 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	if tc.DeadlineUnix > 0 {
 		settle = wrapupSettlementForTask("planner", nil, clamped)
 	}
-	opts := askernel.Options{
-		Model:          acllm.BridgeModel(p.prov),
-		SystemPrompt:   system,
-		Tools:          tools,
-		DeferredTools:  def.Deferred,
-		UnlockSet:      def.Unlock,
-		PermissionMode: permission.ModeBypass,
-		EnableWebFetch: true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:  p.proxyAddr,
-		WebFetchCACert: p.proxyCACert,
-		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
-		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
-		EnableWebSearch:       p.webSearch.Enabled,
-		WebSearchBackend:      p.webSearch.Backend,
-		BraveSearchAPIKey:     p.webSearch.BraveKey,
-		TavilySearchAPIKey:    p.webSearch.TavilyKey,
-		DeepSeekSearchBaseURL: p.webSearch.DeepSeekBaseURL,
-		DeepSeekSearchAPIKey:  p.webSearch.DeepSeekAPIKey,
-		DeepSeekSearchModel:   p.webSearch.DeepSeekModel,
-		WebSearchProxy:        p.webSearch.Proxy,
-		BashEnv:               proxyEnv(p.proxyAddr, p.proxyCACert), // Bash 子命令默认走代理+信任 CA
-		WorkingDir:            taskDir,                              // 本任务工作目录 <workDir>/tasks/<taskID>
-		ToolOutputDir:         cmdOutDir(taskDir),
-		MaxTurns:              p.maxTurns, // 0 = unlimited (configurable in agent management)
-		MaxDuration:           maxDur,     // 0=不限;有 deadline 时=距 deadline 剩余
-		Compaction:            compactionConfig(p.compactionWindow()),
+	// O3：公共装配段收敛进 kernelOptions（kernel_options.go）；planner 的差异化
+	// 参数（跨唤醒共享的规划待办等）留在本调用点。
+	opts := kernelOptions(kernelOptionsSeed{
+		prov:             p.prov,
+		system:           system,
+		tools:            tools,
+		def:              def,
+		proxyAddr:        p.proxyAddr,
+		proxyCACert:      p.proxyCACert,
+		webSearch:        p.webSearch,
+		workingDir:       taskDir, // 本任务工作目录 <workDir>/tasks/<taskID>
+		maxTurns:         p.maxTurns,
+		maxDuration:      maxDur, // 0=不限;有 deadline 时=距 deadline 剩余
+		compactionWindow: p.compactionWindow(),
 		// 跨唤醒共享的规划待办：让串行链在多轮之间保留（session 是新的，store 不是）。
-		Todos:        p.todoFor(ts.ID()),
-		NonStreaming: p.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:    p.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
-	}
+		todos:        p.todoFor(ts.ID()),
+		nonStreaming: p.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
+		maxTokens:    p.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
+	})
 	// 同一条链喂两处：gate 的 Pre/Post 半边 + driver 的 Stop 半边。
 	// 工具调用可观测：planner 的工具调用此前完全不可观测（journal 里只有心跳），
 	// 无法从日志判断「planner 在干活」还是「planner 卡住不动」。纯旁路，不干预。
@@ -496,8 +476,6 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		opts.Transcript = p.tx
 		opts.SessionID = fmt.Sprintf("exp%d-planner", ts.ID())
 	}
-	// 实验功能 noa 尚未随 eino 内核迁移：回退内置 compaction 并告警。
-	noaFallbackWarn(opts.OnWarn, p.noaEnabledFn, fmt.Sprintf("exp%d-planner", ts.ID()))
 	// 态势（刚完成的意图 + 完整图）现在拼进本轮 user 输入（见下方 input）。user 里还有
 	// 指令 + 跨唤醒待办（todo 是模型自己的规划便签，可再生，放 user 即可）。
 	// 开场白按「本轮有无具体变动」分两种：有变动 → 指向下方【实际变动】块；无变动

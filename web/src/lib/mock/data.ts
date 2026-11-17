@@ -3341,7 +3341,6 @@ export const settings: Settings = {
   workers: 3,
   llm_pool_enabled: true,
   llm_pool_bind_fallback: false,
-  noa_compaction: false,
   task_auto_title_enabled: false,
   chat_auto_title_enabled: false,
   install_proxy: "",

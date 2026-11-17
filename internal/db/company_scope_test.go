@@ -15,6 +15,13 @@ func TestParseScopeLine(t *testing.T) {
 	}{
 		{"example.com", "domain", false},
 		{"https://sub.example.com/path", "domain", false},
+		{"*.example.com", "domain", false},    // 前导通配：与 example.com 等价
+		{"*.api.example.com", "", true},       // 深层通配：root_domain 恒为 eTLD+1，命中不了
+		{"*.*.example.com", "", true},         // 只支持一层前导通配
+		{"foo.*.example.com", "", true},       // 中间通配仍按非法字符拒绝
+		{"*.1.2.3.4", "", true},               // 通配 IP 无意义
+		{"*.203.0.113.0/24", "", true},        // 通配网段无意义
+		{"*.co.uk", "", true},                 // 裸公共后缀守卫对通配同样生效
 		{"1.2.3.4", "ip", false},
 		{"10.0.0.0/8", "", true}, // over-broad IPv4 (< /16)
 		{"198.51.100.0/24", "cidr", false},
@@ -40,6 +47,21 @@ func TestParseScopeLine(t *testing.T) {
 	}
 }
 
+// TestParseScopeLineWildcard: 前导 *. 是语法糖 —— 归一化后与裸域名等价，
+// Raw 保留用户原始输入（UI 列表展示与去重都以原始行为准）。
+func TestParseScopeLineWildcard(t *testing.T) {
+	r, err := ParseScopeLine("*.Example.COM.")
+	if err != nil {
+		t.Fatalf("ParseScopeLine(wildcard): %v", err)
+	}
+	if r.Kind != "domain" || r.Domain != "example.com" {
+		t.Fatalf("kind/domain = %q/%q, want domain/example.com", r.Kind, r.Domain)
+	}
+	if r.Raw != "*.Example.COM." {
+		t.Fatalf("Raw = %q, want 原始输入保留", r.Raw)
+	}
+}
+
 func TestParseAutoScopeLine(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -49,6 +71,7 @@ func TestParseAutoScopeLine(t *testing.T) {
 		wantErr    bool
 	}{
 		{name: "domain", input: "example.com", kind: "domain", normalized: "example.com"},
+		{name: "wildcard domain", input: "*.example.com", kind: "domain", normalized: "example.com"},
 		{name: "url", input: "https://sub.example.com/path", kind: "domain", normalized: "sub.example.com"},
 		{name: "url query", input: "https://example.com/path?source=x", kind: "domain", normalized: "example.com"},
 		{name: "url credentials", input: "https://user:pass@example.com/path", kind: "domain", normalized: "example.com"},

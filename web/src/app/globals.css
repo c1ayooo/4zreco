@@ -53,6 +53,8 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --font-heading: var(--font-sans);
   --font-sans: var(--font-sans);
+  /* 基础动效曲线（design skill B7）：加权减速入场，禁用浏览器默认曲线 */
+  --ease-base: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* Default theme styles (used when no data-theme-preset is set or when 'default' is selected).
@@ -291,5 +293,18 @@ html {
   [data-print-root] [data-print-paper] * {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+  }
+}
+
+/* 动效降级（design skill B7）：用户偏好减少动效时，动画/过渡压到最短，
+   位移一律消失（保留不透明度变化表达状态），滚动行为回归即时。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

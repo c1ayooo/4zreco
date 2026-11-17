@@ -80,7 +80,7 @@ function statusTone(status: number) {
 }
 
 function MethodBadge({ method }: { method: string }) {
-  return <Badge className="shrink-0 font-mono">{method}</Badge>;
+  return <Badge className="shrink-0 font-mono font-semibold text-[10px] tracking-wider uppercase">{method}</Badge>;
 }
 
 // TrafficID 完整展示流量 ID 并一键复制（A6，对齐 ARTEX traffic-history.tsx）：
@@ -800,7 +800,13 @@ export default function TrafficPage() {
               <SheetHeader className="border-b px-5 py-4">
                 <div className="flex items-center gap-2 pr-8">
                   <MethodBadge method={selected.method} />
-                  <Badge variant="secondary" className={cn("font-mono tabular-nums", statusTone(selected.status))}>
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      "font-mono font-semibold text-[10px] tabular-nums tracking-wider uppercase",
+                      statusTone(selected.status),
+                    )}
+                  >
                     {selected.status}
                   </Badge>
                   <span className="ml-auto text-muted-foreground text-xs tabular-nums">{fmtTime(selected.ts)}</span>

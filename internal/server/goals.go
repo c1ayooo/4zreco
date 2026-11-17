@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -270,117 +269,6 @@ func (s *Server) startAdmittedTask(t *Task, mode string) {
 	// coordinator exists after resume; resetTimeoutRevival cleared the completed
 	// coordinator's marker and the next real call will stamp a fresh deadline.
 	s.engine.startDeadlineCoordinator(s.ctx, t)
-}
-
-func (s *Server) reconcileConcurrency() {
-	s.concMu.Lock()
-	defer s.concMu.Unlock()
-	enabled, limit := s.m.ConcurrencyLimit()
-
-	// A task whose provider chain becomes unavailable cannot do useful work and
-	// must not reserve a limited running slot forever. Park it persistently so a
-	// later profile edit/recovery can re-enter through the same FIFO path.
-	if enabled {
-		for _, task := range s.m.List() {
-			lifecycle := task.lifecycleSnapshot()
-			if lifecycle.Queued || lifecycle.Paused || s.engine.IsPaused(task.ID) || s.engine.IsDeleting(task.ID) ||
-				isTerminalStatus(lifecycle.Status) || s.engine.ReadyFor(task) || s.engine.ActiveLLMCalls(task.ID) > 0 {
-				continue
-			}
-			mode := s.resumeAdmissionMode(task)
-			s.engine.Pause(task.ID, agent.Causef("llm_unavailable_queued", "LLM 不可用，任务进入等待队列",
-				"任务当前无法解析可运行的 Planner/Worker LLM，已释放并发槽；配置恢复后按队列顺序继续"))
-			if err := s.m.EnqueueTask(task.ID, mode); err != nil {
-				s.engine.Resume(task)
-				log.Printf("[concurrency] task %s 因 LLM 不可用入队失败: %v", task.ID, err)
-				continue
-			}
-			s.engine.emitActivity(task, db.Activity{Worker: "system", Kind: "text",
-				Summary: "已排队：当前没有可运行的 LLM 配置，配置恢复后自动开始"})
-		}
-	}
-
-	type queuedTask struct {
-		task      *Task
-		lifecycle taskLifecycleState
-	}
-	queued := []queuedTask{}
-	for _, task := range s.m.List() {
-		lifecycle := task.lifecycleSnapshot()
-		if lifecycle.Queued && !isTerminalStatus(lifecycle.Status) {
-			queued = append(queued, queuedTask{task: task, lifecycle: lifecycle})
-		}
-	}
-	sort.SliceStable(queued, func(i, j int) bool {
-		left, right := queued[i].lifecycle.QueuedAt, queued[j].lifecycle.QueuedAt
-		if left == 0 {
-			left = queued[i].task.CreatedAt * int64(1e9)
-		}
-		if right == 0 {
-			right = queued[j].task.CreatedAt * int64(1e9)
-		}
-		if left != right {
-			return left < right
-		}
-		// Old rows may not have queued_at and task creation timestamps are only
-		// kept to second precision in memory. Task ids are monotonic, providing a
-		// deterministic oldest-first fallback for those ties.
-		leftID, leftErr := strconv.ParseInt(queued[i].task.ID, 10, 64)
-		rightID, rightErr := strconv.ParseInt(queued[j].task.ID, 10, 64)
-		if leftErr == nil && rightErr == nil {
-			return leftID < rightID
-		}
-		return queued[i].task.ID < queued[j].task.ID
-	})
-	slots := len(queued)
-	if enabled {
-		slots = limit - s.runningTaskCount("")
-	}
-	for _, entry := range queued {
-		if slots <= 0 {
-			break
-		}
-		task := entry.task
-		lifecycle := task.lifecycleSnapshot()
-		// Keep FIFO order, but do not consume a concurrency slot for a task
-		// whose explicit chain/global provider is unavailable. It will be retried
-		// after the user configures or resets its LLM chain.
-		if lifecycle.Paused || (enabled && !s.engine.ReadyFor(task)) {
-			continue
-		}
-		mode := lifecycle.QueueMode
-		if mode != "bootstrap" && mode != "resume" {
-			mode = s.resumeAdmissionMode(task)
-		}
-		if mode != "bootstrap" {
-			mode = "resume"
-		}
-		if !s.engine.beginTaskOperation(task.ID) {
-			continue
-		}
-		if err := s.m.ApplyTaskAdmission(task.ID, lifecycle.Status, lifecycle.Status, false, mode, false); err != nil {
-			s.engine.decInflight(task.ID)
-			continue
-		}
-		s.startAdmittedTask(task, mode)
-		s.engine.decInflight(task.ID)
-		slots--
-	}
-}
-
-// reviveTask 让一个已停下的任务重新跑起来:把终态(done/failed/timeout)拉回 running、
-// 解除暂停,并(重)启动引擎循环 + 唤醒。已在 running 且未暂停的任务:只剩 Run 里的一次
-// Notify,近乎无副作用。用于「主 agent set_goals 新增目标」和「重跑 blocked 意图」两处。
-//
-// 为什么必须显式复活:planner/worker 循环的终态门(engine.go)会吞掉普通 notify——光改
-// 图 + Notify 唤不醒已判完成的任务;重启后终态任务的 goroutine 也可能已不在,故还要 Run。
-func (s *Server) reviveTask(t *Task) {
-	if t == nil {
-		return
-	}
-	if _, err := s.admitTask(t, "resume"); err != nil {
-		log.Printf("[revive] task %s 恢复失败: %v", t.ID, err)
-	}
 }
 
 // createGoals materializes the goal node(s) under the task root (rel objective).

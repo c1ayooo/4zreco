@@ -951,7 +951,10 @@ export default function LLMPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate font-medium text-sm">{p.name}</span>
-                          <Badge variant="outline" className="uppercase">
+                          <Badge
+                            variant="outline"
+                            className="font-mono font-semibold text-[10px] tracking-wider uppercase"
+                          >
                             {p.format}
                           </Badge>
                           <Badge variant="outline" className={cn("ml-auto", h.cls)} title={h.hint}>

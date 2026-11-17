@@ -81,8 +81,10 @@ func (d *DB) VerifyHitlResume(r *HitlResumeData) bool {
 	if r == nil || r.Sig == "" || r.DecisionID <= 0 || r.PendingID <= 0 {
 		return false
 	}
+	ctx, cancel := queryCtx()
+	defer cancel()
 	var decision, action string
-	err := d.QueryRow(`SELECT decision, action FROM intercept_decisions
+	err := d.QueryRowContext(ctx, `SELECT decision, action FROM intercept_decisions
 		WHERE id=$1 AND pending_id=$2`, r.DecisionID, r.PendingID).Scan(&decision, &action)
 	if err != nil {
 		return false
@@ -193,9 +195,13 @@ var ErrCheckpointTooLarge = errors.New("hitl: checkpoint 载荷超过上限")
 var ErrCheckpointUnavailable = errors.New("hitl: checkpoint 不可用")
 
 // GetCheckpoint implements adk.CheckPointStore（结构化满足，本包无 eino import）。
+// 形参上的 caller ctx 本实现不消费（签名所需）；查询改用 queryCtx 的保守默认
+// 超时，PG 抖动时最多挂 30s 而非无限（恢复路径不得被抖动卡死）。
 func (d *DB) GetCheckpoint(_ context.Context, checkPointID string) ([]byte, bool, error) {
+	ctx, cancel := queryCtx()
+	defer cancel()
 	var payload []byte
-	err := d.QueryRow(`SELECT payload FROM runner_checkpoints WHERE checkpoint_id=$1 AND payload IS NOT NULL`, checkPointID).Scan(&payload)
+	err := d.QueryRowContext(ctx, `SELECT payload FROM runner_checkpoints WHERE checkpoint_id=$1 AND payload IS NOT NULL`, checkPointID).Scan(&payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -213,7 +219,11 @@ func (d *DB) SetCheckpoint(_ context.Context, checkPointID string, checkPoint []
 	if len(checkPoint) > CheckpointPayloadLimit {
 		return ErrCheckpointTooLarge
 	}
-	_, err := d.Exec(`INSERT INTO runner_checkpoints
+	// 形参上的 caller ctx 本实现不消费（签名所需）；落库改用 queryCtx 的保守
+	// 默认超时（与 GetCheckpoint 同款，保存路径也不得无限挂起）。
+	ctx, cancel := queryCtx()
+	defer cancel()
+	_, err := d.ExecContext(ctx, `INSERT INTO runner_checkpoints
 (session_id, agent_key, checkpoint_id, fingerprint, payload, kind, version, created_at, updated_at)
 VALUES ('', '', $1, '', $2, 'hitl', $3, now(), now())
 ON CONFLICT (checkpoint_id) WHERE checkpoint_id <> '' DO UPDATE

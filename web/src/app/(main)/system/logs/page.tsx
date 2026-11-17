@@ -8,7 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { sseUrl } from "@/lib/api";
+import { rawFetch, sseUrl } from "@/lib/api";
 import { MOCK } from "@/lib/mock/enabled";
 import type { LogLine } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -134,7 +134,7 @@ export default function LogsPage() {
     setLoadingHistory(true);
     try {
       const params = minDbId > 0 ? `?before=${minDbId}&limit=200` : `?limit=200`;
-      const res = await fetch(`/api/logs/history${params}`);
+      const res = await rawFetch(`/api/logs/history${params}`);
       if (!res.ok) return;
       const data = (await res.json()) as { items: LogLine[]; has_more: boolean };
       if (data.items?.length) {

@@ -461,7 +461,10 @@ func (s *Server) pgSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, on := s.llmCfg, s.llmOn
 	s.cfgMu.Unlock()
 	if on {
-		_ = s.applyLLM(cfg)
+		if err := s.applyLLM(cfg); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 	}
 	resp := map[string]any{"ok": true}
 	if req.MaxTurns != nil {
