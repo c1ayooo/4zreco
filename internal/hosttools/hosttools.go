@@ -14,10 +14,13 @@
 package hosttools
 
 import (
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Kind 安装方式。manual = 官方只提供交互式安装器,不做一键。
@@ -27,6 +30,7 @@ const (
 	KindApt    Kind = "apt"    // 系统包管理器(apt/dnf)
 	KindGitHub Kind = "github" // GitHub Release 单文件
 	KindPip    Kind = "pip"    // pip / pipx
+	KindScript Kind = "script" // 目录内固定的安装脚本（git clone / 下载解压 / gem 等）
 	KindManual Kind = "manual" // 不提供一键安装
 )
 
@@ -36,14 +40,17 @@ const (
 type Category string
 
 const (
-	CatNetwork  Category = "network"  // 端口扫描/连通性/基础网络
-	CatWeb      Category = "web"      // Web 侧的探测、爆破、扫描
-	CatDNS      Category = "dns"      // 资产测绘与域名枚举
-	CatCred     Category = "cred"     // 在线爆破、离线破解、横向移动
-	CatCode     Category = "code"     // 源码/密钥泄露、代码审计
-	CatPivot    Category = "pivot"    // 内网穿透、代理转发
-	CatOOB      Category = "oob"      // 带外通道、通知
-	CatExploit  Category = "exploit"  // 框架与二进制利用
+	CatNetwork Category = "network" // 端口扫描/连通性/基础网络
+	CatWeb     Category = "web"     // Web 侧的探测、爆破、扫描
+	CatDNS     Category = "dns"     // 资产测绘与域名枚举
+	CatCred    Category = "cred"    // 在线爆破、离线破解、横向移动
+	CatCode    Category = "code"    // 源码/密钥泄露、代码审计
+	CatPivot   Category = "pivot"   // 内网穿透、代理转发
+	CatOOB     Category = "oob"     // 带外通道、通知
+	CatExploit Category = "exploit" // 框架与二进制利用
+	// CatMobile 移动端逆向：APK 解包/反编译/重打包/动态 Hook。
+	// 黑灰产分发常只给一个 APK/安装包，Web 之外的这一面必须能自己拆。
+	CatMobile   Category = "mobile"   // 移动端逆向（APK/Android）
 	CatMaterial Category = "material" // 字典、语料
 	CatRuntime  Category = "runtime"  // 脚本、证书、HTTP 等基础能力
 	// CatMiddleware 是中间件协议专项工具。
@@ -64,7 +71,7 @@ const (
 // 再打(Web/凭据)→ 深入(代码/利用)→ 辅助(隧道/外带/资料/通用)。
 var categoryOrder = []Category{
 	CatNetwork, CatDNS, CatWeb, CatCred, CatCode,
-	CatExploit, CatMiddleware, CatPivot, CatOOB, CatMaterial, CatRuntime,
+	CatExploit, CatMobile, CatMiddleware, CatPivot, CatOOB, CatMaterial, CatRuntime,
 }
 
 // CategoryLabel 分类的中文标签(页面展示)。
@@ -86,6 +93,8 @@ func CategoryLabel(c Category) string {
 		return "外带与回连"
 	case CatExploit:
 		return "漏洞利用"
+	case CatMobile:
+		return "移动端逆向"
 	case CatMiddleware:
 		return "中间件协议"
 	case CatMaterial:
@@ -115,13 +124,34 @@ type Tool struct {
 	Dnf string `json:"-"`
 
 	// kind=github: owner/repo + 资产名模板({ver} 不带 v,{arch} = amd64|arm64)
-	// + 压缩包内二进制名(空 = 与 Bin 同名)
+	// + 压缩包内二进制名(空 = 与 Bin 同名)。
+	// AssetTmpl 支持 "候选1||候选2" 多候选：404 时依次尝试（上游资产命名随
+	// 版本/架构变化的工具用，如 feroxbuster v2.14 起 arm64 只发 .zip）。
 	Repo      string `json:"-"`
 	AssetTmpl string `json:"-"`
 	BinInZip  string `json:"-"`
 
 	// kind=pip
 	Pip string `json:"-"`
+
+	// kind=script：固定安装脚本（由 catalog 维护，不接受用户输入）。宿主助手用
+	// /bin/sh -c 执行；脚本里通常做 git clone、下载解压、gem/pip 安装与符号链接。
+	Script string `json:"-"`
+
+	// Detect 指定非 PATH 工具的可用性探测方式：
+	//   path:/opt/xxx       文件存在即可用
+	//   dir:/opt/SecLists   目录存在即可用
+	//   python:module       python3 能 import 该模块即可用（纯库）
+	// 为空时按 Bin 走 exec.LookPath。
+	Detect string `json:"-"`
+
+	// Raw 表示 GitHub Release 资产本身就是单文件（不是 zip/tar/gz），
+	// 例如 pspy64 / kerbrute_linux_amd64 / ysoserial-all.jar。
+	Raw bool `json:"-"`
+
+	// DestPath 是安装目标绝对路径；为空时装到 /usr/local/bin/<Bin>。
+	// 用于 jar/Windows exe 等不适合放 bin 目录的资产。
+	DestPath string `json:"-"`
 
 	// PipLibrary 标记这个 pip 包是**纯库**（没有命令行入口）。
 	//
@@ -145,7 +175,8 @@ var catalog = []Tool{
 	{Name: "nmap", Purpose: "端口扫描/服务指纹", Kind: KindApt, Category: CatNetwork, Apt: "nmap", Dnf: "nmap"},
 	{Name: "masscan", Purpose: "大规模端口快扫", Kind: KindApt, Category: CatNetwork, Apt: "masscan", Dnf: "masscan"},
 	{Name: "sqlmap", Purpose: "SQL 注入检测与利用", Kind: KindApt, Category: CatWeb, Apt: "sqlmap", Dnf: "sqlmap"},
-	{Name: "imagemagick", Purpose: "证据图片处理：拼图/水印/脱敏（报告照片证据必需）", Kind: KindApt, Category: CatRuntime, Apt: "imagemagick", Dnf: "ImageMagick"},
+	{Name: "imagemagick", Bin: "magick", Purpose: "证据图片处理：拼图/水印/脱敏（报告照片证据必需）", Kind: KindApt, Category: CatRuntime, Apt: "imagemagick", Dnf: "ImageMagick",
+		Detect: "any:path:/usr/bin/magick,path:/usr/bin/convert,path:/usr/local/bin/magick,path:/usr/local/bin/convert"},
 	{Name: "libreoffice", Purpose: "文档证据预览：Word/Excel/PPT→PDF（附件缩略图与报告预览）", Kind: KindApt, Category: CatRuntime, Apt: "libreoffice-writer libreoffice-calc libreoffice-impress", Dnf: "libreoffice-writer libreoffice-calc libreoffice-impress"},
 	{Name: "poppler", Bin: "pdftoppm", Purpose: "PDF 转图片（文档证据预览必需）", Kind: KindApt, Category: CatRuntime, Apt: "poppler-utils", Dnf: "poppler-utils"},
 	{Name: "ffuf", Purpose: "目录/参数模糊枚举", Kind: KindApt, Category: CatWeb, Apt: "ffuf", Dnf: "ffuf"},
@@ -185,16 +216,50 @@ var catalog = []Tool{
 	{Name: "tlsx", Purpose: "TLS 证书信息提取(证书/ SAN / 过期)", Kind: KindGitHub, Category: CatNetwork,
 		Repo: "projectdiscovery/tlsx", AssetTmpl: "tlsx_{ver}_linux_{arch}.zip"},
 
+	// ── 移动端逆向（CatMobile）：静态链（apktool/aapt/jadx）+ 动态链（adb/frida/objection）──
+	// 服务器无真机时动态链按「有设备走 adb 直连、无设备走静态+流量模拟」使用。
+	{Name: "java", Purpose: "JVM 运行时（apktool/jadx 依赖）", Kind: KindApt, Category: CatMobile, Apt: "openjdk-17-jre-headless", Dnf: "java-17-openjdk-headless"},
+	{Name: "apktool", Purpose: "APK 解包/重打包（资源 + smali）", Kind: KindApt, Category: CatMobile, Apt: "apktool", Dnf: "apktool"},
+	{Name: "aapt", Purpose: "APK manifest/资源清单解析", Kind: KindApt, Category: CatMobile, Apt: "aapt", Dnf: "android-tools"},
+	{Name: "adb", Purpose: "Android 设备直连：安装/拉取/日志/端口转发", Kind: KindApt, Category: CatMobile, Apt: "adb", Dnf: "android-tools"},
+	{Name: "jadx", Purpose: "APK→Java 反编译（接口/密钥/业务逻辑）", Kind: KindScript, Category: CatMobile,
+		Script: `set -e
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 https://api.github.com/repos/skylot/jadx/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 > /tmp/jadx.tag
+TAG=$(cat /tmp/jadx.tag); VER=${TAG#v}
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /tmp/jadx.zip "https://github.com/skylot/jadx/releases/download/${TAG}/jadx-${VER}.zip"
+rm -rf /opt/jadx && mkdir -p /opt/jadx && unzip -q -o /tmp/jadx.zip -d /opt/jadx
+ln -sf /opt/jadx/bin/jadx /usr/local/bin/jadx
+ln -sf /opt/jadx/bin/jadx-gui /usr/local/bin/jadx-gui 2>/dev/null || true
+`},
+	{Name: "frida", Bin: "frida", Purpose: "动态 Hook（SSL pinning/加密/风控绕过）", Kind: KindPip, Category: CatMobile, Pip: "frida-tools"},
+	{Name: "objection", Purpose: "Frida 封装：一键绕过 pinning/root 检测", Kind: KindPip, Category: CatMobile, Pip: "objection"},
+
 	{Name: "wafw00f", Purpose: "WAF 识别", Kind: KindPip, Category: CatWeb, Pip: "wafw00f"},
 	// impacket 是 SMB/NTLM/票据的 Python 库(提供 msmfmap、ntlmrelay、secretsdump
 	// 等脚本)。apt 源里的包名是 python3-impacket,Debian/Ubuntu 都有。
 	{Name: "impacket", Purpose: "SMB/NTLM 协议工具集(secretsdump/ntlmrelay 等)", Kind: KindApt, Category: CatCred,
 		Apt: "python3-impacket", Dnf: "python3-impacket"},
+	// AD 进阶（上游 v0.7）：证书服务、BloodHound 采集、LDAP 枚举与口令喷洒前置。
+	{Name: "certipy", Bin: "certipy", Purpose: "AD CS 枚举与利用(ESC1-ESC17、证书申请/中继)", Kind: KindPip, Category: CatCred, Pip: "certipy-ad"},
+	{Name: "bloodhound-python", Purpose: "BloodHound 数据采集(ACL/委派/会话路径)", Kind: KindPip, Category: CatCred, Pip: "bloodhound"},
+	{Name: "ldapdomaindump", Purpose: "LDAP 域信息批量导出(用户/组/策略)", Kind: KindPip, Category: CatCred, Pip: "ldapdomaindump"},
+	{Name: "adidnsdump", Purpose: "ADIDNS 记录枚举(内网主机名发现)", Kind: KindPip, Category: CatCred, Pip: "adidnsdump"},
+	{Name: "kerbrute", Purpose: "Kerberos 用户名枚举/喷洒(控锁定风险)", Kind: KindGitHub, Category: CatCred,
+		Repo: "ropnop/kerbrute", AssetTmpl: "kerbrute_linux_{arch}", Raw: true},
+	{Name: "winpeas", Purpose: "Windows 提权枚举(PEASS 系列)", Kind: KindScript, Category: CatCred,
+		Detect: "path:/opt/winpeas/winPEASx64.exe",
+		Script: `set -e
+mkdir -p /opt/winpeas
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /opt/winpeas/winPEASx64.exe https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASx64.exe
+chmod +x /opt/winpeas/winPEASx64.exe
+`},
 	// SecLists 是最大的通用字典集(目录爆破/参数 fuzz 的语料)。apt 源里没有
-	// 稳定包名,只能从 GitHub 克隆——但它是目录而非单文件,GitHub 配方装不了,
-	// 所以走 KindManual 并在 install.sh 里单独克隆。
-	{Name: "seclists", Purpose: "通用字典集(目录/参数/用户名爆破语料)", Kind: KindManual, Category: CatMaterial,
-		Install: "git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists"},
+	// 稳定包名，只能从 GitHub 克隆；检测按目录存在判定。
+	{Name: "seclists", Purpose: "通用字典集(目录/参数/用户名爆破语料)", Kind: KindScript, Category: CatMaterial,
+		Detect: "dir:/opt/SecLists",
+		Script: `set -e
+if [ ! -d /opt/SecLists/.git ]; then rm -rf /opt/SecLists; git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists; fi
+`},
 
 	// ── 资产命名与上面不同的项目 ──
 	// 各项目的 release 资产名规范很不统一（架构在前/后、版本带不带 v、
@@ -204,6 +269,49 @@ var catalog = []Tool{
 	// gitleaks：资产名用 x64（不是 x86_64），且是 .tar.gz。
 	{Name: "gitleaks", Purpose: "代码/配置里的密钥扫描(检测硬编码凭据)", Kind: KindGitHub, Category: CatCode,
 		Repo: "gitleaks/gitleaks", AssetTmpl: "gitleaks_{ver}_linux_{arch4}.tar.gz"},
+	// ── 武器库补齐（上游 v0.7）：Web 进阶 / 利用 / 云原生 / 侦察 ──
+	// GitHub 单文件类走 KindGitHub，源码克隆/多步下载类走 KindScript 固定配方。
+	{Name: "arjun", Purpose: "HTTP 参数发现(隐藏参数枚举)", Kind: KindPip, Category: CatWeb, Pip: "arjun"},
+	{Name: "jwt_tool", Purpose: "JWT 测试(alg 混淆/kid 注入/密钥爆破)", Kind: KindScript, Category: CatWeb,
+		Script: `set -e
+if [ ! -d /opt/jwt_tool/.git ]; then rm -rf /opt/jwt_tool; git clone --depth 1 https://github.com/ticarpi/jwt_tool /opt/jwt_tool; fi
+ln -sf /opt/jwt_tool/jwt_tool.py /usr/local/bin/jwt_tool
+chmod +x /opt/jwt_tool/jwt_tool.py
+`},
+	// ysoserial 的资产本身就是 jar（Raw），且是「放 /opt 而非 bin 目录」的形态
+	//（DestPath）——两个新字段都在它身上各司其职。
+	{Name: "ysoserial", Purpose: "Java 反序列化 payload 生成(需按目标 classpath 选链)", Kind: KindGitHub, Category: CatExploit,
+		Repo: "frohoff/ysoserial", AssetTmpl: "ysoserial-all.jar", Raw: true,
+		DestPath: "/opt/ysoserial.jar", Detect: "path:/opt/ysoserial.jar"},
+	{Name: "ysoserial.net", Purpose: ".NET 反序列化/ViewState payload 生成(Windows 侧运行)", Kind: KindScript, Category: CatExploit,
+		Detect: "dir:/opt/ysoserial.net",
+		Script: `set -e
+mkdir -p /opt/ysoserial.net
+API=$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 https://api.github.com/repos/pwntester/ysoserial.net/releases/latest)
+URL=$(printf '%s' "$API" | grep -o '"browser_download_url": *"[^"]*\.zip"' | head -1 | cut -d'"' -f4)
+[ -n "$URL" ] && curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /tmp/ysnet.zip "$URL" && unzip -q -o /tmp/ysnet.zip -d /opt/ysoserial.net
+`},
+	{Name: "searchsploit", Purpose: "ExploitDB 本地检索(组件/CVE 对应 PoC)", Kind: KindScript, Category: CatExploit,
+		Script: `set -e
+if [ ! -d /opt/exploitdb/exploits ]; then rm -rf /opt/exploitdb; git clone --depth 1 https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb; fi
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /usr/local/bin/searchsploit https://gitlab.com/exploit-database/exploitdb/-/raw/main/searchsploit
+chmod +x /usr/local/bin/searchsploit
+`},
+	// trivy 资产名用 Linux-64bit/ARM64（第五套架构命名，{arch5}）。
+	{Name: "trivy", Purpose: "镜像/依赖/IaC 漏洞与密钥扫描", Kind: KindGitHub, Category: CatCode,
+		Repo: "aquasecurity/trivy", AssetTmpl: "trivy_{ver}_Linux-{arch5}.tar.gz"},
+	{Name: "kubectl", Purpose: "K8s 集群操作与 RBAC 探测", Kind: KindScript, Category: CatNetwork,
+		Script: `set -e
+VER=$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 https://dl.k8s.io/release/stable.txt)
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${VER}/bin/linux/amd64/kubectl"
+chmod +x /usr/local/bin/kubectl
+`},
+	{Name: "kube-hunter", Purpose: "K8s 攻击面探测(远程/集群内)", Kind: KindPip, Category: CatNetwork, Pip: "kube-hunter"},
+	{Name: "awscli", Bin: "aws", Purpose: "AWS 凭据验证与资源枚举(只读)", Kind: KindApt, Category: CatNetwork, Apt: "awscli", Dnf: "awscli"},
+	{Name: "gau", Purpose: "被动 URL 收集(wayback/commoncrawl/otx)", Kind: KindGitHub, Category: CatDNS,
+		Repo: "lc/gau", AssetTmpl: "gau_{ver}_linux_{arch}.tar.gz"},
+	{Name: "waybackurls", Purpose: "Wayback 历史 URL 提取", Kind: KindGitHub, Category: CatDNS,
+		Repo: "tomnomnom/waybackurls", AssetTmpl: "waybackurls-linux-{arch}-{ver}.tgz"},
 	// chisel：内网穿透/隧道工具（SOCKS 隧道、反向隧道都靠它）。
 	{Name: "chisel", Purpose: "内网穿透与隧道(TCP/UDP/SOCKS 隧道)", Kind: KindGitHub, Category: CatPivot,
 		Repo: "jpillora/chisel", AssetTmpl: "chisel_{ver}_linux_{arch}.gz"},
@@ -214,9 +322,11 @@ var catalog = []Tool{
 	{Name: "dalfox", Purpose: "XSS 扫描与利用(反射型/存储型/DOM)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "hahwul/dalfox", AssetTmpl: "dalfox-{verv}-linux-{arch2}.tar.gz"},
 	// feroxbuster：目录/文件爆破（Rust 版 gobuster 替代）。
-	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64。
+	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64；
+	// v2.14 起 arm64 只发 .zip（amd64 两种都有）——资产名用 || 分隔多候选，
+	// 下载端 404 时依次尝试（hostd 的下载逻辑实现了该语义）。
 	{Name: "feroxbuster", Purpose: "目录/文件爆破(Rust 版,支持多线程与递归)", Kind: KindGitHub, Category: CatWeb,
-		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.tar.gz"},
+		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.zip||{arch2}-linux-feroxbuster.tar.gz"},
 	// ── chainreactors 三件套（2026-11-12 实测最新 release 资产名）──
 	// 三家同构：裸二进制、无版本号、无扩展名，如 gogo_linux_amd64 /
 	// spray_linux_amd64 / zombie_linux_arm64，所以模板统一不带 {ver}。
@@ -255,12 +365,13 @@ var catalog = []Tool{
 		Apt: "tcpdump", Dnf: "tcpdump"},
 	// pspy：无特权进程监视（发现 cron/服务类权限保持点）。资产名固定
 	// pspy64/pspy32（2026-10-30 实测，无版本号、repo 已归档=最后版本不变）。
+	// 资产是裸二进制（Raw），不走归档解压。
 	{Name: "pspy", Bin: "pspy64", Purpose: "无特权进程监视(发现权限保持点)", Kind: KindGitHub, Category: CatExploit,
-		Repo: "DominicBreuker/pspy", AssetTmpl: "pspy64"},
+		Repo: "DominicBreuker/pspy", AssetTmpl: "pspy64", Raw: true},
 	// linpeas：Linux 提权枚举（后渗透第一脚本的行业标准）。资产实测
-	// linpeas_linux_amd64（无扩展名，arch 模板对齐）。
+	// linpeas_linux_amd64（无扩展名，arch 模板对齐），裸二进制（Raw）。
 	{Name: "linpeas", Bin: "linpeas", Purpose: "Linux 提权枚举(PEASS 系列)", Kind: KindGitHub, Category: CatExploit,
-		Repo: "peass-ng/PEASS-ng", AssetTmpl: "linpeas_linux_{arch}"},
+		Repo: "peass-ng/PEASS-ng", AssetTmpl: "linpeas_linux_{arch}", Raw: true},
 	// sshuttle：SSH 翻越（把远端网段拉进本机路由表）。
 	{Name: "sshuttle", Purpose: "SSH 隧道直连远端网段(路由级 pivot)", Kind: KindApt, Category: CatPivot,
 		Apt: "sshuttle", Dnf: "sshuttle"},
@@ -346,6 +457,8 @@ func humanInstall(t Tool) string {
 		return "GitHub Release: https://github.com/" + t.Repo + "/releases"
 	case KindPip:
 		return "pip install " + t.Pip
+	case KindScript:
+		return "一键脚本安装（git clone / 下载解压 / gem 等）"
 	}
 	if t.Install != "" {
 		return t.Install
@@ -374,10 +487,75 @@ func Lookup(id string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// AvailableInPath 该工具当前是否已在 PATH 内。
+// AvailableInPath 该工具当前是否可用。优先按 Detect 判定（文件/目录/Python 模块），
+// 否则走 PATH 查找。
+//
+// Detect 支持多候选前缀 "any:"，逗号分隔，任一命中即可用（不同发行版同一工具的
+// 命令名不一致时用：ImageMagick 7 是 magick、Debian 6.x 只有 convert）。
 func (t Tool) AvailableInPath() bool {
+	if t.Detect != "" {
+		if rest, ok := strings.CutPrefix(t.Detect, "any:"); ok {
+			for _, cand := range strings.Split(rest, ",") {
+				cand = strings.TrimSpace(cand)
+				if cand == "" {
+					continue
+				}
+				if detectOne(cand) {
+					return true
+				}
+			}
+			return false
+		}
+		return detectOne(t.Detect)
+	}
 	_, err := exec.LookPath(t.Bin)
 	return err == nil
+}
+
+// detectOne 判断单个探测表达式（path:/dir:/python:）。
+func detectOne(detect string) bool {
+	kind, target, ok := strings.Cut(detect, ":")
+	if !ok || target == "" {
+		return false
+	}
+	switch kind {
+	case "path", "dir":
+		_, err := os.Stat(target)
+		return err == nil
+	case "python":
+		return pythonModuleAvailable(target)
+	}
+	return false
+}
+
+// pythonModuleAvailable 用 python3 -c import 探测纯库是否可用。
+// 纯库没有 PATH 入口，exec.LookPath 永远找不到它们；逐条 fork 的成本用 60s
+// 缓存摊薄（体检页/提示词注入会反复调用 Inventory）。
+var (
+	pythonProbeMu    sync.Mutex
+	pythonProbeCache = map[string]pythonProbeEntry{}
+)
+
+type pythonProbeEntry struct {
+	ok      bool
+	expires time.Time
+}
+
+func pythonModuleAvailable(module string) bool {
+	pythonProbeMu.Lock()
+	defer pythonProbeMu.Unlock()
+	if e, ok := pythonProbeCache[module]; ok && time.Now().Before(e.expires) {
+		return e.ok
+	}
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		return false
+	}
+	code := "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(" + strconv.Quote(module) + ") else 1)"
+	err = exec.Command(py, "-c", code).Run()
+	ok := err == nil
+	pythonProbeCache[module] = pythonProbeEntry{ok: ok, expires: time.Now().Add(60 * time.Second)}
+	return ok
 }
 
 // Inventory 探测全部目录项(顺序与 catalog 一致)。
@@ -507,6 +685,22 @@ func ArchX64() string {
 	switch runtime.GOARCH {
 	case "amd64":
 		return "x64"
+	default:
+		return runtime.GOARCH
+	}
+}
+
+// ArchLong 返回 trivy 用的命名：amd64→64bit、arm64→ARM64、386→32bit。
+//
+// 这是第五套命名——实测 trivy 的资产是 trivy_0.65.0_Linux-64bit.tar.gz。
+func ArchLong() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "64bit"
+	case "arm64":
+		return "ARM64"
+	case "386":
+		return "32bit"
 	default:
 		return runtime.GOARCH
 	}

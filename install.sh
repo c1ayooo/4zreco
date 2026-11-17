@@ -112,6 +112,27 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 command -v curl >/dev/null 2>&1 || die "curl 安装失败，请手动安装"
 
+# ── 资源前置检查（只提醒不阻断）────────────────────
+# 0.4.61 起同步上游：装机最常见的隐性坑是内存/磁盘不够（多 worker 并发 +
+# 工具安装 + SecLists 字典集），装完才发现就晚了。这里只 warn，不拦流程。
+mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+if [ "${mem_kb:-0}" -gt 0 ] && [ "$mem_kb" -lt 3800000 ]; then
+  warn "内存 < 4G：多 worker 并发 + 压缩器会吃紧（建议 4C8G 起）"
+fi
+disk_avail="$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}')"
+if [ -n "${disk_avail:-}" ] && [ "$disk_avail" -lt 10485760 ]; then
+  warn "根分区可用 < 10G：装工具/SecLists(约2.5G)/nuclei 模板/chromium 可能不够（建议 ≥40G）"
+fi
+if command -v python3 >/dev/null 2>&1; then
+  pyver="$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo "0.0")"
+  case "$pyver" in
+    3.10|3.11|3.12|3.13|3.14) ;;
+    *) warn "python3 版本 ${pyver}：catalog 的 pip 类工具与 FOFA MCP 需要 ≥3.10（不影响主服务）" ;;
+  esac
+else
+  warn "未检测到 python3：catalog 的 pip 类工具与 FOFA MCP 需要 Python ≥3.10（不影响主服务）"
+fi
+
 # ── 出网代理：交互式配置 + 自动验证 ────────────────
 #
 # 为什么交互式：装机最常卡住的就是「这台机器连不上 GitHub / apt 源」。
@@ -560,6 +581,10 @@ UNIT
   systemctl restart "$SERVICE"
   ok "systemd 服务已启动（${SERVICE}）"
 
+  # MCP 预设「FOFA 资产测绘」是 Python stdio server，靠 uv 拉起；先把它备好
+  # （见 ensure_uv：必须落 /usr/local/bin，服务用户的 PATH 才能找到）。
+  ensure_uv
+
   if [ "$WITH_INSTALLER" = "1" ]; then install_hostd; fi
 }
 
@@ -810,20 +835,29 @@ install_tools(){
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get "${APT_PROXY[@]}" update -qq || warn "apt update 失败，继续尝试"
-    # seclists 在 apt 源里没有稳定包名，单独克隆（见 install_wordlists）；
-    # 其余一次装齐，缺的包不阻断整体（不同发行版源里包名有出入）。
-    # imagemagick：报告证据拼图/文件名水印（v0.4.10 起依赖）；
-    # libreoffice-writer/calc/impress + poppler-utils：文档证据转图片预览
-    # （v0.4.21 起，Word/Excel/PPT→PDF→JPEG）。
-    apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
-      netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks imagemagick \
-      libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
-      >/dev/null 2>&1 \
-      || apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
-           netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket imagemagick \
-           libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
-           >/dev/null \
-      || warn "部分 apt 工具未装上"
+    # 弱网韧性（0.4.70 同款）：apt-get install 是原子事务，200+ 包里任何一个
+    # 下载失败会整组回滚——实测把 git 一起丢掉，导致 catalog 里全部 script 类
+    # 安装（SecLists / nikto / jwt_tool / msfconsole …）报 127 失败。所以改为
+    # 「整组失败 → 逐包重试」：一组里只有个别包坏了，其余照常落地。
+    apt_install() {
+      apt-get "${APT_PROXY[@]}" install -y "$@" >/dev/null 2>&1 && return 0
+      local p
+      for p in "$@"; do
+        apt-get "${APT_PROXY[@]}" install -y "$p" >/dev/null 2>&1 \
+          || warn "  apt 缺包: $p"
+      done
+    }
+    # 关键基础包优先（git/jq/perl/ruby 这类缺失会让后续 script 类安装全面失败）
+    apt_install git jq perl ruby ca-certificates curl wget unzip openssl openssh-client netcat-openbsd
+    # 渗透工具组（seclists 在 apt 源里没有稳定包名，单独克隆见 install_wordlists；
+    # 不同发行版源里包名有出入，缺的逐包 warn 不阻断整体）
+    apt_install nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
+      dnsutils whois nodejs npm python3-impacket gitleaks imagemagick \
+      hashcat testssl.sh default-jre-headless apktool adb tcpdump sshuttle socat proxychains4
+    # 文档渲染组（体积大、弱网下最容易拖垮整组，单独一组）：
+    # imagemagick 报告证据拼图/文件名水印；libreoffice + poppler-utils 文档证据
+    # 转图片预览（Word/Excel/PPT→PDF→JPEG）。
+    apt_install libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils
   elif command -v dnf >/dev/null 2>&1; then
     dnf "${DNF_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto john nmap-ncat bind-utils unzip \
       nodejs python3-impacket ImageMagick libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
@@ -839,6 +873,44 @@ install_tools(){
   install_pip_tools
   install_browser_mcp
   install_fonts
+  # catalog 预装：宿主助手按体检目录补齐上面未覆盖的（移动逆向/内网穿透/
+  # 二进制利用等），与 Web 一键安装同一套清单（幂等：已可用的会跳过）。
+  install_catalog_tools
+}
+
+# ── catalog 预装：复用 hostd 的白名单配方与串行队列 ──────────
+# 为什么放在最后一棒：apt 基础包与 GitHub 表驱动安装是验证最久的路径，
+# catalog 只补它们没覆盖的工具（幂等：已可用的会跳过）。
+# 弱网韧性（0.4.72 同款）：失败项自动重试三轮（每轮只重装缺失项，已装好的
+# 直接跳过），大幅提高无人值守安装的成功率。
+install_catalog_tools(){
+  local bin="/usr/local/bin/4zreco-hostd"
+  if [ ! -x "$bin" ]; then
+    warn "  未安装 4zreco-hostd，跳过 catalog 预装（Web 端仍可一键安装）"
+    return 0
+  fi
+  info "按 catalog 预装缺失工具（首次较慢：apt/pip/GitHub 全量）..."
+  local was_active=0
+  if systemctl is-active --quiet "${SERVICE}-hostd" 2>/dev/null; then
+    was_active=1
+    systemctl stop "${SERVICE}-hostd" 2>/dev/null || true
+  fi
+  local attempt ok_any=0
+  for attempt in 1 2 3; do
+    if "$bin" -install-all; then
+      ok "catalog 工具预装完成"
+      ok_any=1
+      break
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      warn "catalog 预装第 $attempt 轮存在失败项，30 秒后重试…"
+      sleep 30
+    fi
+  done
+  if [ "$ok_any" != "1" ]; then
+    warn "catalog 工具预装仍有失败项；可在 Web「系统 → 宿主环境」逐项重试"
+  fi
+  [ "$was_active" = "1" ] && systemctl start "${SERVICE}-hostd" 2>/dev/null || true
 }
 
 # ── 公文字体：报告 PDF 渲染 ────────────────────────
@@ -849,7 +921,9 @@ install_tools(){
 install_fonts(){
   local dir="/usr/share/fonts/gongwen"
   mkdir -p "$dir" || { warn "无法创建 $dir，跳过公文字体"; return 0; }
-  local base="https://raw.githubusercontent.com/${REPO}/main/report/fonts"
+  # 本仓库默认分支是 master（上游是 main）；字体在 internal/report/fonts（Go 包
+  # 收拢进 internal 后的路径，docx_fonts.go 同目录 go:embed）。
+  local base="https://raw.githubusercontent.com/${REPO}/master/internal/report/fonts"
   local f
   for f in fangsong_gb2312.ttf kaiti_gb2312.ttf fzxiaobiaosong_gbk.ttf; do
     if [ ! -s "$dir/$f" ]; then
@@ -970,6 +1044,41 @@ install_wordlists(){
   fi
 }
 
+# uv：MCP 预设「FOFA 资产测绘」用它拉起 Python stdio server（uv --directory）。
+#
+# 关键点（上游 0.4.61 真实踩坑）：4zreco 服务是 systemd 用户，PATH 只保证
+# /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin；pipx 以 root 安装
+# 会把 uv 放到 /root/.local/bin（服务用户既无权穿越 /root 也不在 PATH）——必须
+# 把二进制统一落到 /usr/local/bin，否则「预设能加、MCP 起不来」。best-effort：
+# 装不上只提示，不影响主服务。
+ensure_uv(){
+  local cand=""
+  for c in /usr/local/bin/uv /usr/bin/uv /root/.local/bin/uv "$HOME/.local/bin/uv"; do
+    if [ -x "$c" ]; then cand="$c"; break; fi
+  done
+  if [ -z "$cand" ]; then
+    if command -v pipx >/dev/null 2>&1; then
+      pipx install --global uv >/dev/null 2>&1 || pipx install uv >/dev/null 2>&1 || true
+    fi
+    if [ -z "$cand" ] && command -v python3 >/dev/null 2>&1; then
+      python3 -m pip install --break-system-packages -q uv >/dev/null 2>&1 || true
+    fi
+    for c in /usr/local/bin/uv /root/.local/bin/uv "$HOME/.local/bin/uv"; do
+      if [ -x "$c" ]; then cand="$c"; break; fi
+    done
+  fi
+  if [ -n "$cand" ] && [ "$cand" != "/usr/local/bin/uv" ]; then
+    cp -f "$cand" /usr/local/bin/uv 2>/dev/null || true
+    chmod 755 /usr/local/bin/uv 2>/dev/null || true
+  fi
+  if [ -x /usr/local/bin/uv ] && /usr/local/bin/uv --version >/dev/null 2>&1; then
+    ok "uv 就绪（/usr/local/bin/uv，FOFA MCP 可用）"
+  else
+    warn "uv 未就绪：FOFA MCP 预设需要它（pip install uv 后复制到 /usr/local/bin）"
+  fi
+  return 0
+}
+
 # pip 工具：wafw00f(WAF 识别)、impacket 的部分脚本。
 # 优先 pipx（隔离环境，不污染系统 Python，也不撞 PEP668 externally-managed），
 # 没有 pipx 就退回 python3 -m pip --break-system-packages。
@@ -986,9 +1095,11 @@ install_pip_tools(){
   # 包名|可执行文件名(空=该包不提供命令行)。已存在就跳过——
   # pipx 对已装的包会报错退出，不该当成"安装失败"。
   local specs="wafw00f|wafw00f
-netexec|netexec
 semgrep|semgrep
-pwntools|pwntools"
+pwntools|pwntools
+uv|uv"
+  # netexec 不装：NetExec 2026 起商业化，PyPI 发行文件已撤下（装必失败）；
+  # 需要时从 GitHub 源码安装（hosttools netexec 条目有说明）。
   local spec pkg bin
   for spec in $specs; do
     pkg="$(printf '%s' "$spec" | cut -d'|' -f1)"

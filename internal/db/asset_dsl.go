@@ -423,7 +423,11 @@ func buildDSLWhereBase(node *astNode, base int) (string, []any, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return clause, b.args, nil
+	// 整体再包一层括号：调用方会在本谓词后追加 " AND ..."（type 过滤、task_ids
+	// 归属、任务范围 target）。build() 只给 or 的每个分支单独加括号，顶层 OR 若
+	// 不再包一层，`a OR b AND scope` 会把 scope 只绑到最后一个分支，前面分支的
+	// 资产越出任务范围（跨任务资产泄露）。对 AND / 叶子节点多包一层括号语义等价。
+	return "(" + clause + ")", b.args, nil
 }
 
 // ── helpers (shared with parser) ─────────────────────────────────────────────

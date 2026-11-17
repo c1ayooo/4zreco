@@ -434,6 +434,9 @@ ALTER TABLE llm_profiles ADD  CONSTRAINT llm_profiles_max_tokens_check
     CHECK (max_tokens >= 0);
 -- 自定义会话头名；补旧库。默认 '' = 不发送，旧配置行为不变。
 ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS session_header_key TEXT NOT NULL DEFAULT '';
+-- 自定义 User-Agent；补旧库。默认 '' = 不覆盖，沿用内置兜底 UA(4zreco-llm/1.0)，
+-- 旧配置行为不变。保存入口拒绝 CR/LF(header 注入防护)，运行侧再做一次净化兜底。
+ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS user_agent TEXT NOT NULL DEFAULT '';
 
 -- 单配置的重试覆盖（见 docs/LLM重试设计.md）。三组各自一对「次数 + 固定间隔」，
 -- 语义统一：次数 0=沿用全局默认、-1=关闭该层重试、>0=用该值；间隔 0=沿用该层的
@@ -527,6 +530,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     pinned_at      TIMESTAMPTZ,
     first_run_at   TIMESTAMPTZ,
     deadline_at    TIMESTAMPTZ,
+    paused_at      TIMESTAMPTZ,
     archived_at    TIMESTAMPTZ,
     deleted_at     TIMESTAMPTZ,
     completed_at   TIMESTAMPTZ,
@@ -588,6 +592,28 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stop_reason TEXT NOT NULL DEFAULT '';
 -- 时把开放段折叠进累计值；进程停止时丢弃开放段（重启后重新计时）。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS active_run_seconds BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS run_segment_started_at TIMESTAMPTZ;
+-- 暂停开始时间（上游 0.4.80 #22）；补旧库。NULL=当前未处于暂停。恢复时按
+-- (now-paused_at) 把暂停时长顺延进 deadline_at（ApplyTaskAdmission/db.SetPaused）。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+
+-- 自主推进（Autopilot，移植自上游 0.4.68）：任务级开关 + deadline 自动延长已用次数。
+-- autopilot=true 的任务走「完成优先」语义：auto_idle/auto_coverage/auto_rounds 收尾
+-- 被抑制、goal_met 后按范围内剩余资产/高危漏洞自动续杯（见 server/autopilot.go）。
+-- autopilot_extensions 是跨重启权威的延长计数（db.ExtendTaskDeadline 守卫递增；
+-- 任务终态复活时归零，走 ApplyTaskAdmission 的 CASE）。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS autopilot BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS autopilot_extensions INTEGER NOT NULL DEFAULT 0;
+
+-- 自主推进决策留痕（停滞唤醒/deadline 延长/续杯/开关变更），任务详情页与排障用。
+-- FK ON DELETE CASCADE：随任务硬删除自动清理。
+CREATE TABLE IF NOT EXISTS autopilot_events (
+    id         BIGSERIAL PRIMARY KEY,
+    task_id    BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_autopilot_events_task ON autopilot_events(task_id, id DESC);
 
 -- Cold task archives retain only compact metadata in PostgreSQL. The complete
 -- task payload lives in a versioned .tar.zst package under data/archives/tasks.
@@ -1151,6 +1177,10 @@ CREATE TABLE IF NOT EXISTS intercept_rules (
     priority        INTEGER NOT NULL DEFAULT 0,
     match_target    TEXT NOT NULL CHECK (match_target IN ('tool_name', 'tool_input')),
     match_type      TEXT NOT NULL CHECK (match_type IN ('string', 'regex')),
+    -- tool_scope 限定本条规则对哪些工具生效（JSON 字符串数组；空数组 = 全部工具）。
+    -- 上游 0.4.81 PR #26：规则可先按工具过滤再匹配，避免「写文件正文提到命令名」
+    -- 被 tool_input 全文匹配误触发。仅对 match_target=tool_input 有实际意义。
+    tool_scope      JSONB NOT NULL DEFAULT '[]',
     pattern         TEXT NOT NULL,
     action          TEXT NOT NULL CHECK (action IN ('allow', 'deny', 'ask', 'judge')),
     message         TEXT NOT NULL DEFAULT '',
@@ -1167,6 +1197,8 @@ CREATE TRIGGER trg_intercept_rules_upd BEFORE UPDATE ON intercept_rules
 ALTER TABLE intercept_rules DROP CONSTRAINT IF EXISTS intercept_rules_action_check;
 ALTER TABLE intercept_rules ADD CONSTRAINT intercept_rules_action_check
     CHECK (action IN ('allow', 'deny', 'ask', 'judge'));
+-- tool_scope 是加在 create 之后的新列，已发版库靠幂等 ALTER 补上（上游 0.4.81 PR #26）。
+ALTER TABLE intercept_rules ADD COLUMN IF NOT EXISTS tool_scope JSONB NOT NULL DEFAULT '[]';
 
 -- ── P0 审批不可变（docs/Eino深度接入方案-2026-11-05.md §4-P0）──────────────
 -- 三表拆分：intercept_pending 冻结为只 INSERT（触发器拒绝 UPDATE/DELETE），
@@ -1510,6 +1542,20 @@ CREATE INDEX IF NOT EXISTS idx_findings_time ON findings(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status, created_at DESC);
 -- 「按资产」视图靠 asset_ids @> '[<id>]' 反查发现,没有这个 GIN 索引就是全表扫。
 CREATE INDEX IF NOT EXISTS idx_findings_asset_ids ON findings USING GIN(asset_ids jsonb_path_ops);
+
+-- 多键去重（移植自上游 v0.4.79）：一条 finding 可携带多个身份键。root/cve/legacy
+-- 是强键，命中即同一底层漏洞，RecordFindingTx 自动合并；asset_class/name/endpoint/
+-- param 是弱键（rank 99），只进 merge_candidates 提示，绝不自动合并——同一
+-- host+path 天然可承载多个互不相同的漏洞，把「位置」当「身份」会误并。
+-- root_cause_key 是可选的显式根因标识（normalizeRootCauseKey 归一）。
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS root_cause_key TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS finding_keys (
+    finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    dedup_key  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    PRIMARY KEY (finding_id, dedup_key)
+);
+CREATE INDEX IF NOT EXISTS idx_finding_keys_dedup ON finding_keys(dedup_key);
 
 -- 手动复测属于独立会话；结论与原漏洞处置状态分开保存。
 CREATE TABLE IF NOT EXISTS finding_retests (

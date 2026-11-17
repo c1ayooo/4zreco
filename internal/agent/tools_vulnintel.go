@@ -10,6 +10,10 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/url"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -292,6 +296,20 @@ func (t *ToolSet) getPoc() actool.CoreTool {
 	)
 }
 
+// nucleiSeverityRE 限定 severity 参数形态，避免把任意文本拼进命令行。
+var nucleiSeverityRE = regexp.MustCompile(`^(?i)(critical|high|medium|low|info)(,(critical|high|medium|low|info))*$`)
+
+// shellJoinArgs 把 argv 逐项单引号包裹，拼成可交给 shell 的命令行。
+// 不能直接 strings.Join：target 里的 & ; $() 反引号会被 shell 解释
+// （实测 https://t/api?id=1&x=2 会把 & 当后台符号，扫描只跑一半）。
+func shellJoinArgs(args []string) string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		out = append(out, quoteShell(a))
+	}
+	return strings.Join(out, " ")
+}
+
 // scanWithNuclei assembles a nuclei command for the worker's Bash tool. The
 // tool deliberately does NOT execute nuclei itself: Bash runs it through the
 // recording proxy + approval gates like every other command, keeping audit
@@ -323,6 +341,15 @@ func (t *ToolSet) scanWithNuclei() actool.CoreTool {
 				Severity string `json:"severity"`
 			}
 			_ = json.Unmarshal(in, &a)
+			// target/severity 来自模型（可能被目标响应二次注入）：先做语义校验，
+			// 拼 shell 命令时再逐参数单引号包裹，避免 &/;/$() 改变命令含义。
+			u, uerr := url.Parse(strings.TrimSpace(a.Target))
+			if uerr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return actool.Errorf("target 必须是 http(s) URL"), nil
+			}
+			if a.Severity != "" && !nucleiSeverityRE.MatchString(strings.TrimSpace(a.Severity)) {
+				return actool.Errorf("severity 只允许 critical/high/medium/low/info 的逗号组合"), nil
+			}
 			cmd, cancel, err := vulnintel.BuildNucleiCmd(context.Background(), nucleiTemplatesDir, vulnintel.ScanArgs{
 				Target:       a.Target,
 				CVEID:        a.CVEID,
@@ -333,8 +360,13 @@ func (t *ToolSet) scanWithNuclei() actool.CoreTool {
 				return actool.Errorf("组装扫描命令失败: " + err.Error()), nil
 			}
 			defer cancel()
+			run := shellJoinArgs(cmd.Args)
+			// 总超时：有 GNU timeout 时包一层（Linux 生产默认有），否则依赖 Bash 工具自身超时。
+			if tp, terr := exec.LookPath("timeout"); terr == nil && runtime.GOOS != "windows" {
+				run = quoteShell(tp) + " 600 " + run
+			}
 			return jsonResult(map[string]any{
-				"run_with_bash": strings.Join(cmd.Args, " "),
+				"run_with_bash": run,
 				"note": "用 Bash 工具执行上面这条命令(默认 10 分钟超时,超时会截断输出);" +
 					"输出为 JSONL,每行一个模板命中;空输出=无命中。发现真实漏洞后走 report_finding 走正常上报。",
 			})

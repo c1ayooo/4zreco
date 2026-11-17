@@ -39,11 +39,12 @@ const KIND_LABEL: Record<HostTool["kind"], string> = {
   apt: "系统源",
   github: "GitHub Release",
   pip: "pip",
+  script: "一键脚本",
   manual: "手工安装",
 };
 
 // 攻击面分类。顺序按攻击流程排：先摸清面(网络/DNS)→ 再打(Web/凭据)
-// → 深入(代码/利用/中间件)→ 辅助(隧道/外带/资料/通用)。
+// → 深入(代码/利用/移动端/中间件)→ 辅助(隧道/外带/资料/通用)。
 const CATEGORY_ORDER: HostTool["category"][] = [
   "network",
   "dns",
@@ -51,6 +52,7 @@ const CATEGORY_ORDER: HostTool["category"][] = [
   "cred",
   "code",
   "exploit",
+  "mobile",
   "middleware",
   "pivot",
   "oob",
@@ -66,6 +68,7 @@ const CATEGORY_LABEL: Record<HostTool["category"], string> = {
   cred: "凭据与口令",
   code: "代码与密钥",
   exploit: "漏洞利用",
+  mobile: "移动端逆向",
   middleware: "中间件协议",
   pivot: "内网与隧道",
   oob: "外带与回连",

@@ -9,9 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 
@@ -589,4 +592,75 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// readResponseFile 只读普通文件：FIFO 这类特殊文件必须拒绝，且不能挂死
+// （open(2) 一个无写端的 FIFO 会阻塞，所以 Stat 判型必须在打开之前）。
+func TestReadResponseFileRejectsFIFO(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO 是 POSIX 概念，Windows 无此形态")
+	}
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	var gotErr error
+	go func() {
+		defer close(done)
+		_, _, gotErr = readResponseFile(dir, fifo)
+	}()
+	select {
+	case <-done:
+		if gotErr == nil || !strings.Contains(gotErr.Error(), "不是普通文件") {
+			t.Errorf("FIFO 应被拒绝且提示不是普通文件，got err=%v", gotErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("读 FIFO 挂死——防挂死的 Stat 检查没有发生在 open 之前")
+	}
+}
+
+// 字符设备（/dev/zero）也是非普通文件：无限读取会让服务 OOM，必须拒绝。
+func TestReadResponseFileRejectsCharDevice(t *testing.T) {
+	if _, err := os.Stat("/dev/zero"); err != nil {
+		t.Skip("/dev/zero 不可用，跳过")
+	}
+	_, _, err := readResponseFile("", "/dev/zero")
+	if err == nil || !strings.Contains(err.Error(), "不是普通文件") {
+		t.Errorf("/dev/zero 应被拒绝且提示不是普通文件，got err=%v", err)
+	}
+}
+
+// 超过 16MB 上限的普通文件必须拒绝（防超大日志把服务读爆）。
+func TestReadResponseFileRejectsOversized(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.bin")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(int64(maxResponseFileBytes) + 1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	_, _, err = readResponseFile(dir, big)
+	if err == nil || !strings.Contains(err.Error(), "过大") {
+		t.Errorf("超过 16MB 的文件应报错，got err=%v", err)
+	}
+
+	// 上限内的文件正常读取（回归保护：加固不能挡住合法输入）。
+	ok := filepath.Join(dir, "ok.json")
+	if err := os.WriteFile(ok, []byte(`{"a":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body, _, err := readResponseFile(dir, ok)
+	if err != nil {
+		t.Fatalf("16MB 以内的普通文件应正常读取: %v", err)
+	}
+	if body != `{"a":1}` {
+		t.Errorf("内容应原样返回: %q", body)
+	}
 }

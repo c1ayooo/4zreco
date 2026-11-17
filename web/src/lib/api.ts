@@ -15,6 +15,7 @@ import type {
   Asset,
   AssetInterceptRule,
   AssetInterceptRuleInput,
+  ArtifactDataPreview,
   Audit,
   AuthCheckResult,
   BatchCategoryItem,
@@ -464,6 +465,9 @@ export const api = {
   deleteTask: (id: string, options: DeleteTaskOptions) => del<DeleteTaskResult>(`/tasks/${id}`, options),
   controlTask: (id: string, action: "pause" | "resume") =>
     post<{ id: string; paused: boolean; queued: boolean; status: string }>(`/tasks/${id}/control`, { action }),
+  // 自主推进开关（P4-4）。resume=true 时暂停/排队中的任务一并恢复并唤醒 planner。
+  setTaskAutopilot: (id: string, enabled: boolean, resume = false) =>
+    post<{ id: string; enabled: boolean; resumed: boolean; status: string }>(`/tasks/${id}/autopilot`, { enabled, resume }),
   controlTasksBatch: (taskIds: string[], action: "pause" | "resume") =>
     post<{ items: BatchControlItem[] }>("/tasks/control/batch", { task_ids: taskIds, action }),
   taskArchives: (input?: { page?: number; size?: number; q?: string; state?: string }) => {
@@ -803,7 +807,7 @@ export const api = {
   findingCaseReviewRuns: () =>
     get<FindingCaseReviewRun[]>("/exploration/finding-case-review").then(arr),
   exportFindings: async (opts: {
-    format: "md-single" | "md-zip" | "csv" | "json";
+    format: "md-single" | "md-zip" | "docx-zip" | "csv" | "json";
     scope: "filtered" | "all" | "selected";
     filters?: Omit<FindingQuery, "page" | "pageSize">;
     ids?: string[];
@@ -970,6 +974,12 @@ export const api = {
     `/api/tasks/${taskId}/artifacts/${artifactId}/preview/${page}`,
   regenerateArtifactPreview: (taskId: string, artifactId: number) =>
     post<{ state: string }>(`/tasks/${taskId}/artifacts/${artifactId}/preview`, {}),
+  // 数据文件在线查看（v0.4.41 移植）：JSON/JSONL/CSV/TSV→表格、zip/gzip 解包、≤20MB。
+  artifactDataPreview: (taskId: string, artifactId: number) =>
+    get<ArtifactDataPreview>(`/tasks/${taskId}/artifacts/${artifactId}/data-preview`),
+  // 主机交叉自动归属（v0.4.42 移植）：数据/日志证据自动挂到唯一命中的漏洞。
+  autobindTaskArtifacts: (taskId: string) =>
+    post<{ bound: number; skipped: number; details: string[] }>(`/tasks/${taskId}/artifacts/autobind`, {}),
   tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
   conversationTokens: () =>
     get<ConvTokenSummary[]>("/tokens/conversations")
@@ -1355,6 +1365,7 @@ export const api = {
     profile_id?: number,
     streaming = true, // 用该配置真实的收发模式来测，别让"流式能通、非流式不通"漏到会话里
     session_header_key = "", // 非空=测试请求也带该自定义会话头（值为一次性 session id）
+    user_agent = "", // 非空=测试请求也用这个 UA；空=该 profile 存的值/兜底
   ) =>
     // reply = 模型实际回复(已截断);一个字都不回的配置后端直接判失败
     post<{ ok: boolean; error?: string; latency_ms?: number; model?: string; reply?: string }>("/llm/test", {
@@ -1368,6 +1379,7 @@ export const api = {
       profile_id,
       streaming,
       session_header_key,
+      user_agent,
     }),
   llmProfiles: () => get<{ profiles: LLMProfile[] }>("/llm/profiles").then((r) => arr(r.profiles)),
   saveLLMProfile: (p: {
@@ -1389,6 +1401,7 @@ export const api = {
     max_tokens?: number; // 单次回复输出上限；0=不发送，由服务端默认值决定
     max_tokens_field?: string; // ""=max_tokens(默认) | "max_completion_tokens"（仅 openai 格式）
     session_header_key?: string; // 非空=每次请求带该 HTTP 头，头值=当前会话 session id；""=不发送
+    user_agent?: string; // 非空=替换每个 LLM 请求的 User-Agent（含重试）；""=不覆盖
     retry?: LLMRetryOverride; // 本配置的重试覆盖；各项留 0 = 跟随全局重试策略
   }) => post<{ id: number }>("/llm/profiles", p),
   deleteLLMProfile: (id: string) => del<{ deleted: number }>(`/llm/profiles/${id}`),
@@ -1400,13 +1413,14 @@ export const api = {
   // 全局重试策略（五层各自的次数+间隔）。全 0 = 全部走内置默认。
   llmRetryPolicy: () => get<LLMRetryPolicy>("/llm/retry-policy"),
   saveLLMRetryPolicy: (p: LLMRetryPolicy) => post<LLMRetryPolicy>("/llm/retry-policy", p),
-  fetchLLMModels: (provider: string, base_url: string, api_key: string, proxy = "", profile_id?: number) =>
+  fetchLLMModels: (provider: string, base_url: string, api_key: string, proxy = "", profile_id?: number, user_agent = "") =>
     post<{ ok: boolean; error?: string; models?: string[] }>("/llm/models", {
       provider,
       base_url,
       api_key,
       proxy,
       profile_id,
+      user_agent, // 非空=与模型请求一致的 UA；空=profile 存的值
     }),
 
   // ---- agents ----

@@ -63,6 +63,10 @@ type Task struct {
 	// planner 心跳触发间隔(秒)：距上轮 plan 结束/任务开始满该值且期间无触发 → 触发一轮。
 	// 下限=默认=300(5min)，低于一律抬到 300(在 CreateTask 归一)。见 docs/planner-trigger-impl-plan.md
 	PlanHeartbeatSeconds int `json:"plan_heartbeat_seconds"`
+	// 自主推进（Autopilot，移植自上游 0.4.68）：任务级开关 + deadline 自动延长已用次数
+	// （跨重启权威，由 db.ExtendTaskDeadline 守卫递增；终态复活时在 ApplyTaskAdmission 归零）。
+	Autopilot           bool `json:"autopilot"`
+	AutopilotExtensions int  `json:"autopilot_extensions"`
 	// CoverageEnabled 是「资产覆盖度功能」总开关(默认 true)。false 时：不计算/不展示测试
 	// 覆盖度、不自动累积 task_scope(source=auto)、不给 agent 开放 add_task_scope/
 	// list_untested_assets、态势里不注入 coverage 块(scope 字段仍保留)。company 关联
@@ -437,13 +441,15 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 const taskCols = `id, COALESCE(name,''), COALESCE(remark,''), category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
 description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(auth_config::text,'null'), project_id,
-COALESCE(no_result_seconds,0), COALESCE(no_result_min_findings,0), COALESCE(no_result_min_severity,''), COALESCE(no_result_base_seconds,0), no_result_checked_at, COALESCE(stop_reason,''), COALESCE(active_run_seconds,0), run_segment_started_at`
+COALESCE(no_result_seconds,0), COALESCE(no_result_min_findings,0), COALESCE(no_result_min_severity,''), COALESCE(no_result_base_seconds,0), no_result_checked_at, COALESCE(stop_reason,''), COALESCE(active_run_seconds,0), run_segment_started_at,
+COALESCE(autopilot,false), COALESCE(autopilot_extensions,0)`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	var authRaw string
 	if err := sc.Scan(&t.ID, &t.Name, &t.Remark, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &authRaw, &t.ProjectID,
-		&t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason, &t.ActiveRunSeconds, &t.RunSegmentStartedAt); err != nil {
+		&t.NoResultSeconds, &t.NoResultMinFindings, &t.NoResultMinSeverity, &t.NoResultBaseSeconds, &t.NoResultCheckedAt, &t.StopReason, &t.ActiveRunSeconds, &t.RunSegmentStartedAt,
+		&t.Autopilot, &t.AutopilotExtensions); err != nil {
 		return nil, err
 	}
 	t.AuthConfig = ParseTaskAuth([]byte(authRaw))
@@ -537,12 +543,21 @@ func (d *DB) GetTask(id int64) (*Task, error) {
 }
 
 // SetPaused persists a task's paused flag. Pausing folds any open execution
-// segment into active_run_seconds（A8 活跃计时：暂停不计时）.
+// segment into active_run_seconds（A8 活跃计时：暂停不计时）。
+// 暂停顺延（上游 0.4.80 #22）：暂停时盖 paused_at；恢复时把暂停时长加回
+// deadline_at——任务预算不因暂停而缩水（进程重启后 paused_at 仍在，由
+// ApplyTaskAdmission 的恢复路径统一折算）。
 func (d *DB) SetPaused(id int64, paused bool) error {
 	ctx, cancel := queryCtx()
 	defer cancel()
 	_, err := d.ExecContext(ctx, `UPDATE tasks
 SET paused=$1,
+    paused_at=CASE WHEN $1 THEN COALESCE(paused_at, now()) ELSE NULL END,
+    deadline_at=CASE
+        WHEN NOT $1 AND paused_at IS NOT NULL AND deadline_at IS NOT NULL
+        THEN deadline_at + (now() - paused_at)
+        ELSE deadline_at
+    END,
     active_run_seconds=active_run_seconds + CASE WHEN $1 AND run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
     run_segment_started_at=CASE WHEN $1 THEN NULL ELSE run_segment_started_at END
 WHERE id=$2`, paused, id)
@@ -789,6 +804,11 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 	}
 	// llm_usage (the token metering ledger) is intentionally NOT deleted with the
 	// task — it is kept as historical accounting even after the task is gone.
+	// 自主推进事件随任务硬删除清理（FK ON DELETE CASCADE 已兜底，这里显式删一次
+	// 保证即便将来 FK 被移除也不留孤儿——与上游 DeleteAutopilotEvents 同语义）。
+	if _, err := tx.Exec(`DELETE FROM autopilot_events WHERE task_id=$1`, id); err != nil {
+		return result, err
+	}
 	if _, err := tx.Exec(`DELETE FROM tasks WHERE id=$1`, id); err != nil {
 		return result, err
 	}

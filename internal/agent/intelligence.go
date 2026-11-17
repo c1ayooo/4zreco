@@ -14,6 +14,7 @@ import (
 // 不给模型任何 token 开销。每次写回前重读开关，运行中会话也能即时生效。
 var IntelligenceEnabled func() bool
 var IntelligenceRecord func(context.Context, int64, int64, string, db.IntelligenceInput) (int64, error)
+
 // CredentialRecorded 由宿主在 credential 情报落库后调用（凭据整理 agent 子阶段）：
 // 只为降低延迟，持久化的数据库行才是事实源；漏掉的通知由处理循环的慢 tick 兜底。
 var CredentialRecorded func()
@@ -50,6 +51,11 @@ func (t *ToolSet) saveIntelligence(ctx context.Context, nodeID int64, in db.Inte
 	}
 	if nodeID <= 0 {
 		nodeID = RunInfoFrom(ctx).IntentID
+	}
+	// 授权边界锚定校验（上游 0.4.63）：情报的 asset_ids 只能落在本任务自有范围
+	// 资产上；来源/继承范围只读、完全越界拒绝；分类查询故障 fail-open（放行）。
+	if msg := t.scopeGuardError(taskID, in.AssetIDs); msg != "" {
+		return 0, fmt.Errorf("%s", msg)
 	}
 	id, err := IntelligenceRecord(ctx, taskID, nodeID, t.worker, in)
 	if err == nil {

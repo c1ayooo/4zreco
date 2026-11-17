@@ -396,3 +396,24 @@ func (s *Server) validateFindingReviewCompletion(conv int64) error {
 	}
 	return agent.SaveFindingReviewConclusion(context.Background(), conv, a)
 }
+
+// findingMergeCandidates 弱键「可能重复」提示（多键去重，finding_keys.go 移植）：
+// 返回与目标漏洞共享 name/asset_class/endpoint/param 弱键的同任务候选。
+// 只提示不自动合并——endpoint/param 描述「在哪儿」而非「是什么漏洞」，
+// 自动合并会把同一位置上的不同漏洞误并；人工确认走归并文件夹。
+func (s *Server) findingMergeCandidates(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, 400, "bad finding id")
+		return
+	}
+	list, err := s.m.pg.FindingMergeCandidates(r.Context(), id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if list == nil {
+		list = []*db.DBFinding{}
+	}
+	writeJSON(w, 200, map[string]any{"candidates": list})
+}

@@ -67,7 +67,9 @@ func (d *Docx) SetArtifactImageResolver(fn func(id int64) ([]byte, string, bool)
 
 var xmlEsc = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
 
-func esc(s string) string { return xmlEsc.Replace(s) }
+// esc 转义 XML 并清洗输入：非法 UTF-8 与 XML 1.0 禁止的控制字符会让 Word
+// 报「内容有问题」或整段渲染异常，必须在写入前处理（见 cleanText）。
+func esc(s string) string { return xmlEsc.Replace(cleanText(s)) }
 
 // H1/H2/H3 标题。
 func (d *Docx) H1(text string) { d.heading(text, 1) }

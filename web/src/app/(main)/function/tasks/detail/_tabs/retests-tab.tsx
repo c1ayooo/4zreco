@@ -15,7 +15,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import type { Finding, FindingsPage, RetestState } from "@/lib/types";
+import type { Finding, FindingsPage, RetestState, TaskStatus } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 
@@ -41,7 +41,11 @@ function retestBadge(state: RetestState | undefined): { text: string; className:
   }
 }
 
-export function RetestsTab({ taskId }: { taskId: string }) {
+// 终态（done/failed/timeout）：任务已收尾，漏洞结论不会再变化——此刻还没复测过的
+// 漏洞就是「带着未验证结论交付」的缺口（上游 0.4.37 复测缺口提醒的 UI 版）。
+const TERMINAL_STATUSES: TaskStatus[] = ["done", "failed", "timeout"];
+
+export function RetestsTab({ taskId, taskStatus }: { taskId: string; taskStatus?: TaskStatus }) {
   const [page, setPage] = React.useState(1);
   const [data, setData] = React.useState<FindingsPage | null>(null);
   const [selectedId, setSelectedId] = React.useState("");
@@ -138,6 +142,11 @@ export function RetestsTab({ taskId }: { taskId: string }) {
   const findings = loaded ? data.items : [];
   const selected = findings.find((finding) => finding.id === selectedId);
 
+  // 收尾未复测提醒：终态任务的漏洞里，没有任何复测记录（finding_retests 无行）的
+  // 条数 = 漏洞总数 − 已有复测记录的条数（states 只含已复测过的，含 failed/stopped）。
+  const terminal = !!taskStatus && TERMINAL_STATUSES.includes(taskStatus);
+  const unretested = terminal && loaded ? Math.max(0, (data?.total ?? 0) - Object.keys(states).length) : 0;
+
   return (
     <div className="flex flex-col gap-4">
       {error ? (
@@ -147,6 +156,16 @@ export function RetestsTab({ taskId }: { taskId: string }) {
             <Button variant="outline" size="sm" onClick={refresh}>
               重试
             </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {/* 收尾未复测提醒：终态任务仍有漏洞从未复测，报告会带着未验证结论交付。 */}
+      {terminal && unretested > 0 ? (
+        <Alert>
+          <AlertDescription>
+            任务已结束，仍有 <span className="text-foreground font-medium">{unretested}</span>{" "}
+            条漏洞从未复测——报告会带着未验证的结论交付。建议对本任务的 critical/high
+            漏洞先批量复测，再据此修订报告结论。
           </AlertDescription>
         </Alert>
       ) : null}

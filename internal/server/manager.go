@@ -24,6 +24,7 @@ import (
 	"github.com/c1ayooo/4zreco/internal/guard"
 	"github.com/c1ayooo/4zreco/internal/honeydetect"
 	"github.com/c1ayooo/4zreco/internal/intercept"
+	"github.com/c1ayooo/4zreco/internal/llmguard"
 	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 	"github.com/c1ayooo/4zreco/internal/traffic"
 	"github.com/c1ayooo/4zreco/internal/vulnintel"
@@ -101,6 +102,35 @@ type Task struct {
 	settleMu            sync.Mutex
 	pendingSettleReason string
 	pendingSettleDetail string
+	// goal_met 判定登记时的目标集快照（上游 0.4.81 #27）：消费点（maybePendingSettle）
+	// 据此按数据库复核目标集——判定登记后用户新增的目标不会被旧判定误终结。
+	// nil=登记时快照失败（消费点退化为不复核，交给 trigger 侧的 fresh-direction 守卫）。
+	pendingSettleGoalIDs map[int64]bool
+
+	// autopilot 是自主推进开关的运行态镜像（每次现查，关掉开关下一次规划/执行
+	// 就回到普通任务语义）。持久化在 tasks.autopilot（Autopilot，移植自上游 0.4.68）。
+	autopilot atomic.Bool
+}
+
+// AutopilotEnabled reports whether this task is running in autopilot mode.
+func (t *Task) AutopilotEnabled() bool { return t != nil && t.autopilot.Load() }
+
+// SetAutopilot flips the runtime mirror (persistence happens in db.SetTaskAutopilot).
+func (t *Task) SetAutopilot(on bool) { t.autopilot.Store(on) }
+
+// NotifyAutopilotStall wakes the planner with an autopilot stall trigger.
+//
+// 刻意**不复用 hint**：hint 会进 freshDirection（新增方向），在 auto_finish 里
+// 触发 ResetTaskProgress 把 idle 计数清零——看门狗一唤醒就等于宣布「有新进展」，
+// 恰好把要判定的停滞信号抹掉。这个 kind 只唤醒、不改方向、不重置进度。
+func (t *Task) NotifyAutopilotStall(detail string) {
+	if t == nil || strings.TrimSpace(detail) == "" {
+		return
+	}
+	t.trigMu.Lock()
+	t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "autopilot_stall", Detail: detail})
+	t.trigMu.Unlock()
+	t.Notify()
 }
 
 // requestSettle 登记自动收尾原因（不在此处执行 settle）。重复登记以最后一条为准。
@@ -113,6 +143,47 @@ func (t *Task) requestSettle(reason, detail string) {
 	t.settleMu.Unlock()
 }
 
+// requestGoalMetSettle 登记 goal_met 收尾，并记录判定时的目标集快照（上游 0.4.81
+// #27）。消费点按数据库复核：新增目标先落库、再由 NotifyGoal 追加内存触发，两者
+// 之间有窗口——按旧目标集收尾会把刚加进来的目标连同任务一起终结。
+func (t *Task) requestGoalMetSettle(detail string) {
+	var ids map[int64]bool
+	if t.Store != nil {
+		if goals, err := t.Store.ListByKind(pgdb.KindGoal, 1000); err == nil {
+			ids = make(map[int64]bool, len(goals))
+			for _, g := range goals {
+				ids[g.ID] = true
+			}
+		}
+	}
+	t.settleMu.Lock()
+	t.pendingSettleGoalIDs = ids
+	t.settleMu.Unlock()
+	t.requestSettle("goal_met", detail)
+}
+
+// settleGoalSetGrown 按数据库复核 goal_met 判据的目标集：grown=true 表示判定登记后
+// 新增了目标（旧判定作废）；ok=false 表示无法复核（登记时快照失败或读库失败），
+// 调用方自行决定保守等待还是放行。
+func (t *Task) settleGoalSetGrown() (grown, ok bool) {
+	t.settleMu.Lock()
+	snap := t.pendingSettleGoalIDs
+	t.settleMu.Unlock()
+	if snap == nil || t.Store == nil {
+		return false, false
+	}
+	goals, err := t.Store.ListByKind(pgdb.KindGoal, 1000)
+	if err != nil {
+		return false, false
+	}
+	for _, g := range goals {
+		if !snap[g.ID] {
+			return true, true
+		}
+	}
+	return false, true
+}
+
 func (t *Task) peekSettle() (string, string) {
 	t.settleMu.Lock()
 	defer t.settleMu.Unlock()
@@ -122,6 +193,7 @@ func (t *Task) peekSettle() (string, string) {
 func (t *Task) clearSettle() {
 	t.settleMu.Lock()
 	t.pendingSettleReason, t.pendingSettleDetail = "", ""
+	t.pendingSettleGoalIDs = nil
 	t.settleMu.Unlock()
 }
 
@@ -413,6 +485,15 @@ const (
 	// 绑定了某个配置就只用它、失败即失败;开启后绑定的配置失败也会回落到轮询链。
 	settingLLMPoolOn           = "llm_pool_enabled"
 	settingLLMPoolBindFallback = "llm_pool_bind_fallback"
+	// 拒答守卫（llmguard）：模型把授权内安全验证误判成高风险而拒答时，按
+	// 「授权+技术产出」表述自动重试。默认开；重试上限 0..llmguard.MaxRefusalRetries
+	// （默认 2）。环境变量 ZRECO_REFUSAL_GUARD / ZRECO_REFUSAL_RETRIES 设了合法值
+	// 时覆盖 settings（运维逃生口）。读 provider 组装时（providerForProfile/applyLLM），
+	// 改 settings 后重建 agent（putSettings 的 changed 路径）才生效。
+	settingRefusalGuardEnabled = "refusal_guard_enabled"
+	settingRefusalGuardRetries = "refusal_guard_retries"
+	// defaultRefusalRetries 是拒答守卫未配置时的重试上限（与上游 POJUN 默认一致）。
+	defaultRefusalRetries = 2
 	// 任务并发上限:开关 + 上限数。默认关闭;开启后默认上限 5(见 defaultConcurrencyLimit)。
 	settingConcurrencyOn    = "task_concurrency_enabled"
 	settingConcurrencyLimit = "task_concurrency_limit"
@@ -838,6 +919,73 @@ func (m *Manager) LLMPoolBindFallback() bool {
 // rebuild agents (applyLLM) afterwards.
 func (m *Manager) SetLLMPoolBindFallback(on bool) error {
 	return m.pg.SetBool(settingLLMPoolBindFallback, on)
+}
+
+// envRefusalGuard parses the ZRECO_REFUSAL_GUARD override: "0"/"off" disables,
+// anything else enables. ok=false when unset.
+func envRefusalGuard() (enabled, ok bool) {
+	v := strings.TrimSpace(os.Getenv("ZRECO_REFUSAL_GUARD"))
+	if v == "" {
+		return false, false
+	}
+	return !(v == "0" || strings.EqualFold(v, "off")), true
+}
+
+// envRefusalRetries parses the ZRECO_REFUSAL_RETRIES override (0..3). ok=false
+// when unset or not a valid integer.
+func envRefusalRetries() (retries int, ok bool) {
+	v := strings.TrimSpace(os.Getenv("ZRECO_REFUSAL_RETRIES"))
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > llmguard.MaxRefusalRetries {
+		return 0, false
+	}
+	return n, true
+}
+
+// RefusalGuardEnabled reports whether the refusal-retry guard is on
+// （默认开；settings.refusal_guard_enabled，ZRECO_REFUSAL_GUARD=0/off 可强制关）.
+// Read when the provider chain is built (providerForProfile/applyLLM), so a
+// change requires a rebuild — putSettings does that.
+func (m *Manager) RefusalGuardEnabled() bool {
+	if on, ok := envRefusalGuard(); ok {
+		return on
+	}
+	if m.pg == nil {
+		return true
+	}
+	return m.pg.GetBool(settingRefusalGuardEnabled, true)
+}
+
+// RefusalGuardRetries returns the refusal-retry cap after the first reply
+// (默认 2，硬顶 llmguard.MaxRefusalRetries；ZRECO_REFUSAL_RETRIES 合法值覆盖).
+func (m *Manager) RefusalGuardRetries() int {
+	if n, ok := envRefusalRetries(); ok {
+		return n
+	}
+	if m.pg == nil {
+		return defaultRefusalRetries
+	}
+	if v, ok, _ := m.pg.GetSetting(settingRefusalGuardRetries); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 && n <= llmguard.MaxRefusalRetries {
+			return n
+		}
+	}
+	return defaultRefusalRetries
+}
+
+// SetRefusalGuardEnabled persists the refusal-guard toggle. Callers rebuild the
+// provider chain (applyLLM + invalidateProfileAgents) afterwards so it takes effect.
+func (m *Manager) SetRefusalGuardEnabled(on bool) error {
+	return m.pg.SetBool(settingRefusalGuardEnabled, on)
+}
+
+// SetRefusalGuardRetries persists the refusal-retry cap. Same rebuild discipline
+// as SetRefusalGuardEnabled.
+func (m *Manager) SetRefusalGuardRetries(n int) error {
+	return m.pg.SetSetting(settingRefusalGuardRetries, strconv.Itoa(n))
 }
 
 // WebSearch returns the current web-search config: whether it is enabled, the
@@ -1284,7 +1432,7 @@ func taskFromPG(pt *pgdb.Task, m *Manager, store *pgdb.ExplorationStore) *Task {
 	if m.pg != nil && store != nil {
 		g.SetTarpit(newTarpitConfig(m.pg, store)) // tarpit 熔断(每任务计数,重启清零)
 	}
-	return &Task{
+	t := &Task{
 		ID: strconv.FormatInt(pt.ID, 10), ExpID: pt.ExplorationID,
 		Name:       pt.Name,
 		Remark:     pt.Remark,
@@ -1310,6 +1458,8 @@ func taskFromPG(pt *pgdb.Task, m *Manager, store *pgdb.ExplorationStore) *Task {
 		RunSegmentStartedAt: unixOrZero(pt.RunSegmentStartedAt),
 		Store:               store, Guard: g, notify: make(chan struct{}, 1),
 	}
+	t.autopilot.Store(pt.Autopilot)
+	return t
 }
 
 // newTarpitConfig 装配 tarpit 熔断：预算读 settings 键 tarpit_fetch_budget
@@ -1409,11 +1559,45 @@ func (m *Manager) CreateTaskWithOptions(description, goal string, opts pgdb.Task
 	if err != nil {
 		return nil, err
 	}
+	// 自主推进默认开关（autopilot_default，设置页可改）：开启时新任务直接进入自主推进。
+	// 存量任务不受影响（tasks.autopilot 默认 false，只能经任务详情页/接口打开）。
+	if m.pg.GetBool(settingAutopilotDefault, false) {
+		if err := m.pg.SetTaskAutopilot(pt.ID, true); err != nil {
+			log.Printf("[autopilot] 新任务 %d 应用 autopilot_default 失败: %v", pt.ID, err)
+		} else {
+			pt.Autopilot = true
+		}
+	}
 	t := taskFromPG(pt, m, m.pg.Exploration(pt.ExplorationID))
 	m.mu.Lock()
 	m.tasks[t.ID] = t
 	m.active = t.ID
 	m.mu.Unlock()
+	return t, nil
+}
+
+// SetTaskAutopilot 持久化单任务自主推进开关，并同步运行态镜像与留痕。
+func (m *Manager) SetTaskAutopilot(id string, on bool) (*Task, error) {
+	m.taskStateMu.Lock()
+	defer m.taskStateMu.Unlock()
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.pg.SetTaskAutopilot(n, on); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	t := m.tasks[id]
+	m.mu.RUnlock()
+	if t != nil {
+		t.SetAutopilot(on)
+	}
+	kind, detail := "disabled", "自主推进已关闭"
+	if on {
+		kind, detail = "enabled", "自主推进已开启"
+	}
+	_ = m.pg.InsertAutopilotEvent(id, kind, detail)
 	return t, nil
 }
 
@@ -1640,6 +1824,11 @@ func (m *Manager) SetTaskPaused(id string, paused bool) error {
 	if err := m.pg.SetPaused(n, paused); err != nil {
 		return err
 	}
+	// 任务级后台作业（job_start，跨 run 存活）在暂停时收尸：继续打目标就超出
+	// 授权窗口（agent.KillJobsForTaskDir 自带 jobLifecycle 互斥与 PID 归属校验）。
+	if paused {
+		agent.KillJobsForTaskDir(m.dirs().TaskRunDir(n, 0))
+	}
 	m.mu.Lock()
 	if t := m.tasks[id]; t != nil {
 		t.updateLifecycle(func(state *taskLifecycleState) {
@@ -1698,12 +1887,22 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 	        ELSE 'resume'
 	    END,
 	    first_run_at=CASE
-	        WHEN $6='timeout' AND $2 NOT IN ('done','failed','timeout') THEN NULL
+	        WHEN $6 IN ('done','failed','timeout') AND $2 NOT IN ('done','failed','timeout') THEN NULL
 	        ELSE first_run_at
 	    END,
 	    deadline_at=CASE
-	        WHEN $6='timeout' AND $2 NOT IN ('done','failed','timeout') THEN NULL
+	        WHEN $6 IN ('done','failed','timeout') AND $2 NOT IN ('done','failed','timeout') THEN NULL
+	        -- 暂停恢复顺延（上游 0.4.80 #22）：把暂停时长加回 deadline，任务预算
+	        -- 不因暂停而缩水。只在跨暂停恢复（paused_at 非空）时生效。
+	        WHEN paused_at IS NOT NULL AND deadline_at IS NOT NULL THEN deadline_at + (now() - paused_at)
 	        ELSE deadline_at
+	    END,
+	    paused_at=NULL,
+	    -- 自主推进（Autopilot）复原：终态复活时延长计数归零——新一段运行拿回完整的
+	    -- 延长预算（与 first_run_at/deadline_at 重置同语义，对齐上游 ApplyTaskAdmission）。
+	    autopilot_extensions=CASE
+	        WHEN $6 IN ('done','failed','timeout') AND $2 NOT IN ('done','failed','timeout') THEN 0
+	        ELSE autopilot_extensions
 	    END,
 	    -- A8 无成果止损复原：timeout→非终态时重置一次性检查点并把基线定格在当时的
 	    -- 活跃秒数（止损预算重新满额，对齐 ARTEX admission 同款 CASE）。
@@ -1790,6 +1989,8 @@ func (m *Manager) ApplyTaskPause(id string) error {
 	var pausedSegment sql.NullTime
 	err = m.pg.QueryRow(`UPDATE tasks
 		SET paused=true, queued=false, queued_at=NULL,
+		    -- 暂停开始时间（上游 0.4.80 #22）：恢复时按 (now-paused_at) 顺延 deadline。
+		    paused_at=CASE WHEN paused_at IS NULL THEN now() ELSE paused_at END,
 		    schedule_paused=false, schedule_manual_until=NULL,
 		    -- A8 活跃计时：暂停不计时——暂停提交时折叠开放运行段。
 		    active_run_seconds=active_run_seconds + CASE WHEN run_segment_started_at IS NOT NULL THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - run_segment_started_at)))::bigint) ELSE 0 END,
@@ -2072,6 +2273,11 @@ func (m *Manager) DeleteTask(id string, opts DeleteTaskOptions) (DeleteTaskResul
 		m.forgetTask(id, n)
 		return result, nil
 	}
+
+	// 任务删除前先收尸后台作业（job_start 跨 run 存活是设计目标，但任务删除后
+	// rc/日志路径消失，作业会变成无主进程继续打目标）。与 DeleteFiles 选项无关
+	// ——作业进程不随文件删除选项走。
+	agent.KillJobsForTaskDir(m.dirs().TaskRunDir(n, 0))
 
 	var fileStage *taskFileDeleteStage
 	if opts.DeleteFiles {

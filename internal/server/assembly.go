@@ -274,6 +274,12 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	if err := pg.AddAgentToToolBinding("reporter", []string{"list_artifacts"}); err != nil {
 		log.Printf("[tools] reporter 绑定 list_artifacts 失败: %v", err)
 	}
+	// evidence_check（上游 0.4.71 全量危害验证协议）：pentest 独立渗透 agent 的
+	// 提示词尾巴要求上报前复核证据——它的 base 只有 DefaultTools，靠这里的补绑 +
+	// domainReg 注入拿到该工具（老库升级也能拿到，SeedTool 对已有行不生效）。
+	if err := pg.AddAgentToToolBinding("pentest", []string{"evidence_check"}); err != nil {
+		log.Printf("[tools] pentest 绑定 evidence_check 失败: %v", err)
+	}
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
 	// No startup prune: rows we didn't seed are left alone so future user-defined
 	// custom tools (system=false, added via the UI) survive restarts.

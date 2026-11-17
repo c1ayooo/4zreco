@@ -59,7 +59,7 @@ func FindingsMarkdown(fs []*db.DBFinding, generatedAt time.Time) string {
 
 	if len(items) == 0 {
 		b.WriteString("_无匹配的漏洞。_\n")
-		return b.String()
+		return cleanText(b.String())
 	}
 
 	b.WriteString("## 漏洞明细\n\n")
@@ -87,7 +87,8 @@ func FindingsMarkdown(fs []*db.DBFinding, generatedAt time.Time) string {
 		b.WriteString(findingTrafficMarkdown(f, false))
 		b.WriteString("---\n\n")
 	}
-	return b.String()
+	// 统一清洗：非法 UTF-8 → U+FFFD、剔除 XML 控制字符（Pojun 0.4.71 乱码修复）。
+	return cleanText(b.String())
 }
 
 // SingleFindingMarkdown 渲染单条漏洞为一份独立 Markdown(用于「一漏洞一文件」打包)。
@@ -116,7 +117,7 @@ func SingleFindingMarkdown(f *db.DBFinding, generatedAt time.Time) string {
 		b.WriteString("\n")
 	}
 	b.WriteString(findingTrafficMarkdown(f, true))
-	return b.String()
+	return cleanText(b.String())
 }
 
 var unsafeFilenameChars = regexp.MustCompile(`[^\p{Han}\p{L}\p{N}._-]+`)
@@ -132,16 +133,16 @@ func FindingFilename(f *db.DBFinding) string {
 	if f.ExportCaseID > 0 {
 		name = fmt.Sprintf("case_%d_%s_%s", f.ExportCaseID, sev, title)
 	}
-	name = unsafeFilenameChars.ReplaceAllString(name, "_")
+	name = unsafeFilenameChars.ReplaceAllString(cleanText(name), "_")
 	name = strings.Trim(name, "._")
 	if name == "" {
 		name = fmt.Sprintf("finding_%d", f.ID)
 	}
 	// 防御性:再剥一层路径,杜绝 zip slip。
 	name = path.Base(name)
-	if len(name) > 120 {
-		name = name[:120]
-	}
+	// 按字节硬截断会把汉字劈成非法 UTF-8，zip 便不置 UTF-8 标志位，
+	// Windows/WinRAR 按 CP437 解码整串乱码；这里按字符边界截断（0.4.71）。
+	name = truncateUTF8(name, 120)
 	return name + ".md"
 }
 

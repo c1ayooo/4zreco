@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -338,6 +339,11 @@ ON CONFLICT (name) DO NOTHING`,
 	}
 	if err := d.migrateContextWindowK(); err != nil {
 		return fmt.Errorf("migrate context window k: %w", err)
+	}
+	// 多键去重（finding_keys.go）：为历史 findings 补身份键。回填失败不阻塞启动——
+	// 老记录少一轮身份键只是少一次合并机会，不能因此起不来服务。
+	if err := d.BackfillFindingKeys(context.Background(), 0); err != nil {
+		log.Printf("[db] backfill finding keys (best-effort): %v", err)
 	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)

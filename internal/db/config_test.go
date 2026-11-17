@@ -20,6 +20,12 @@ func TestPoolProfilesOrder(t *testing.T) {
 	defer d.Close()
 
 	mk := func(name string, priority int, exclude bool, key string) int64 {
+		// 共享库跑多轮的已知坑（AGENTS.md §2）：上一次被 kill 的运行留下的
+		// 同名残留行会撞 llm_profiles_name_key 唯一键，产生假失败。插入前先按
+		// 名清掉；相关外键均为 CASCADE/SET NULL，按名删除不会连带破坏数据。
+		if _, err := d.Exec(`DELETE FROM llm_profiles WHERE name=$1`, name); err != nil {
+			t.Fatal(err)
+		}
 		id, err := d.SaveProfile(&LLMProfile{
 			Name: name, Format: "openai", Model: "m", APIKey: key,
 			Priority: priority, PoolExclude: exclude,

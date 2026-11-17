@@ -86,6 +86,13 @@ type Config struct {
 	// 空 = 不发送。值由 transcript.WithSessionID 挂在请求 context 上,由 RoundTripper
 	// 读取填入,因此同一共享 provider 也能按会话发出不同的头值。
 	SessionHeaderKey string
+	// UserAgent,非空时用它替换每个 LLM 请求的 User-Agent 头(建连重试、空响应重试
+	// 发出的每一个请求都带,见 uaTransport——注入点在统一 RoundTripper 而非请求构造层,
+	// 正是为了覆盖重试路径)。部分网关/WAF 直接拦截默认 Go UA(403、连接被重置),
+	// 按客户端类型放行的网关则只认浏览器或 coding agent 的 UA 前缀。仅作用于 LLM
+	// 出站请求,不影响对渗透目标的任何请求(目标侧 UA 由工具参数决定)。空 = 保持
+	// 内置兜底 UA(4zreco-llm/1.0),旧配置行为不变。
+	UserAgent string
 	// Retry 是该配置解析后的重试参数(profile 覆盖 → 全局策略 → 内置默认,由
 	// server 侧解析)。三层的含义见 RetryConfig;零值 = 完全沿用内置默认。
 	Retry RetryConfig
@@ -276,7 +283,7 @@ func (c Config) Provider() string {
 // limiter lives on the single provider instance — so planner + all workers +
 // main agent (which share this provider) are bounded by one shared rate limit.
 func (c Config) NewProvider() (llm.Provider, error) {
-	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey)
+	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey, c.UserAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +456,7 @@ func requestBodySnapshot(req *http.Request) string {
 	return string(b)
 }
 
-func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) {
+func quotaAwareHTTPClient(proxy, sessionHeaderKey, userAgent string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	proxy = strings.TrimSpace(proxy)
 	if proxy == "" {
@@ -470,21 +477,49 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) 
 	}
 	// Go 默认 UA（"Go-http-client/2.0"）会被部分网关的 Cloudflare bot 防护直接
 	// 403（实测 inferaichat.com 2026-11-13：curl UA 与自定义 UA 均放行，Go UA
-	// 一律 "Access denied"）。出站请求没有 UA 时补一个产品标识。
-	return &http.Client{Transport: uaTransport{base: quotaAwareTransport{
-		base:             transport,
-		sessionHeaderKey: strings.TrimSpace(sessionHeaderKey),
-		gov:              newAdaptiveGovernor(nil), // 每 provider 一个调节器（即每 profile 一个）
-	}}}, nil
+	// 一律 "Access denied"）。出站请求没有 UA 时补一个产品标识；配置了 user_agent
+	// 的 profile 则整体替换（uaTransport.userAgent 非空）。
+	return &http.Client{Transport: uaTransport{
+		userAgent: sanitizeUserAgent(userAgent),
+		base: quotaAwareTransport{
+			base:             transport,
+			sessionHeaderKey: strings.TrimSpace(sessionHeaderKey),
+			gov:              newAdaptiveGovernor(nil), // 每 provider 一个调节器（即每 profile 一个）
+		},
+	}}, nil
 }
 
-// uaTransport 为缺失 User-Agent 的出站请求补产品 UA（见 quotaAwareHTTPClient）。
+// sanitizeUserAgent 把用户提供的 UA 变成安全单位个 HTTP 头值：去首尾空白，并把
+// 控制字符（首当其冲是 CR/LF）换成空格。保存入口已拒绝 CR/LF，但直接改库的
+// profile 不允许拖垮每一个模型请求。
+func sanitizeUserAgent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// uaTransport 为出站请求处理 User-Agent（见 quotaAwareHTTPClient）：配置了
+// user_agent 的 profile 在此整体替换（注入在 RoundTrip 而非请求构造层，SDK 的
+// 建连重试、空响应重试发出的每个请求都会带上）；未配置时仅对缺失 UA 的请求补
+// 产品兜底 UA。
 type uaTransport struct {
 	base http.RoundTripper
+	// userAgent 非空时替换每个请求的 User-Agent；空 = 不覆盖，仅走兜底。
+	userAgent string
 }
 
 func (t uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Header.Get("User-Agent") == "" {
+	if t.userAgent != "" {
+		// 走到 RoundTrip 时 net/http 已填了默认 UA（Go-http-client/1.1），Set 即完成替换。
+		req.Header.Set("User-Agent", t.userAgent)
+	} else if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "4zreco-llm/1.0")
 	}
 	return t.base.RoundTrip(req)

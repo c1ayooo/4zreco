@@ -9,6 +9,10 @@
 //	 把内置 agent 提示词更新到当前二进制内置版本（老库的 prompt 是首次安装
 //	 时的旧版，新版本不会自动覆盖）。默认只报告差异；--force 才写回（会覆盖
 //	 该 agent 的自定义编辑，慎用）。
+//
+//	4zreco-maint scope-audit --config /opt/4zreco/config.json [--out file]
+//	 按自动范围归属规则回放所有 source=auto 的任务范围行，输出「应保留/建议
+//	 清理」清单（上游 0.4.71；只读，--out 可导出全量 JSON。清理需备份后人工确认）。
 package main
 
 import (
@@ -44,7 +48,7 @@ const (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: 4zreco-maint <scan-artifacts|previews|reset-prompts|fix-permissions> --config <config.json> [--force]")
+		fmt.Fprintln(os.Stderr, "usage: 4zreco-maint <scan-artifacts|previews|reset-prompts|fix-permissions|scope-audit> --config <config.json> [--force] [--out file]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
@@ -54,6 +58,7 @@ func main() {
 	force := fs.Bool("force", false, "reset-prompts: 覆盖自定义编辑；previews: 重新生成已 ready 的预览")
 	taskID := fs.Int64("task", 0, "previews: 只处理指定任务 ID")
 	all := fs.Bool("all", false, "previews: 处理所有任务")
+	outPath := fs.String("out", "", "scope-audit: 把逐行结果写成 JSON 文件（只读，不删除任何数据）")
 	_ = fs.Parse(os.Args[2:])
 
 	dsn, err := loadDSN(*cfgPath)
@@ -82,6 +87,8 @@ func main() {
 		resetPrompts(pg, *force)
 	case "fix-permissions":
 		fixArtifactPermissions(*dataDir)
+	case "scope-audit":
+		auditAutoScope(pg, *outPath)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
 		os.Exit(2)
@@ -91,6 +98,61 @@ func main() {
 func fail(err error) {
 	fmt.Fprintf(os.Stderr, "[x] %v\n", err)
 	os.Exit(1)
+}
+
+// auditAutoScope 按自动范围归属规则回放 source=auto 的范围行，输出
+// 「应保留/建议清理」清单（上游 0.4.71）。只读——删除必须先 pg_dump 备份、
+// 人工确认后执行；--out 可导出全量 JSON。
+func auditAutoScope(pg *db.DB, outPath string) {
+	items, err := pg.Assets().AuditAutoScope()
+	if err != nil {
+		fail(fmt.Errorf("审计失败：%w", err))
+	}
+	byReason := map[string]int{}
+	tasks := map[int64]bool{}
+	bad := 0
+	for _, it := range items {
+		byReason[it.Reason]++
+		tasks[it.TaskID] = true
+		if !it.Allowed {
+			bad++
+		}
+	}
+	fmt.Printf("auto 范围行 %d（任务 %d 个）：应保留 %d，建议清理 %d\n", len(items), len(tasks), len(items)-bad, bad)
+	for _, reason := range []string{"ok", "no-baseline", "infra-blacklist", "outside-baseline"} {
+		if n := byReason[reason]; n > 0 {
+			fmt.Printf("  %-18s %d\n", reason, n)
+		}
+	}
+	if bad > 0 {
+		fmt.Println("\n建议清理（仅列出前 50 条；--out 可拿全量 JSON）：")
+		shown := 0
+		for _, it := range items {
+			if it.Allowed {
+				continue
+			}
+			target := it.Domain
+			if target == "" {
+				target = it.Net
+			}
+			fmt.Printf("  task=%d kind=%s value=%s reason=%s\n", it.TaskID, it.Kind, target, it.Reason)
+			shown++
+			if shown >= 50 {
+				break
+			}
+		}
+	}
+	if outPath != "" {
+		raw, err := json.MarshalIndent(items, "", "  ")
+		if err != nil {
+			fail(err)
+		}
+		if err := os.WriteFile(outPath, raw, 0o600); err != nil {
+			fail(err)
+		}
+		fmt.Printf("\n全量清单已写入 %s（0600）\n", outPath)
+	}
+	fmt.Println("\n注意：本命令只读，不删除任何范围行；清理需先备份并人工确认。")
 }
 
 // loadDSN 从 config.json 的 database 段拼 DSN（与服务端同源）。

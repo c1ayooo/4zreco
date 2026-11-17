@@ -725,6 +725,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	pl.SetMaxTokens(plannerRuntime.maxTokens)
 	pl.SetKillWork(s.engine.KillWork)
 	pl.SetSteerWork(s.engine.SteerWork)
+	pl.SetIntentQueueLimit(s.intentQueueBudget) // 派发节流（P4-4）：本轮新增上限
 	// Guard 归因 → graph_overview 的 guard_attributions 块（计数 + B6 最近样本，
 	// planner 看到 blocked/error 计数与被拦命令后可换打法，v0.3.88 体检 N5）。
 	// t.Guard 在 manager.go 建任务时必然创建。

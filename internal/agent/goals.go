@@ -141,6 +141,9 @@ func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir,
 		tools = append(tools, tsx.addTaskScope())
 		sys += goalsScopeTail
 	}
+	// goalsVerificationTail（验收标准必须证明危害）是代码固定尾——老库的 goals
+	// 正文只 seed 一次，用户没重播时拿不到新示例，尾巴保证验收口径不丢。
+	sys += goalsVerificationTail
 	userMsg := "任务目标：\n" + goalText
 	if d := strings.TrimSpace(desc); d != "" {
 		userMsg += "\n\n任务描述（背景信息，可能含靶标范围/flag 数量/交战说明；仅供参考，不要臆造其中未提及的内容）：\n" + d

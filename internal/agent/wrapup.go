@@ -2,7 +2,10 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+
+	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
 
 	"github.com/c1ayooo/4zreco/internal/kernel/askernel"
 	"github.com/c1ayooo/4zreco/internal/kernel/termmap"
@@ -87,6 +90,65 @@ func resolveWrapupTurns(agentKey string) int {
 		}
 	}
 	return WrapupTurnsDefault(agentKey)
+}
+
+// settlementDisabledTools 返回收尾阶段要隐藏的执行类工具名（上游 0.4.71）：
+// 只藏 Bash 不够——job_*、http/auth 请求、listener_*、扫描执行类都能绕过 Bash
+// 继续执行/打目标，收尾预算会被新探测吃掉，真正的 record_fact/report_finding/
+// prove_goal 写不完。名单是代码固定策略（收尾词可后台编辑、禁用名单不可）。
+func settlementDisabledTools() []string {
+	out := make([]string, 0, len(localExecToolNames)+20)
+	for name := range localExecToolNames {
+		out = append(out, name)
+	}
+	out = append(out,
+		// 绕过 Bash 的执行/触目标工具：
+		"job_start", "job_stop", "job_status", "job_output",
+		"http_request", "http_probe", "session_login",
+		"auth_request", "diff_responses",
+		"listener_start", "listener_stop", "listener_sessions",
+		"run_script", "poc_scaffold",
+		// 扫描/弱口令/凭据提取执行类（§5.5 领域工具）：收尾轮不再起新探测。
+		"gogo_scan", "spray_finger", "katana_scan", "scan_with_nuclei",
+		"zombie_weakpass", "proton_secrets",
+	)
+	sort.Strings(out)
+	return out
+}
+
+// DropSettleTools 按名单 + `shell_*` 前缀摘掉执行类工具（终局规划轮用：
+// 收尾那一轮的工具面整体收窄，预算只留给目标判定与写证据）。
+func DropSettleTools(tools []actool.CoreTool) []actool.CoreTool {
+	blocked := make(map[string]bool)
+	for _, n := range settlementDisabledTools() {
+		blocked[n] = true
+	}
+	out := make([]actool.CoreTool, 0, len(tools))
+	for _, t := range tools {
+		if blocked[t.Name()] || strings.HasPrefix(t.Name(), "shell_") {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// dropSettleDeferred 从延迟工具清单里摘掉执行类名字（终局轮的 MCP 半边；
+// 名单按 settlementDisabledTools 对齐）。MCP 工具名带 mcp__server__ 前缀，
+// shell 族按名字包含 shell_ 判定（mcp__shell__exec 等）。
+func dropSettleDeferred(names []string) []string {
+	blocked := map[string]bool{}
+	for _, n := range settlementDisabledTools() {
+		blocked[n] = true
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if blocked[n] || strings.HasPrefix(n, "shell_") || strings.Contains(n, "shell_") {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // wrapupSettlement builds the settlement config for an agent's run (kernel

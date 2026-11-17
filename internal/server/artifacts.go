@@ -27,6 +27,7 @@ import (
 
 	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/docpreview"
+	"github.com/c1ayooo/4zreco/internal/report"
 )
 
 // 证据附件限额（v0.5.0）。默认"样本策略"：worker 只保存证明性样本，全量
@@ -280,7 +281,8 @@ func (s *Server) serveTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, abs)
 	default:
 		w.Header().Set("Content-Type", a.Mime)
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeArtifactName(a.Name)))
+		// RFC 5987：用户上传名可含中文，filename* 保原名、filename= 给 ASCII 兜底。
+		w.Header().Set("Content-Disposition", report.AttachmentDisposition(sanitizeArtifactName(a.Name)))
 		http.ServeFile(w, r, abs)
 	}
 }

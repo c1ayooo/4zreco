@@ -31,7 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
@@ -73,6 +73,108 @@ const EFFORT_LEVELS: { value: string; label: string }[] = [
   { value: "high", label: "high" },
   { value: "xhigh", label: "xhigh" },
   { value: "max", label: "max" },
+];
+
+// LLM 请求 UA 的常用模板。选模板只是把完整 UA 填进输入框，之后仍可继续手改。
+// 浏览器 UA 与编程工具（CLI/IDE）UA 是两类完全不同的特征：后者常用
+// `工具名/版本 (平台; 架构) 终端` 或 `工具名/版本 sdk/... runtime/...` 的形态，
+// 不少按客户端类型放行的网关只认这些前缀。模板里的版本号/终端信息可自行改。
+// 注意：这是 LLM 网关侧的 UA，与目标侧 Bash 环境注入的 ZRECO_UA 池无关。
+const CUSTOM_UA = "custom";
+const UA_TOOL_PRESETS: { value: string; label: string; ua: string }[] = [
+  {
+    value: "claude-code",
+    label: "Claude Code · CLI",
+    ua: "claude-cli/2.1.63 (external, cli)",
+  },
+  {
+    value: "codex-mac",
+    label: "Codex CLI · macOS",
+    ua: "codex_cli_rs/0.144.6 (Mac OS 15.6.1; arm64) ghostty/1.3.0",
+  },
+  {
+    value: "codex-win",
+    label: "Codex CLI · Windows",
+    ua: "codex_cli_rs/0.144.6 (Windows 11 24H2; x86_64) vscode/1.105.1",
+  },
+  {
+    value: "gemini-cli",
+    label: "Gemini CLI",
+    ua: "GeminiCLI/0.46.0/gemini-3-pro-preview (linux; x64; cli)",
+  },
+  {
+    value: "opencode",
+    label: "OpenCode",
+    ua: "opencode/1.18.29 ai-sdk/openai-compatible/2.0.41 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.15",
+  },
+  {
+    value: "zed",
+    label: "Zed · AI",
+    ua: "Zed/0.219.4+stable.119.0 (macos; aarch64)",
+  },
+  {
+    value: "copilot-cli",
+    label: "GitHub Copilot CLI",
+    ua: "copilot/1.0.25 (client/sdk win32 v22.19.0) term/unknown",
+  },
+  {
+    value: "copilot-vscode",
+    label: "GitHub Copilot Chat · VS Code",
+    ua: "GitHubCopilotChat/0.37.2026011603",
+  },
+  {
+    value: "roo-code",
+    label: "Roo Code",
+    ua: "roo-code/3.45.0 (darwin 25.2.0; arm64) node/22.21.1",
+  },
+  {
+    value: "kilo-code",
+    label: "Kilo Code",
+    ua: "kilo-code/5.1.0 (darwin 25.2.0; arm64) node/22.21.1",
+  },
+];
+const UA_BROWSER_PRESETS: { value: string; label: string; ua: string }[] = [
+  {
+    value: "chrome-win",
+    label: "Chrome · Windows",
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  },
+  {
+    value: "chrome-mac",
+    label: "Chrome · macOS",
+    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  },
+  {
+    value: "chrome-android",
+    label: "Chrome · Android",
+    ua: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+  },
+  {
+    value: "safari-mac",
+    label: "Safari · macOS",
+    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+  },
+  {
+    value: "safari-iphone",
+    label: "Safari · iPhone",
+    ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+  },
+  {
+    value: "edge-win",
+    label: "Edge · Windows",
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+  },
+  {
+    value: "firefox-win",
+    label: "Firefox · Windows",
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+  },
+];
+// 第一项 ua="" = 不覆盖，走内置兜底 UA（4zreco-llm/1.0）。
+const UA_PRESETS = [
+  { value: NONE, label: "不覆盖（默认兜底 UA）", ua: "" },
+  ...UA_TOOL_PRESETS,
+  ...UA_BROWSER_PRESETS,
 ];
 
 function cooldownText(secs: number) {
@@ -338,6 +440,7 @@ function ProfileSheet({
   const [maxTokens, setMaxTokens] = React.useState("0"); // 单次回复输出上限;0=不发送
   const [maxTokensField, setMaxTokensField] = React.useState(NONE); // 上限用哪个字段名;NONE=max_tokens
   const [sessionHeaderKey, setSessionHeaderKey] = React.useState(""); // 自定义会话头名;空=不发送
+  const [userAgent, setUserAgent] = React.useState(""); // LLM 请求 UA;空=不覆盖（内置兜底）
   const [retry, setRetry] = React.useState<LLMRetryOverride>(ZERO_OVERRIDE); // 本配置的重试覆盖;全 0=跟随全局
   const [testing, setTesting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -365,6 +468,7 @@ function ProfileSheet({
     setMaxTokens(String(profile?.max_tokens ?? 0));
     setMaxTokensField(fromStore(profile?.max_tokens_field));
     setSessionHeaderKey(profile?.session_header_key ?? "");
+    setUserAgent(profile?.user_agent ?? "");
     setRetry(profile?.retry ?? ZERO_OVERRIDE);
     setApiKey("");
     setKeyHint(profile?.api_key_hint ?? "");
@@ -373,13 +477,15 @@ function ProfileSheet({
   }, [open, profile]);
 
   const profileId = profile ? Number(profile.id) : undefined;
+  // UA 下拉的选中值：命中模板 = 模板 value；手改过/留空 = 自定义/不覆盖（NONE）。
+  const uaPresetValue = UA_PRESETS.find((p) => p.ua === userAgent)?.value ?? CUSTOM_UA;
 
   async function loadModels() {
     if (loadingModels) return;
     setLoadingModels(true);
     setModels([]);
     try {
-      const r = await api.fetchLLMModels(format, baseUrl, apiKey, proxy, profileId);
+      const r = await api.fetchLLMModels(format, baseUrl, apiKey, proxy, profileId, userAgent.trim());
       if (r.ok && r.models && r.models.length > 0) {
         setModels(r.models);
         setModelsOpen(true);
@@ -411,6 +517,7 @@ function ProfileSheet({
         profileId,
         streaming,
         sessionHeaderKey.trim(),
+        userAgent.trim(),
       );
       // 回复内容一并展示：看得见模型确实说了话，才算和会话里跑通是一回事。
       if (r.ok)
@@ -454,6 +561,7 @@ function ProfileSheet({
         // 后端也会再做一次同样的归一化，这里只是别让 UI 送出自相矛盾的值。
         max_tokens_field: format === "openai" ? toStore(maxTokensField) : "",
         session_header_key: sessionHeaderKey.trim(),
+        user_agent: userAgent.trim(),
         retry,
       });
       if (isNew) toast.success(`已新建：${name.trim()}（在卡片上「设为激活」以启用）`);
@@ -475,6 +583,7 @@ function ProfileSheet({
           Number(id),
           streaming,
           sessionHeaderKey.trim(),
+          userAgent.trim(),
         );
         if (!t.ok) {
           toast.error(
@@ -625,6 +734,62 @@ function ProfileSheet({
               填写头名后，每次请求都会带上这个 HTTP 头，头值自动填为 <b>当前会话的 session id</b>（chat 会话如
               conv-12、worker 如 exp3-worker-i87）。用于按 session-id 头做提示缓存 /
               粘性路由的网关；同一会话多轮稳定、不同会话互不相同。留空则不发送。
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="p-user-agent">User-Agent（可选）</Label>
+            <Select
+              value={uaPresetValue}
+              onValueChange={(v) => {
+                if (v === NONE) setUserAgent("");
+                else if (v !== CUSTOM_UA) setUserAgent(UA_PRESETS.find((p) => p.value === v)?.ua ?? "");
+              }}
+            >
+              <SelectTrigger id="p-user-agent-select" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>{UA_PRESETS[0].label}</SelectItem>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>编程工具</SelectLabel>
+                  {UA_TOOL_PRESETS.map((p) => (
+                    <SelectItem key={p.value} value={p.value}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>浏览器</SelectLabel>
+                  {UA_BROWSER_PRESETS.map((p) => (
+                    <SelectItem key={p.value} value={p.value}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                {uaPresetValue === CUSTOM_UA && (
+                  <>
+                    <SelectSeparator />
+                    <SelectItem value={CUSTOM_UA}>自定义（当前输入值）</SelectItem>
+                  </>
+                )}
+              </SelectContent>
+            </Select>
+            <Input
+              id="p-user-agent"
+              className="font-mono text-xs"
+              placeholder="留空=不覆盖（走内置兜底 UA）"
+              value={userAgent}
+              onChange={(e) => setUserAgent(e.target.value)}
+            />
+            <p className="text-muted-foreground text-xs">
+              非空时替换<b>每个 LLM 请求</b>的 User-Agent（含重试）。部分网关 / WAF
+              会直接拦截默认 UA（表现为 403、连接被重置），选一个模板即可；按客户端类型放行的网关（Claude Code /
+              Codex / Gemini CLI / OpenCode 等）请选「编程工具」组，版本号与终端信息可继续手动修改。仅覆盖
+              <b>LLM 网关侧</b>出站请求，与目标侧的 ZRECO_UA 池无关；对渗透目标的请求仍由工具参数决定。
+              个别网关还会校验配套请求头或鉴权（仅改 UA 不一定能通过其订阅校验）。
             </p>
           </div>
 

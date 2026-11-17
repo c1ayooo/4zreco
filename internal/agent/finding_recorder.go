@@ -27,6 +27,85 @@ func validateFindingEvidence(severity, evidence string) string {
 	return ""
 }
 
+// ═══ 机械验证凭据校验（移植自 Pojun v0.4.52，借鉴 raptor 认识论闸门 + CVEngine
+// triage 三重夹逼）：critical/high 漏洞必须附可机械复现的验证凭据（HTTP 响应/
+// curl 输出/工具命中结果），纯版本匹配不能作为漏洞证据——发行版 backport 补丁
+// 不改版本号，版本匹配 ≠ 漏洞。「可能存在」不是 finding，「实际拿到」才是。═══
+
+// hasMechanicalVerification 检查 evidence 是否包含可机械复现的验证凭据。
+// 凭据定义（raptor [GATES] 的 "tool output is the verdict"）：
+//   1. HTTP 原始响应头 / 状态码（"HTTP/1.1 200 OK"、"status: 403"）
+//   2. curl/sqlmap/nuclei 等工具命令输出
+//   3. JSON 结构化响应字段（"code": / "status":）
+//   4. 响应头字段（location/set-cookie/content-type）
+// 这些是确定性信号——编造 evidence 时很难同时伪造所有形态。
+func hasMechanicalVerification(evidence string) bool {
+	lower := strings.ToLower(evidence)
+	signals := []string{
+		"http/1.", "http/2",  // HTTP 原始响应头
+		"curl -", "curl ",    // curl 命令
+		"sqlmap",             // sqlmap 输出
+		"nuclei",             // nuclei 模板命中
+		"status: 200", "status: 403", "status: 301", "status: 302", // 状态码
+		"\"code\":", "\"status\":",                 // JSON 响应字段
+		"location:", "set-cookie:", "content-type:", // HTTP 响应头字段
+	}
+	for _, sig := range signals {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasVersionOnlyEvidence 检查是否只有版本匹配（CVEngine match_policy 的
+// "version ≠ vulnerability" 规则——发行版 backport 不改版本号）。
+func hasVersionOnlyEvidence(evidence string) bool {
+	lower := strings.ToLower(evidence)
+	versionSignals := []string{"version", "banner", "server:", "x-powered-by", "powered-by"}
+	hasVersion := false
+	hasExploit := false
+	for _, sig := range versionSignals {
+		if strings.Contains(lower, sig) {
+			hasVersion = true
+			break
+		}
+	}
+	exploitSignals := []string{"curl -", "200", "403", "http/1.", "response", "output"}
+	for _, sig := range exploitSignals {
+		if strings.Contains(lower, sig) {
+			hasExploit = true
+			break
+		}
+	}
+	return hasVersion && !hasExploit
+}
+
+// validateMechanicalEvidence 机械验证凭据校验：critical/high 漏洞的 evidence 必须
+// 含可机械复现的验证凭据；只有版本/banner 匹配单独拦截。medium/low 不做校验
+// （低危经常只有一句说明，过度校验阻碍正常上报）。
+// 返回空串表示通过，否则是回灌给模型的中文纠正提示（模型可在同会话补证据或降级）。
+func validateMechanicalEvidence(severity, evidence string) string {
+	if strings.TrimSpace(evidence) == "" {
+		return "" // 空 evidence 由 validateFindingEvidence 处理
+	}
+	lower := strings.ToLower(severity)
+	if lower != "critical" && lower != "high" {
+		return "" // medium/low 不做机械验证校验
+	}
+	if hasMechanicalVerification(evidence) {
+		return "" // 有机械验证凭据，通过
+	}
+	if hasVersionOnlyEvidence(evidence) {
+		return "证据只有版本/banner 匹配，没有行为级验证——发行版 backport 补丁不改版本号，版本匹配 ≠ 漏洞。" +
+			"请用 http_probe 或 curl 对目标实际发送请求，把 HTTP 状态码/响应特征/命令输出写进 evidence。" +
+			"如果只是版本匹配没有验证，请降为 medium 并注明「版本匹配，行为未验证」。"
+	}
+	return "critical/high 证据缺少可机械复现的验证凭据（HTTP 状态码/curl 命令输出/工具命中结果）。" +
+		"请用工具实际触发目标，把返回的状态码/响应头/关键字段写入 evidence——" +
+		"「可能存在」不是 finding，「实际拿到」才是。或者降级为 medium。"
+}
+
 // FindingRecorder is injected by the host; agents never synthesize or copy
 // evidence bodies themselves. Its implementation owns the atomic write.
 type FindingRecorder interface {

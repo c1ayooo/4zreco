@@ -529,7 +529,21 @@ func TestBasicAuthPostgresLoginFlowPG(t *testing.T) {
 		t.Fatal(err)
 	}
 	td := t.TempDir()
-	s := New(context.Background(), m, config.Paths{Skills: td, Data: td, Base: td})
+	// 两个 Server 的后台 worker（task-archive 轮询从共享库领归档任务、往 m.dir/tasks
+	// 写 staging 文件）生命周期由 ctx 驱动。若测试结束不取消，worker 与 t.TempDir 的
+	// RemoveAll 赛跑，偶发 "TempDir RemoveAll cleanup: directory not empty" 假失败。
+	// 先取消 ctx 并等 worker 退出，再放行 TempDir 清理（defer LIFO：本函数先于
+	// 上方 settings 恢复与 m.Close 执行，且都在 t.Cleanup 的 TempDir 清理之前）。
+	var s, restarted *Server
+	ctx, cancelServers := context.WithCancel(context.Background())
+	defer func() {
+		cancelServers()
+		s.archiveWG.Wait()
+		if restarted != nil {
+			restarted.archiveWG.Wait()
+		}
+	}()
+	s = New(ctx, m, config.Paths{Skills: td, Data: td, Base: td})
 	adminJWT, err := signJWT(s.currentJWTKey())
 	if err != nil {
 		t.Fatal(err)
@@ -550,8 +564,8 @@ func TestBasicAuthPostgresLoginFlowPG(t *testing.T) {
 		t.Fatalf("save: %d %s", w.Code, w.Body.String())
 	}
 
-	// 模拟重启：新 Server 从同一 PG 加载门配置。
-	restarted := New(context.Background(), m, config.Paths{Skills: t.TempDir(), Data: t.TempDir(), Base: t.TempDir()})
+	// 模拟重启：新 Server 从同一 PG 加载门配置（同一 ctx，测试结束时一并取消）。
+	restarted = New(ctx, m, config.Paths{Skills: t.TempDir(), Data: t.TempDir(), Base: t.TempDir()})
 	rh := restarted.Handler()
 	loginBody := `{"username":"4ZRECO","password":"admin-password"}`
 	r = httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(loginBody))

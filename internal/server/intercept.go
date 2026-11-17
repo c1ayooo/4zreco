@@ -249,7 +249,12 @@ func (s *Server) interceptCreateRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	rule, err := pg.CreateInterceptRule(req.Name, req.MatchTarget, req.MatchType, req.Pattern, req.Action, req.Message, req.Priority, req.Enabled, req.TimeoutEnabled, req.TimeoutSeconds, req.TimeoutAction)
+	in, err := buildInterceptRuleInput(req)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	rule, err := pg.CreateInterceptRule(in)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -277,7 +282,12 @@ func (s *Server) interceptUpdateRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	rule, err := pg.UpdateInterceptRule(id, req.Name, req.MatchTarget, req.MatchType, req.Pattern, req.Action, req.Message, req.Priority, req.Enabled, req.TimeoutEnabled, req.TimeoutSeconds, req.TimeoutAction)
+	in, err := buildInterceptRuleInput(req)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	rule, err := pg.UpdateInterceptRule(id, in)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -662,17 +672,82 @@ func (s *Server) interceptJudgeUsage(w http.ResponseWriter, r *http.Request) {
 // --- helpers ---
 
 type interceptRuleReq struct {
-	Name           string `json:"name"`
-	Enabled        bool   `json:"enabled"`
-	Priority       int    `json:"priority"`
-	MatchTarget    string `json:"match_target"`
-	MatchType      string `json:"match_type"`
-	Pattern        string `json:"pattern"`
-	Action         string `json:"action"`
-	Message        string `json:"message"`
-	TimeoutEnabled bool   `json:"timeout_enabled"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	TimeoutAction  string `json:"timeout_action"`
+	Name        string `json:"name"`
+	Enabled     bool   `json:"enabled"`
+	Priority    int    `json:"priority"`
+	MatchTarget string `json:"match_target"`
+	MatchType   string `json:"match_type"`
+	// ToolScope 是本规则适用的工具名列表；缺省（nil）表示不修改，空数组表示不限工具。
+	// 用指针区分「没传」与「传了空数组」——否则旧客户端编辑规则时会静默清空范围。
+	ToolScope      *[]string `json:"tool_scope"`
+	Pattern        string    `json:"pattern"`
+	Action         string    `json:"action"`
+	Message        string    `json:"message"`
+	TimeoutEnabled bool      `json:"timeout_enabled"`
+	TimeoutSeconds int       `json:"timeout_seconds"`
+	TimeoutAction  string    `json:"timeout_action"`
+}
+
+const (
+	maxInterceptToolScopeItems = 32
+	maxInterceptToolScopeLen   = 128
+)
+
+// normalizeInterceptToolScope trims, de-duplicates and bounds the tool list.
+// 保留原始顺序；空项直接报错而不是丢弃——静默丢弃会让作者以为规则限定了工具。
+func normalizeInterceptToolScope(in []string) ([]string, error) {
+	if len(in) > maxInterceptToolScopeItems {
+		return nil, fmt.Errorf("tool_scope 最多 %d 项", maxInterceptToolScopeItems)
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, raw := range in {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			return nil, fmt.Errorf("tool_scope 不能包含空项")
+		}
+		if len(s) > maxInterceptToolScopeLen {
+			return nil, fmt.Errorf("tool_scope 单项最长 %d 字符", maxInterceptToolScopeLen)
+		}
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// buildInterceptRuleInput 把请求体转成 db 层入参，顺带归一化 tool_scope。
+// 两个 handler（create/update）共用，避免校验逻辑各写一份后漂移。
+func buildInterceptRuleInput(req interceptRuleReq) (db.InterceptRuleInput, error) {
+	in := db.InterceptRuleInput{
+		Name:           req.Name,
+		MatchTarget:    req.MatchTarget,
+		MatchType:      req.MatchType,
+		Pattern:        req.Pattern,
+		Action:         req.Action,
+		Message:        req.Message,
+		Priority:       req.Priority,
+		Enabled:        req.Enabled,
+		TimeoutEnabled: req.TimeoutEnabled,
+		TimeoutSeconds: req.TimeoutSeconds,
+		TimeoutAction:  req.TimeoutAction,
+	}
+	if req.ToolScope == nil {
+		return in, nil // 未传 → 不修改（Update 时保留库中值）
+	}
+	scope, err := normalizeInterceptToolScope(*req.ToolScope)
+	if err != nil {
+		return in, err
+	}
+	// match_target=tool_name 的规则本来就是按工具名匹配，再限定工具列表没有意义，
+	// 且会让「规则到底作用于谁」出现两个真相，直接拒绝。
+	if req.MatchTarget == "tool_name" && len(scope) > 0 {
+		return in, fmt.Errorf("match_target=tool_name 的规则按工具名匹配，不能再限定 tool_scope")
+	}
+	in.ToolScope, in.ToolScopeSet = scope, true
+	return in, nil
 }
 
 func validateInterceptRuleReq(req interceptRuleReq) error {

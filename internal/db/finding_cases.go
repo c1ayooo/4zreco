@@ -845,9 +845,16 @@ func (d *DB) FindingCaseCandidates(fid int64, page, size int, scope ...[]int64) 
 		assets = []byte("[]")
 	}
 	// Type/asset/name only retrieve candidates; the Reporter must still prove the root cause.
+	// 多键去重联动（finding_keys.go）：共享身份键的记录也进候选——root/cve 强键
+	// 共享是高置信信号，endpoint/param/name/asset_class 弱键共享是低置信提示。
+	keyStrongHit := `EXISTS(SELECT 1 FROM finding_keys k1 JOIN finding_keys k2 ON k2.dedup_key=k1.dedup_key AND k2.finding_id=f.id
+        WHERE k1.finding_id=$2 AND k1.kind IN ('root','cve'))`
+	keyWeakHit := `EXISTS(SELECT 1 FROM finding_keys k1 JOIN finding_keys k2 ON k2.dedup_key=k1.dedup_key AND k2.finding_id=f.id
+        WHERE k1.finding_id=$2 AND k1.kind IN ('name','asset_class','endpoint','param'))`
 	where := ` WHERE f.task_id=$1 AND f.id<>$2 AND NOT EXISTS(SELECT 1 FROM finding_case_blocks b WHERE b.left_id=LEAST(f.id,$2::bigint) AND b.right_id=GREATEST(f.id,$2::bigint))
       AND ((trim($3::text)<>'' AND lower(f.vulnclass)=lower($3)) OR (trim($4::text)<>'' AND lower(f.name)=lower($4))
-        OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(f.asset_ids,'null'::jsonb),'[]'::jsonb)) a WHERE a.value IN(SELECT value FROM jsonb_array_elements($5::jsonb))))`
+        OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(f.asset_ids,'null'::jsonb),'[]'::jsonb)) a WHERE a.value IN(SELECT value FROM jsonb_array_elements($5::jsonb)))
+        OR ` + keyStrongHit + ` OR ` + keyWeakHit + `)`
 	args := []any{*f.TaskID, fid, f.VulnClass, f.Name, string(assets)}
 	if len(scope) > 0 {
 		raw, err := json.Marshal(scope[0])
@@ -860,8 +867,8 @@ func (d *DB) FindingCaseCandidates(fid int64, page, size int, scope ...[]int64) 
 	classHit := `(trim(f.vulnclass)<>'' AND lower(f.vulnclass)=lower($3))`
 	assetHit := `EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(f.asset_ids,'null'::jsonb),'[]'::jsonb)) a WHERE a.value IN (SELECT value FROM jsonb_array_elements($5::jsonb)))`
 	nameHit := `(trim(f.name)<>'' AND lower(f.name)=lower($4))`
-	scoreExpr := fmt.Sprintf(`(CASE WHEN %s THEN 2 ELSE 0 END + CASE WHEN %s THEN 2 ELSE 0 END + CASE WHEN %s THEN 1 ELSE 0 END + CASE WHEN (%s AND %s) THEN 3 ELSE 0 END)`, classHit, assetHit, nameHit, classHit, assetHit)
-	strongExpr := fmt.Sprintf(`(%s AND %s)`, classHit, assetHit)
+	scoreExpr := fmt.Sprintf(`(CASE WHEN %s THEN 2 ELSE 0 END + CASE WHEN %s THEN 2 ELSE 0 END + CASE WHEN %s THEN 1 ELSE 0 END + CASE WHEN (%s AND %s) THEN 3 ELSE 0 END + CASE WHEN %s THEN 4 ELSE 0 END + CASE WHEN %s THEN 1 ELSE 0 END)`, classHit, assetHit, nameHit, classHit, assetHit, keyStrongHit, keyWeakHit)
+	strongExpr := fmt.Sprintf(`((%s AND %s) OR %s)`, classHit, assetHit, keyStrongHit)
 	base := `WITH candidates AS (SELECT f.id,f.name,f.vulnclass,f.severity,left(f.summary,400) AS summary,f.asset_ids,
         COALESCE(m.case_id,0) AS case_id,
         ` + scoreExpr + ` AS score,
@@ -869,7 +876,9 @@ func (d *DB) FindingCaseCandidates(fid int64, page, size int, scope ...[]int64) 
         ARRAY_REMOVE(ARRAY[
             CASE WHEN ` + classHit + ` THEN '同漏洞类型' END,
             CASE WHEN ` + assetHit + ` THEN '资产重叠' END,
-            CASE WHEN ` + nameHit + ` THEN '同名称' END
+            CASE WHEN ` + nameHit + ` THEN '同名称' END,
+            CASE WHEN ` + keyStrongHit + ` THEN '同根因/CVE身份键' END,
+            CASE WHEN ` + keyWeakHit + ` AND NOT ` + keyStrongHit + ` THEN '同弱键(端点/参数/资产)' END
         ]::text[], NULL) AS hit_reasons
         FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id` + where + `)`
 	var total, strongTotal int

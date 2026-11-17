@@ -48,6 +48,103 @@ const emptyForm: FormState = {
   insecure: false,
 };
 
+// 常用 MCP 预设目录（自 Pojun v0.4.56 移植）：一键填充表单，不用手记包名与启动参数。
+// 只收录公开可用的官方/主流实现；依赖缺失时对话框里会提示（如 uvx 需先装 uv）。
+type MCPPreset = {
+  name: string;
+  title: string;
+  description: string;
+  transport: Transport;
+  command?: string;
+  args?: string;
+  url?: string;
+  requires?: string; // 运行前提提示
+};
+
+const mcpPresets: MCPPreset[] = [
+  {
+    name: "playwright",
+    title: "Playwright 浏览器",
+    description: "浏览器自动化：真实渲染页面、截图、读取 DOM、填表单。",
+    transport: "stdio",
+    command: "npx",
+    args: "@playwright/mcp@latest --headless --no-sandbox",
+    requires: "镜像已内置；裸机需 node ≥ 20",
+  },
+  {
+    name: "chrome-devtools",
+    title: "Chrome DevTools",
+    description: "Chrome 原生调试协议：性能追踪、网络请求、控制台与 DOM 检查。",
+    transport: "stdio",
+    command: "npx",
+    args: "chrome-devtools-mcp@latest --headless",
+    requires: "需本机 Chrome/Chromium",
+  },
+  {
+    name: "fetch",
+    title: "Fetch 网页抓取",
+    description: "抓取网页并把正文转成 Markdown 供分析（外部资料、文档）。",
+    transport: "stdio",
+    command: "uvx",
+    args: "mcp-server-fetch",
+    requires: "需 uv（pip install uv）",
+  },
+  {
+    name: "sequential-thinking",
+    title: "Sequential Thinking",
+    description: "分步推理草稿板：把复杂问题拆成可回退的思考链。",
+    transport: "stdio",
+    command: "npx",
+    args: "@modelcontextprotocol/server-sequential-thinking",
+    requires: "需 node ≥ 18",
+  },
+  {
+    name: "memory",
+    title: "Memory 知识库",
+    description: "跨会话持久化的实体/关系记忆（本地 JSON）。",
+    transport: "stdio",
+    command: "npx",
+    args: "@modelcontextprotocol/server-memory",
+    requires: "需 node ≥ 18",
+  },
+  {
+    name: "filesystem",
+    title: "Filesystem 文件访问",
+    description: "读写指定目录下的文件（默认限定任务数据目录）。",
+    transport: "stdio",
+    command: "npx",
+    args: "@modelcontextprotocol/server-filesystem /app/data",
+    requires: "需 node ≥ 18；路径按需修改",
+  },
+  {
+    name: "hexstrike",
+    title: "HexStrike 工具桥",
+    description: "桥接 150+ 安全工具（nmap/sqlmap/metasploit/nuclei/ghidra…），AI 统一调度。",
+    transport: "stdio",
+    command: "python3",
+    args: "mcp-servers/hexstrike-ai/hexstrike_mcp.py --server http://127.0.0.1:5000",
+    requires: "先把 hexstrike-ai 克隆到 mcp-servers/ 并启动 hexstrike_server.py（:5000）",
+  },
+  {
+    name: "fofa",
+    title: "FOFA 资产测绘",
+    description: "按域名/证书/端口/指纹搜资产（内置 one-fox 通道与多账号轮换）。",
+    transport: "stdio",
+    command: "uv",
+    args: "--directory mcp-servers/fofa run python fofa.py",
+    requires: "需 uv（--with-tools 已装）；环境变量填 FOFA_EMAIL/FOFA_KEY",
+  },
+  {
+    name: "context7",
+    title: "Context7 文档检索",
+    description: "按库名检索最新官方文档与用法（写 PoC 时查 API）。",
+    transport: "stdio",
+    command: "npx",
+    args: "@upstash/context7-mcp",
+    requires: "需 node ≥ 18；高频使用可在环境变量填 API_KEY",
+  },
+];
+
 export default function MCPPage() {
   const [servers, setServers] = React.useState<MCPServer[]>([]);
   const [agents, setAgents] = React.useState<Agent[]>([]);
@@ -113,6 +210,22 @@ export default function MCPPage() {
   function openAdd() {
     setEditing(null);
     setForm(emptyForm);
+    setTools([]);
+    setTab("config");
+    setOpen(true);
+  }
+
+  function openPreset(p: MCPPreset) {
+    setEditing(null);
+    setForm({
+      name: p.name,
+      transport: p.transport,
+      command: p.command ?? "",
+      args: p.args ?? "",
+      url: p.url ?? "",
+      env: "",
+      insecure: false,
+    });
     setTools([]);
     setTab("config");
     setOpen(true);
@@ -370,6 +483,35 @@ export default function MCPPage() {
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
       <h1 className="font-semibold text-2xl tracking-tight">MCP</h1>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-baseline gap-2">
+          <h2 className="font-medium text-sm">常用 MCP 预设</h2>
+          <span className="text-muted-foreground text-xs">
+            点击即填充配置，确认后再保存（依赖见每个预设的说明）
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {mcpPresets.map((p) => (
+            <button
+              key={p.name}
+              type="button"
+              onClick={() => openPreset(p)}
+              className="flex flex-col items-start gap-1 rounded-lg border bg-card p-3 text-left transition hover:border-primary/60 hover:shadow-sm"
+            >
+              <span className="flex items-center gap-2 font-medium text-sm">
+                <ServerIcon className="size-4 text-muted-foreground" /> {p.title}
+              </span>
+              <span className="line-clamp-2 text-muted-foreground text-xs leading-relaxed">
+                {p.description}
+              </span>
+              {p.requires ? (
+                <span className="text-[11px] text-muted-foreground/80">{p.requires}</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <button

@@ -5,6 +5,7 @@
 package server
 
 import (
+	"archive/zip"
 	"fmt"
 	"net/http"
 	"os"
@@ -129,12 +130,15 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 		}
 		appendix[ty] = names
 	}
+	// 目标达成情况（v0.6.31 移植）：goal 节点逐条进报告，未全达成时如实标注。
+	goals, _ := t.Store.ListByKind(db.KindGoal, 10000)
 	doc := report.BuildTaskDocx(report.TaskDocxInput{
 		Title:          fmt.Sprintf("渗透测试报告 — %s", t.Description),
 		Goal:           t.Goal,
 		GeneratedAt:    time.Now(),
 		AssetCounts:    counts,
 		Findings:       findings,
+		Goals:          report.GoalLines(goals),
 		AssetNames:     s.reportAssetNames(findings),
 		Retests:        s.reportRetests(findings),
 		Customer:       s.taskCustomerNames(t),
@@ -145,7 +149,7 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 	})
 	name := fmt.Sprintf("4zreco-report-task%s-%s.docx", t.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Content-Disposition", report.AttachmentDisposition(name))
 	w.WriteHeader(200)
 	_ = doc.Encode(w)
 }
@@ -295,7 +299,39 @@ func (s *Server) exportFindingDocx(w http.ResponseWriter, r *http.Request) {
 	})
 	name := fmt.Sprintf("4zreco-finding-%d-%s.docx", f.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Content-Disposition", report.AttachmentDisposition(name))
 	w.WriteHeader(200)
 	_ = doc.Encode(w)
+}
+
+// zipDocxFiles 打包 stage 目录下的 .docx 文件为 zip（批量 Word 导出，
+// 移植自上游 v0.4.48）。成员名已含 finding id，不会重名；读失败/写失败的
+// 成员跳过不阻断整体导出。
+func zipDocxFiles(stage, zipPath string) error {
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer zipFile.Close()
+	zw := zip.NewWriter(zipFile)
+	defer zw.Close()
+	entries, err := os.ReadDir(stage)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".docx") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(stage, e.Name()))
+		if err != nil {
+			continue
+		}
+		f, err := zw.Create(e.Name())
+		if err != nil {
+			continue
+		}
+		_, _ = f.Write(data)
+	}
+	return nil
 }

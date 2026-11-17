@@ -1,0 +1,32 @@
+# macOS（Docker Desktop / OrbStack）专用覆盖配置。
+#
+# 用法（与主 compose 一起生效）：
+#   docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
+#
+# 与 Windows override（docker-compose.windows.yml）解决的是同类问题，但 macOS
+# 有自己的三点差异：
+#
+# 1. data 卷用 named volume：macOS 的 bind mount 走 VirtioFS/gRPC-FUSE，小文件
+#    I/O 同样比容器层慢一个量级（流量记录/证据附件是小文件密集型）——原理与
+#    Windows 的 NTFS bind mount 相同。
+# 2. 回连接收器：容器内 direct 模式解析出的 LHOST 是容器网段 IP，macOS 宿主机
+#    之外的目标连不到。外部目标测试时：出口形态设 manual、地址填
+#    `ipconfig getifaddr en0` 的宿主机局域网 IP，监听端口与下方映射端口 1:1 对应；
+#    Windows 防火墙→macOS 无此概念，但路由器/NAT 网关需要放行对应端口转发。
+# 3. macOS 上 Docker Desktop/OrbStack 都支持 host 网络模式有限，主镜像的
+#    8787 映射保持不变。
+#
+# skills/ 与 nuclei-templates/ 保留 bind mount（前者少量只读文件、后者是
+# 跨重建续用 .git 的模板树，损耗均可接受；改 skill/看模板不用重建镜像）。
+
+services:
+  4zreco:
+    volumes:
+      # 覆盖主 compose 的 ./data:/app/data —— 同 target 时以本文件为准
+      - 4zreco-data-macos:/app/data
+    ports:
+      # 回连端口范围映射（按需增删；manual 模式下 LHOST 填宿主机局域网 IP）：
+      - "4444-4450:4444-4450"
+
+volumes:
+  4zreco-data-macos:

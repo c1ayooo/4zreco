@@ -26,8 +26,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ArtifactDataViewerDialog } from "@/components/artifact-data-viewer";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -36,6 +38,7 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ZoomableImageDialog } from "@/components/zoomable-image-dialog";
 import { api } from "@/lib/api";
 import type {
   AssetInterceptKind,
@@ -1424,6 +1427,10 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
   // v0.4.21：文档预览与筛选。
   const [filter, setFilter] = React.useState<"all" | "image" | "document" | "file">("all");
   const [docPreview, setDocPreview] = React.useState<{ artifact: TaskArtifact; page: number } | null>(null);
+  // v0.4.41 移植：数据文件在线查看（JSON/JSONL/CSV/TSV/文本/zip）。
+  const [dataArtifact, setDataArtifact] = React.useState<TaskArtifact | null>(null);
+  // v0.4.42 移植：主机交叉自动归属。
+  const [autoBinding, setAutoBinding] = React.useState(false);
   const load = React.useCallback(
     (alive: { v: boolean }) =>
       api
@@ -1488,12 +1495,35 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
       setScanning(false);
     }
   };
+  // 主机交叉自动归属：证据 name/note/source_url 里的域名与漏洞文本求交集，
+  // 唯一命中才绑定，歧义跳过。绑定后可随时手动改回任务级。
+  const autoBind = async () => {
+    setAutoBinding(true);
+    try {
+      const r = await api.autobindTaskArtifacts(taskId);
+      if (r.bound > 0) {
+        toast.success(`已自动归属 ${r.bound} 项（跳过 ${r.skipped} 项歧义/无匹配）`);
+      } else {
+        toast.info(`没有可自动归属的证据（跳过 ${r.skipped} 项歧义/无匹配）`);
+      }
+      await load({ v: true });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setAutoBinding(false);
+    }
+  };
   const images = list.filter((a) => a.kind === "image");
   const isDoc = (a: TaskArtifact) =>
     ["document", "spreadsheet", "presentation", "pdf"].includes(a.kind) ||
     /\.(docx?|xlsx?|pptx?|pdf|odt|ods|odp|csv|rtf)$/i.test(a.name);
   const documents = list.filter((a) => a.kind !== "image" && isDoc(a));
   const files = list.filter((a) => a.kind !== "image" && !isDoc(a));
+  // 数据文件在线查看（v0.4.41 移植）：JSON/JSONL/CSV/TSV→表格、zip/gzip 解包、
+  // 其余→文本；与后端 serveArtifactDataPreview 的解析能力对齐。
+  const isDataArtifact = (a: TaskArtifact) =>
+    ["data", "log", "html", "other"].includes(a.kind) ||
+    /\.(json|jsonl|ndjson|tsv|txt|log|xml|ya?ml|sql|html?|gz|zip)$/i.test(a.name);
   const docLabel = (a: TaskArtifact) => {
     const ext = (a.name.split(".").pop() || "").toLowerCase();
     if (["doc", "docx", "odt", "rtf"].includes(ext) || a.kind === "document") return "Word";
@@ -1550,6 +1580,11 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
               <Button size="sm" variant="ghost" disabled={scanning} onClick={() => void scan()}>
                 {scanning ? "扫描中…" : "扫描补登记"}
               </Button>
+              {list.some((a) => !a.finding_id && (a.kind === "data" || a.kind === "log")) && (
+                <Button size="sm" variant="ghost" disabled={autoBinding} onClick={() => void autoBind()}>
+                  {autoBinding ? "归属中…" : "自动归属漏洞"}
+                </Button>
+              )}
               {list.length > 0 && (
                 <>
                   <Button size="sm" variant="outline" onClick={() => setExpanded((v) => !v)}>
@@ -1748,6 +1783,11 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
                       <span className="shrink-0 text-muted-foreground text-xs">#{a.finding_id}</span>
                     ) : null}
                     <span className="shrink-0 text-muted-foreground text-xs">{fmtSize(a.size_bytes)}</span>
+                    {isDataArtifact(a) && (
+                      <Button size="sm" variant="ghost" onClick={() => setDataArtifact(a)}>
+                        查看
+                      </Button>
+                    )}
                     <Button size="sm" variant="ghost" asChild>
                       <a href={downloadUrl(a.id)}>下载</a>
                     </Button>
@@ -1758,88 +1798,76 @@ function TaskArtifactsCard({ taskId }: { taskId: string }) {
           </CardContent>
         )}
       </Card>
-      <Dialog
+      <ZoomableImageDialog
         open={!!preview}
-        onOpenChange={(o) => {
-          if (!o) setPreview(null);
-        }}
-      >
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle className="break-all text-base">{preview?.note || preview?.name}</DialogTitle>
-          </DialogHeader>
-          {preview && (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={fullUrl(preview.id)}
-                alt={preview.note || preview.name}
-                className="mx-auto max-h-[68vh] w-auto max-w-full rounded object-contain"
-              />
-              <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
-                <span className="break-all">
-                  {preview.name} · {fmtSize(preview.size_bytes)}
-                  {preview.finding_id ? ` · 漏洞 #${preview.finding_id}` : ""}
-                </span>
-                <Button size="sm" variant="outline" asChild>
-                  <a href={downloadUrl(preview.id)}>下载原件</a>
+        onClose={() => setPreview(null)}
+        src={preview ? fullUrl(preview.id) : ""}
+        title={preview?.note || preview?.name || ""}
+        description={
+          preview
+            ? `${preview.name} · ${fmtSize(preview.size_bytes)}${preview.finding_id ? ` · 漏洞 #${preview.finding_id}` : ""}`
+            : undefined
+        }
+        downloadUrl={preview ? downloadUrl(preview.id) : undefined}
+      />
+      <ZoomableImageDialog
+        open={!!docPreview}
+        onClose={() => setDocPreview(null)}
+        src={docPreview ? previewUrl(docPreview.artifact.id, docPreview.page) : ""}
+        title={docPreview?.artifact.note || docPreview?.artifact.name || ""}
+        description={
+          docPreview
+            ? `${docPreview.artifact.name} · 第 ${docPreview.page} / ${docPreview.artifact.preview_pages ?? 0} 页${docPreview.artifact.finding_id ? ` · 漏洞 #${docPreview.artifact.finding_id}` : ""}`
+            : undefined
+        }
+        downloadUrl={docPreview ? downloadUrl(docPreview.artifact.id) : undefined}
+        footer={
+          docPreview ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
+              <span>翻页时缩放自动还原；也可滚轮放大细看当前页。</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={docPreview.page <= 1}
+                  onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page - 1 } : cur))}
+                >
+                  <ChevronLeftIcon className="size-3.5" /> 上一页
+                </Button>
+                <NativeSelect
+                  size="sm"
+                  value={String(docPreview.page)}
+                  onChange={(e) => {
+                    const p = Number(e.target.value);
+                    if (p >= 1) setDocPreview((cur) => (cur ? { ...cur, page: p } : cur));
+                  }}
+                  aria-label="跳转到页"
+                >
+                  {Array.from({ length: Math.max(1, docPreview.artifact.preview_pages ?? 1) }, (_, i) => (
+                    <NativeSelectOption key={i + 1} value={String(i + 1)}>
+                      第 {i + 1} 页
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={docPreview.page >= (docPreview.artifact.preview_pages ?? 1)}
+                  onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page + 1 } : cur))}
+                >
+                  下一页 <ChevronRightIcon className="size-3.5" />
                 </Button>
               </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={!!docPreview}
-        onOpenChange={(o) => {
-          if (!o) setDocPreview(null);
-        }}
-      >
-        <DialogContent className="max-w-6xl">
-          <DialogHeader>
-            <DialogTitle className="break-all text-base">
-              {docPreview?.artifact.note || docPreview?.artifact.name}
-            </DialogTitle>
-          </DialogHeader>
-          {docPreview && (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={previewUrl(docPreview.artifact.id, docPreview.page)}
-                alt={`${docPreview.artifact.name} 第 ${docPreview.page} 页`}
-                className="mx-auto max-h-[70vh] w-auto max-w-full rounded border object-contain"
-              />
-              <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
-                <span className="break-all">
-                  {docPreview.artifact.name} · 第 {docPreview.page} / {docPreview.artifact.preview_pages ?? 0} 页
-                  {docPreview.artifact.finding_id ? ` · 漏洞 #${docPreview.artifact.finding_id}` : ""}
-                </span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={docPreview.page <= 1}
-                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page - 1 } : cur))}
-                  >
-                    <ChevronLeftIcon className="size-3.5" /> 上一页
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={docPreview.page >= (docPreview.artifact.preview_pages ?? 1)}
-                    onClick={() => setDocPreview((cur) => (cur ? { ...cur, page: cur.page + 1 } : cur))}
-                  >
-                    下一页 <ChevronRightIcon className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="outline" asChild>
-                    <a href={downloadUrl(docPreview.artifact.id)}>下载原件</a>
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+            </div>
+          ) : null
+        }
+      />
+      <ArtifactDataViewerDialog
+        taskId={taskId}
+        artifact={dataArtifact}
+        open={!!dataArtifact}
+        onClose={() => setDataArtifact(null)}
+      />
     </>
   );
 }

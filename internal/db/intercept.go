@@ -11,12 +11,15 @@ import (
 
 // InterceptRule is one row of intercept_rules.
 type InterceptRule struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	Enabled        bool      `json:"enabled"`
-	Priority       int       `json:"priority"`
-	MatchTarget    string    `json:"match_target"`
-	MatchType      string    `json:"match_type"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Enabled     bool   `json:"enabled"`
+	Priority    int    `json:"priority"`
+	MatchTarget string `json:"match_target"`
+	MatchType   string `json:"match_type"`
+	// ToolScope 限定本条规则对哪些工具生效；空切片 = 不限工具（默认，与旧行为等价）。
+	// 仅对 match_target=tool_input 有实际意义（上游 0.4.81 PR #26）。
+	ToolScope      []string  `json:"tool_scope"`
 	Pattern        string    `json:"pattern"`
 	Action         string    `json:"action"`
 	Message        string    `json:"message"`
@@ -25,6 +28,29 @@ type InterceptRule struct {
 	TimeoutAction  string    `json:"timeout_action"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// InterceptRuleInput carries every editable field of an intercept rule.
+//
+// 用结构体而不是位置参数：可写字段有十来个且类型高度重合，位置参数一旦
+// 顺序写错编译器不报错，而每新增一个字段都要改遍所有调用点。结构体让
+// 「加字段」只影响构造它的那一处。
+type InterceptRuleInput struct {
+	Name        string
+	MatchTarget string
+	MatchType   string
+	ToolScope   []string
+	// ToolScopeSet 为 true 表示本次要写 tool_scope（可以是空切片＝清空）；
+	// false 表示保留库中既有值。仅在 Update 有意义——Create 总是使用 ToolScope。
+	ToolScopeSet   bool
+	Pattern        string
+	Action         string
+	Message        string
+	Priority       int
+	Enabled        bool
+	TimeoutEnabled bool
+	TimeoutSeconds int
+	TimeoutAction  string
 }
 
 // InterceptPending is one row of v_intercept (审批请求 + 视图计算的 status)。
@@ -48,15 +74,30 @@ type InterceptPending struct {
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
-const interceptRuleCols = `id, name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action, created_at, updated_at`
+const interceptRuleCols = `id, name, enabled, priority, match_target, match_type, tool_scope, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action, created_at, updated_at`
 
 func scanInterceptRule(row interface{ Scan(...any) error }) (InterceptRule, error) {
 	var r InterceptRule
+	var scopeRaw []byte
 	err := row.Scan(&r.ID, &r.Name, &r.Enabled, &r.Priority,
-		&r.MatchTarget, &r.MatchType, &r.Pattern, &r.Action, &r.Message,
+		&r.MatchTarget, &r.MatchType, &scopeRaw, &r.Pattern, &r.Action, &r.Message,
 		&r.TimeoutEnabled, &r.TimeoutSeconds, &r.TimeoutAction,
 		&r.CreatedAt, &r.UpdatedAt)
-	return r, err
+	if err != nil {
+		return r, err
+	}
+	// tool_scope 存 JSON 数组。值异常（手工改库、非数组、非法 JSON）时按「不限工具」
+	// 处理并归零：让这条规则继续可用，好过整个规则集加载失败。
+	if len(scopeRaw) > 0 {
+		var scope []string
+		if json.Unmarshal(scopeRaw, &scope) == nil && scope != nil {
+			r.ToolScope = scope
+		}
+	}
+	if r.ToolScope == nil {
+		r.ToolScope = []string{}
+	}
+	return r, nil
 }
 
 // ListInterceptRules returns all rules ordered by priority DESC then id.
@@ -77,26 +118,46 @@ func (d *DB) ListInterceptRules() ([]InterceptRule, error) {
 	return out, rows.Err()
 }
 
+// toolScopeJSON serializes a rule's tool scope for the JSONB column.
+// nil/empty → "[]"（不限工具），与加列前行为一致。
+func toolScopeJSON(scope []string) string {
+	if len(scope) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(scope)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
 // CreateInterceptRule inserts a new rule.
-func (d *DB) CreateInterceptRule(name, matchTarget, matchType, pattern, action, message string, priority int, enabled bool, timeoutEnabled bool, timeoutSeconds int, timeoutAction string) (InterceptRule, error) {
+func (d *DB) CreateInterceptRule(in InterceptRuleInput) (InterceptRule, error) {
 	row := d.QueryRow(`
-INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO intercept_rules(name, enabled, priority, match_target, match_type, tool_scope, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)
 RETURNING `+interceptRuleCols,
-		name, enabled, priority, matchTarget, matchType, pattern, action, message, timeoutEnabled, timeoutSeconds, timeoutAction)
+		in.Name, in.Enabled, in.Priority, in.MatchTarget, in.MatchType, toolScopeJSON(in.ToolScope),
+		in.Pattern, in.Action, in.Message, in.TimeoutEnabled, in.TimeoutSeconds, in.TimeoutAction)
 	return scanInterceptRule(row)
 }
 
 // UpdateInterceptRule replaces all editable fields of an existing rule.
-func (d *DB) UpdateInterceptRule(id int64, name, matchTarget, matchType, pattern, action, message string, priority int, enabled bool, timeoutEnabled bool, timeoutSeconds int, timeoutAction string) (InterceptRule, error) {
+// tool_scope 走 presence 语义：ToolScopeSet=false 时保留库中值，避免旧客户端
+// 编辑一次就把范围清空。
+func (d *DB) UpdateInterceptRule(id int64, in InterceptRuleInput) (InterceptRule, error) {
 	row := d.QueryRow(`
 UPDATE intercept_rules
    SET name=$2, enabled=$3, priority=$4, match_target=$5,
-       match_type=$6, pattern=$7, action=$8, message=$9,
-       timeout_enabled=$10, timeout_seconds=$11, timeout_action=$12
+       match_type=$6,
+       tool_scope = CASE WHEN $7 THEN $8::jsonb ELSE tool_scope END,
+       pattern=$9, action=$10, message=$11,
+       timeout_enabled=$12, timeout_seconds=$13, timeout_action=$14
 WHERE id=$1
 RETURNING `+interceptRuleCols,
-		id, name, enabled, priority, matchTarget, matchType, pattern, action, message, timeoutEnabled, timeoutSeconds, timeoutAction)
+		id, in.Name, in.Enabled, in.Priority, in.MatchTarget, in.MatchType,
+		in.ToolScopeSet, toolScopeJSON(in.ToolScope),
+		in.Pattern, in.Action, in.Message, in.TimeoutEnabled, in.TimeoutSeconds, in.TimeoutAction)
 	return scanInterceptRule(row)
 }
 

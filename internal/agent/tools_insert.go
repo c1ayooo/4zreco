@@ -702,6 +702,9 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		// list_findings 保留：报漏洞前先查本任务已确认漏洞，避免重复上报同一漏洞。
 		t.listFindings(),
 		t.addFinding(), t.recordFact(),
+		// evidence_check（上游 0.4.71 全量危害验证协议）：上报前主动复核证据能否
+		// 支撑危害结论并过 SRC 验收（13 项清单+missing 补齐建议，只读不阻断）。
+		t.evidenceCheck(),
 		// record_intelligence（C2，移植自 ARTEX）：凭据/线索/敏感数据结构化写库——
 		// 写库工具走 writeTool；可用性由 intelligenceWorkflow 按 settings 开关动态增删。
 		t.recordIntelligence(),
@@ -739,6 +742,19 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
+		// js_audit（v0.4.64 批次）：SPA/webpack 前端源码泄露审计——sourcemap 还原=
+		// 原始源码+密钥+接口清单，CWE-540。
+		t.jsAudit(),
+		// 原生 HTTP 执行器 + 会话复用（v0.4.64 批次）：直接发请求拿结构化结果，
+		// 登录态进任务级 cookie jar 跨意图复用——「登录→越权→回读」成为基本能力。
+		t.httpRequest(), t.sessionLogin(),
+		// PoC 脚手架（v0.4.64 批次）：按类别生成可运行的验证骨架。
+		t.pocScaffold(),
+		// 任务级后台作业（v0.4.64 批次）：长扫描跨意图存活；任务暂停/删除时由
+		// KillJobsForTaskDir 收尸（server 接线）。
+		t.jobStart(), t.jobStatus(), t.jobOutput(), t.jobStop(),
+		// 任务级共享脚本（v0.4.64 批次）：登录脚本/PoC 跨意图复用。
+		t.saveScript(), t.runScript(),
 		// save_evidence / list_artifacts：证据附件（v0.5.0）——截图/数据样本/日志
 		// 落盘登记，随报告导出证据包；报告里用 ![说明](artifact:<id>) 引用。
 		t.saveEvidence(), t.listArtifacts(),
@@ -759,7 +775,7 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		// list_worker_traces：work 索引（intent_id+summary+state），先发现再看
 		// get_worker_trace——planner/main 的跨 work 复盘入口（worker 不给，见下）。
 		t.listWorkerTraces(),
-		t.getWorkerOutput(), t.getWorkerTrace(), t.searchAllWorkerTraces(), t.addHint(), t.addIntent(),
+		t.getWorkerOutput(), t.getWorkerTrace(), t.searchAllWorkerTraces(), t.addHint(), t.addIntent(), t.retireIntent(),
 		// steer_work：人可对某条正在运行的意图(work)实时注入纠偏指令（不打断、不丢进展）。
 		t.steerWorkTool(),
 		// set_goals：人可在运行时给本任务补一个新的最终目标（规划者据此重判是否达成）。
@@ -769,6 +785,8 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		// asset management (handlers guard nil store internally)
 		t.insertAssets(), t.addCompanyScope(), t.listAssets(),
 		t.addFinding(), t.recordFact(), t.recordIntelligence(),
+		// evidence_check（上游 0.4.71 全量危害验证协议）：证据复核只读工具（同 worker）。
+		t.evidenceCheck(),
 		t.addTaskScope(),
 		// list_untested_assets：按需查本任务范围内未测资产(类型+分页)，自行决定补测。
 		t.listUntestedAssets(),
@@ -792,6 +810,11 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
+		// js_audit（v0.4.64 批次）：SPA/webpack 源码泄露审计（mainagent 与 worker 同款）。
+		t.jsAudit(),
+		// 原生 HTTP 执行器 + 会话复用（v0.4.64 批次）：与 worker 同款；主控人工验证
+		// 接口/登录态时一次调用拿结构化结果，不再手搬 cookie。
+		t.httpRequest(), t.sessionLogin(),
 	}
 	// finding_cases 归并七件套（C1）：主控会话可检索/归并重复上报。
 	return append(tools, t.FindingCaseTools()...)

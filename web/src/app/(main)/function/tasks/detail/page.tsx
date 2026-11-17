@@ -14,6 +14,7 @@ import {
   FolderKanbanIcon,
   PauseIcon,
   PlayIcon,
+  RocketIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -84,6 +85,49 @@ function taskProfileIDs(task: Task): string[] {
     return task.llm_profile_ids.map(String);
   }
   return task.llm_profile_id ? [String(task.llm_profile_id)] : [];
+}
+
+// AutopilotToggle 是任务详情页的「自主推进」开关（P4-4）：开启 = 停滞看门狗 +
+// 完成优先 + goal_met 自动续杯。开启时若任务暂停/排队会一并恢复（resume=true）。
+function AutopilotToggle({ task, onUpdated }: { task: Task; onUpdated: () => void }) {
+  const [busy, setBusy] = React.useState(false);
+  const on = task.autopilot === true;
+  const terminal = ["done", "failed", "timeout"].includes(task.status);
+  async function toggle() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.setTaskAutopilot(task.id, !on, !on);
+      toast.success(!on ? "已开启自主推进（完成优先，停滞自动唤醒）" : "已关闭自主推进");
+      onUpdated();
+    } catch (e) {
+      toast.error(`操作失败：${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="sm"
+          variant={on ? "default" : "outline"}
+          disabled={busy || (terminal && !on)}
+          onClick={toggle}
+        >
+          {busy ? <Spinner /> : <RocketIcon data-icon="inline-start" />}
+          自主推进
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {terminal && !on
+          ? "任务已结束，先复跑意图或新增目标后再开启"
+          : on
+            ? "自主推进中：点击关闭"
+            : "开启后系统自主推进：停滞唤醒、连续停滞自动延长 deadline、目标达成且有未测资产/高危漏洞时自动续杯"}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function TaskLLMControl({ task, profiles, onUpdated }: { task: Task; profiles: LLMProfile[]; onUpdated: () => void }) {
@@ -440,6 +484,7 @@ function TaskDetailInner() {
             </Badge>
           )}
           <Separator orientation="vertical" className="mx-1 hidden h-4 sm:block" />
+          <AutopilotToggle task={task} onUpdated={load} />
           <TaskLLMControl task={task} profiles={profiles} onUpdated={load} />
           <StatusBadge domain={terminal ? "task" : "engine"} value={terminal ? task.status : engineMode} dot />
           {canArchive ? (
@@ -514,7 +559,7 @@ function TaskDetailInner() {
           <FindingsTab taskId={id} />
         </TabsContent>
         <TabsContent value="retests" className="mt-0">
-          <RetestsTab key={id} taskId={id} />
+          <RetestsTab key={id} taskId={id} taskStatus={task?.status} />
         </TabsContent>
         <TabsContent value="assets" className="mt-0">
           <AssetsTab taskId={id} />

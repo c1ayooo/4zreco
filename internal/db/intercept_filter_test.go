@@ -47,7 +47,11 @@ func TestInterceptApprovalFilters(t *testing.T) {
 	other := scope + "-other"
 	t.Cleanup(func() { rewindChainHeadToSurvivors(t, d) })
 	t.Cleanup(func() { purgeInterceptRows(t, d, scope); purgeInterceptRows(t, d, other) })
-	rule, err := d.CreateInterceptRule("filter fixture", "tool_name", "string", "Bash", "deny", "fixture", 1, true, false, 0, "deny")
+	rule, err := d.CreateInterceptRule(InterceptRuleInput{
+		Name: "filter fixture", MatchTarget: "tool_name", MatchType: "string",
+		Pattern: "Bash", Action: "deny", Message: "fixture", Priority: 1, Enabled: true,
+		TimeoutEnabled: false, TimeoutSeconds: 0, TimeoutAction: "deny",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

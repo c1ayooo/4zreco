@@ -1055,7 +1055,7 @@ export default function TasksPage() {
                   </EmptyHeader>
                 </Empty>
               ) : (
-                <Table className="table-fixed">
+                <Table className="min-w-[80rem] table-fixed">
                   <TableHeader className="[&_tr]:border-t">
                     <TableRow>
                       <TableHead className="w-10">
@@ -1070,7 +1070,7 @@ export default function TasksPage() {
                         label="ID"
                         activeField={sortField}
                         direction={sortDirection}
-                        className="hidden font-mono xl:table-cell"
+                        className="font-mono"
                         onSort={sortTasksBy}
                       />
                       <TableHead
@@ -1087,7 +1087,7 @@ export default function TasksPage() {
                         />
                       </TableHead>
                       <TableHead
-                        className="relative hidden xl:table-cell"
+                        className="relative"
                         style={columnWidths.remark ? { width: columnWidths.remark } : undefined}
                       >
                         备注
@@ -1098,7 +1098,7 @@ export default function TasksPage() {
                         />
                       </TableHead>
                       <TableHead
-                        className="relative hidden sm:table-cell"
+                        className="relative"
                         style={columnWidths.description ? { width: columnWidths.description } : undefined}
                       >
                         描述
@@ -1109,7 +1109,7 @@ export default function TasksPage() {
                         />
                       </TableHead>
                       <TableHead
-                        className="relative hidden lg:table-cell"
+                        className="relative"
                         style={columnWidths.goal ? { width: columnWidths.goal } : undefined}
                       >
                         目标
@@ -1126,18 +1126,17 @@ export default function TasksPage() {
                         direction={sortDirection}
                         onSort={sortTasksBy}
                       />
-                      <TableHead className="hidden text-center 2xl:table-cell">目标进度</TableHead>
-                      <TableHead className="hidden text-center lg:table-cell" title="严重 / 高 / 中 / 低">
+                      <TableHead className="text-center">目标进度</TableHead>
+                      <TableHead className="text-center" title="严重 / 高 / 中 / 低">
                         漏洞
                       </TableHead>
-                      <TableHead className="hidden text-center 2xl:table-cell">运行中 Worker</TableHead>
+                      <TableHead className="text-center">运行中 Worker</TableHead>
                       <SortableTaskHead
                         field="created"
                         label="创建时间"
                         activeField={sortField}
                         direction={sortDirection}
                         align="right"
-                        className="hidden md:table-cell"
                         onSort={sortTasksBy}
                       />
                       <SortableTaskHead
@@ -1146,11 +1145,10 @@ export default function TasksPage() {
                         activeField={sortField}
                         direction={sortDirection}
                         align="right"
-                        className="hidden 2xl:table-cell"
                         onSort={sortTasksBy}
                       />
                       <TableHead
-                        className="relative hidden text-right 2xl:table-cell"
+                        className="relative text-right"
                         style={columnWidths.token ? { width: columnWidths.token } : undefined}
                         title="Token 入/缓存/输出"
                       >
@@ -1444,7 +1442,7 @@ const TaskRow = React.memo(function TaskRow({
           aria-label={`选择任务 ${task.id}`}
         />
       </TableCell>
-      <TableCell className="hidden xl:table-cell">
+      <TableCell>
         <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{task.id}</code>
       </TableCell>
       <TableCell className="font-medium">
@@ -1466,14 +1464,14 @@ const TaskRow = React.memo(function TaskRow({
           )}
         </div>
       </TableCell>
-      <TableCell className="hidden xl:table-cell">
+      <TableCell>
         <RemarkEditor
           value={task.remark ?? ""}
           label={`任务 #${task.id}`}
           onSave={(remark) => onRemark(task, remark)}
         />
       </TableCell>
-      <TableCell className="hidden text-muted-foreground sm:table-cell">
+      <TableCell className="text-muted-foreground">
         <Link
           href={`/function/tasks/detail?id=${encodeURIComponent(task.id)}`}
           className="block truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1482,20 +1480,20 @@ const TaskRow = React.memo(function TaskRow({
           {task.description}
         </Link>
       </TableCell>
-      <TableCell className="hidden max-w-40 truncate text-muted-foreground lg:table-cell" title={task.goal}>
+      <TableCell className="max-w-40 truncate text-muted-foreground" title={task.goal}>
         {task.goal}
       </TableCell>
       <TableCell>
         <StatusBadge domain="task" value={task.status} dot />
       </TableCell>
-      <TableCell className="hidden text-center text-muted-foreground text-xs tabular-nums 2xl:table-cell">
+      <TableCell className="text-center text-muted-foreground text-xs tabular-nums">
         {typeof task.goals_total === "number" && task.goals_total > 0 ? (
           `${task.goals_met}/${task.goals_total}`
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
-      <TableCell className="hidden text-center text-xs tabular-nums lg:table-cell">
+      <TableCell className="text-center text-xs tabular-nums">
         {(() => {
           const f = task.findings;
           const total = f ? f.critical + f.high + f.medium + f.low : 0;
@@ -1514,7 +1512,7 @@ const TaskRow = React.memo(function TaskRow({
           );
         })()}
       </TableCell>
-      <TableCell className="hidden text-center text-xs tabular-nums 2xl:table-cell">
+      <TableCell className="text-center text-xs tabular-nums">
         {task.in_flight && task.in_flight > 0 ? (
           <span className="font-medium text-foreground">{task.in_flight}</span>
         ) : task.status === "running" && taskStalled(task, nowSec) ? (
@@ -1537,10 +1535,10 @@ const TaskRow = React.memo(function TaskRow({
           <span className="text-muted-foreground">0</span>
         )}
       </TableCell>
-      <TableCell className="hidden whitespace-nowrap text-right text-muted-foreground text-xs tabular-nums md:table-cell">
+      <TableCell className="whitespace-nowrap text-right text-muted-foreground text-xs tabular-nums">
         {fmtDateTime(task.created_unix)}
       </TableCell>
-      <TableCell className="hidden whitespace-nowrap text-right text-xs tabular-nums 2xl:table-cell">
+      <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
         {(() => {
           const secs = taskDuration(task, nowSec);
           if (secs <= 0) return <span className="text-muted-foreground">—</span>;
@@ -1552,7 +1550,7 @@ const TaskRow = React.memo(function TaskRow({
         })()}
       </TableCell>
       <TableCell
-        className="hidden whitespace-nowrap text-right text-xs tabular-nums 2xl:table-cell"
+        className="whitespace-nowrap text-right text-xs tabular-nums"
         title={
           task.tokens
             ? `输入 ${task.tokens.input_tokens} · 缓存 ${task.tokens.cache_read_tokens} · 输出 ${task.tokens.output_tokens}`

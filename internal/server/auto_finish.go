@@ -190,6 +190,12 @@ func (e *Engine) maybePendingSettle(ctx context.Context, t *Task) bool {
 	if reason == "" {
 		return false
 	}
+	// 自主推进否决窗口（P4-4）：抑制「没进展」类判据（auto_idle/auto_coverage/
+	// auto_rounds）并清掉登记继续规划；goal_met 先尝试续杯——续上了就撤销收尾。
+	// 返回 false = 本次不收尾。
+	if e.maybePendingSettleAutopilot(t, reason) {
+		return false
+	}
 	if e.IsPaused(t.ID) || e.IsDeleting(t.ID) || e.isSettling(t.ID) || t.Store == nil {
 		return false
 	}
@@ -199,6 +205,23 @@ func (e *Engine) maybePendingSettle(ctx context.Context, t *Task) bool {
 	if reason != "auto_rounds" && reason != "no_result" {
 		active, err := t.Store.HasActiveIntent()
 		if err != nil || active {
+			return false
+		}
+	}
+	// 上游 0.4.81 #27：goal_met 是 planner 基于「当时」的目标集下的判定，而新增目标
+	// 先落库、再由 NotifyGoal 追加内存触发，两者之间有窗口；按旧目标集收尾会把刚加
+	// 的目标连同任务一起终结。消费前按数据库复核一次：目标集扩大 → 撤销挂起收尾，
+	// 交回规划轮重判。4zreco 与上游的差异：goal_met 允许「整体声称」收官（未 prove
+	// 的目标打 unverified 留痕、state 仍 open），所以不能照搬上游「仍有 open 目标即
+	// 撤销」，以「目标集是否扩大」为准；快照失败时放行（fresh-direction trigger 守卫
+	// 仍覆盖绝大多数新增窗口）。
+	if reason == "goal_met" {
+		if grown, ok := t.settleGoalSetGrown(); ok && grown {
+			t.clearSettle()
+			if err := e.m.pg.ResetTaskProgress(t.ID); err != nil {
+				log.Printf("[auto-finish] task %s 目标集变化重置进度失败: %v", t.ID, err)
+			}
+			log.Printf("[settle] task %s 撤销 goal_met 收尾：目标集已变化（新增目标），交回规划轮重判", t.ID)
 			return false
 		}
 	}

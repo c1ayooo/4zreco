@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -517,10 +518,20 @@ func (t *ToolSet) diffResponses() actool.CoreTool {
 	)
 }
 
+// maxResponseFileBytes 是差分文件模式的单文件读取上限（16MB）。
+//
+// 防两类失控：/dev/zero、FIFO、超大日志让服务无界读进内存（OOM）。
+const maxResponseFileBytes = 16 << 20
+
 // readResponseFile 读一个响应文件，返回（响应体, 状态码）。
 //
 // 容错：文件若是 `curl -i` 保存的完整响应（含 HTTP 头），剥掉头部、
 // 从状态行取状态码。若模型显式给了状态码，以它为准。
+//
+// 只读普通文件 + 16MB 上限：/dev/zero 这类字符设备、FIFO、被刷爆的
+// 日志文件不再被整个读进内存。先 Stat 判类型再打开——open(2) 一个
+// 无写端的 FIFO 会阻塞到有写端出现，Stat 永远执行不到，所以防挂死
+// 的检查必须发生在打开之前；打开后再取一次 Stat 兜底（防 TOCTOU）。
 func readResponseFile(workDir, p string) (string, int, error) {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -533,9 +544,33 @@ func readResponseFile(workDir, p string) (string, int, error) {
 		}
 		full = filepath.Join(workDir, p)
 	}
-	b, err := os.ReadFile(full)
+	// 先 Stat 判类型再打开：open(2) 一个无写端的 FIFO 会阻塞到有写端出现，
+	// Stat 永远执行不到——防挂死的检查必须发生在打开之前。
+	if st, err := os.Stat(full); err == nil && !st.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("%q 不是普通文件，拒绝读取", p)
+	}
+	f, err := os.Open(full)
 	if err != nil {
 		return "", 0, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	if !st.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("%q 不是普通文件，拒绝读取", p)
+	}
+	if st.Size() > maxResponseFileBytes {
+		return "", 0, fmt.Errorf("响应文件过大（%d 字节，上限 %d）：请截取相关部分再比较", st.Size(), maxResponseFileBytes)
+	}
+	// LimitReader 兜底：Stat 与实际读之间文件可能被并发追加，按字节硬截断。
+	b, err := io.ReadAll(io.LimitReader(f, maxResponseFileBytes+1))
+	if err != nil {
+		return "", 0, err
+	}
+	if len(b) > maxResponseFileBytes {
+		return "", 0, fmt.Errorf("响应文件超过 %d 字节上限", maxResponseFileBytes)
 	}
 	body, status := stripHTTPHeader(string(b))
 	return body, status, nil

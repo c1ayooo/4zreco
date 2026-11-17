@@ -33,6 +33,8 @@ type TaskDocxInput struct {
 	TestWindow string
 	// AppendixAssets 附录资产清单：类型 → 可读名列表（A16；nil = 无附录）。
 	AppendixAssets map[string][]string
+	// Goals 任务目标逐条达成情况（goals.go；nil = 报告省略该节）。
+	Goals []GoalLine
 	// Classification 密级/用途占位（空 = 默认「内部资料 · 仅限授权方」）。A12
 	Classification string
 	// PageHeader 页眉文字（空 = 「渗透测试报告」）。
@@ -142,6 +144,25 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 	if in.Goal != "" {
 		d.H2("任务目标")
 		d.P(in.Goal)
+	}
+	// 目标达成情况（移植自上游 v0.6.31）：逐条列出是否被证明，未全部达成时明确标注。
+	if len(in.Goals) > 0 {
+		met, total := GoalTally(in.Goals)
+		d.H2("目标达成情况")
+		if met < total {
+			d.P(fmt.Sprintf("共 %d 个任务目标，已证明达成 %d 个；未达成目标如实记录，本次任务按「未完成」归档。", total, met))
+		} else {
+			d.P(fmt.Sprintf("共 %d 个任务目标，全部已由可复现证据证明达成。", total))
+		}
+		rows := make([][]string, 0, len(in.Goals))
+		for _, g := range in.Goals {
+			state := "未达成"
+			if g.Met() {
+				state = "已达成"
+			}
+			rows = append(rows, []string{g.Text, state, nz(g.Criteria, "—")})
+		}
+		d.Table([]string{"目标", "状态", "验收标准"}, rows)
 	}
 	d.H2("测试窗口")
 	if in.TestWindow != "" {

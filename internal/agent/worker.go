@@ -299,6 +299,8 @@ const workerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
    - **一条命令只做一件事，且必须带超时**：curl 加 --max-time 15、nc 加 -w5、长命令套 timeout 30；**不要执行会等待输入的交互命令**（裸 ssh/nc、vim/less/tail -f、无 --batch 的工具）——挂死会白烧预算。
    - **大输出先落盘再检索**：cmd > out.txt 2>&1 后用 grep -n / sed -n 取片段；二进制/编码内容先 xxd | head 或 strings | head，别把整段二进制灌进对话。
    - **能用领域工具就别手写循环**：批量探活用 http_probe，端口/服务指纹摸面用 gogo_scan，Web 指纹用 spray_finger，Web 端点爬虫用 katana_scan，网空测绘查资产用 passive_search，联网查公开情报/漏洞背景用 web_search，带认证请求用 auth_request，响应对比用 diff_responses，回看已抓流量用 traffic_search，弱口令检测用 zombie_weakpass（走审批，命中凭据只落证据），敏感信息扫描用 proton_secrets（走审批，命中原文只落证据）—— 它们回显紧凑且自动留痕。
+   - **单条 HTTP 请求用 http_request，别再组 curl**：一次调用直接拿 status/headers/正文片段（大响应落盘给指针，可再 grep）。登录态用 session_login 写进任务级 cookie jar（form/json/basic/bearer/cookie 五形态），后续 http_request(session=同名) 自动带登录态——「登录→越权→回读」不要手工搬 cookie；多身份对照就开多个 session。
+   - **超过单意图预算的动作起后台作业**：长扫描/爆破用 job_start（run 结束进程继续，落任务级 shared/jobs），随时 job_status/job_output 查进度翻页、job_stop 停整组；启动后别空转轮询，先做别的。可复用的脚本/PoC 用 save_script 落任务级 shared/scripts（run_script 复用）；验证类题目直接 poc_scaffold 生成骨架再改载荷。SPA 站点先跑 js_audit 查 sourcemap 泄露（命中=CWE-540）。
    - **同一打法连续 3 次没有新信息就换本质不同的打法**（换入口/换参数位置/换方法/换身份），不要在原参数上反复微调——微调换不来新信息，只烧预算。
 
 **边发现边写回**（写进图才算数，脑子/文字里的不算；每得一个结果立刻写，别攒到最后被步数耗尽丢掉）。三种写回，别串图：
@@ -363,7 +365,9 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 		out += "\n\n【本机可用工具】\n" + t
 	}
 	// workerAntiTrapRules（反 AI 蜜罐红线）是代码固定尾，不可被 DB 正文覆盖。
-	return out + workerAntiTrapRules
+	// impactVerificationGuidance（全量危害验证协议，0.4.71/0.4.72 #9）是验收纪律固定尾。
+	// engagementFraming（授权口径）是 llmguard 拒答守卫的触发锚，同样是固定尾。
+	return out + workerAntiTrapRules + impactVerificationGuidance + engagementFraming
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:
@@ -402,8 +406,15 @@ func renderIntentTask(intent *db.Node) string {
 			extra += fmt.Sprintf("\n成功判据（怎么算成了/没成）：%s", sc)
 		}
 	}
-	return fmt.Sprintf("\n\n【你领到的意图（本次唯一任务：只做这一条、只产生事实、做完即停）】：\n%s%s\n意图 id: %d（写回 record_fact / report_finding 时传它）", string(intent.Payload), extra, intent.ID)
+	return fmt.Sprintf("\n\n【你领到的意图（本次唯一任务：只做这一条、只产生事实、做完即停）】：\n%s%s\n意图 id: %d（写回 record_fact / report_finding 时传它）%s", string(intent.Payload), extra, intent.ID, premiseCheckHint)
 }
+
+// premiseCheckHint 是「前提核对」硬提醒（P4-4，v0.4.68 移植）：意图是 planning 时的
+// 快照，排队期间目标可能已被证伪（上游任务实测：一条意图在死目标上跑了 3 小时）。
+// 开跑前先用最新事实核对，失效就写一条 fact 收场，别硬跑。
+const premiseCheckHint = "\n\n【执行前先核对前提（重要）】：开跑前用 list_facts / graph_overview 核对你这条意图的假设与目标是否仍成立。" +
+	"若最新事实已明确否定它（目标被证实是死目标、真实入口已在别处、该方向已被结论排除），不要硬跑：" +
+	"用 record_fact 写一条「意图前提已失效：原因 + 依据 fact id」后结束，把方向交回规划者重派。"
 
 // resumeBrief 续跑摘要（v0.3.95 B9）：上次状态 + 收场原因 + 图上已挂产出。
 // 数据全部来自探索图（intent 节点自身 + FactsYielded 血缘），不依赖引擎传值。
@@ -526,8 +537,9 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// worker 有。仅【全局态势 overview】留在启动 user 消息里——它可降级、容忍 stale，压掉无碍。
 	// 本次意图的专属工作目录 <workDir>/tasks/<taskID>/i<intentID>，引擎侧先建好。
 	runDir := ensureRunDir(w.workDir, taskID, intent.ID)
-	tsx.SetRunDir(runDir)                       // save_evidence 的相对路径基准
-	tsx.SetArtifactRecorder(w.artifactRecorder) // 证据附件落盘登记
+	tsx.SetRunDir(runDir) // save_evidence 的相对路径基准；也是任务级 shared（jobs/scripts/sessions）的解析基准
+	tsx.SetEgressProxy(w.proxyAddr, w.proxyCACert) // http_request/session_login 与 Bash 同源出口（记录 MITM/全局代理）
+	tsx.SetArtifactRecorder(w.artifactRecorder)    // 证据附件落盘登记
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
@@ -571,6 +583,8 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if b := priorFactsBlock(ts, ids, 8); b != "" {
 		sysBody += b
 	}
+	// 自主推进（P4-4）：本意图必须被证实/证伪，不得空转收场；绕开需要人工审批的动作。
+	sysBody += autopilotTail(ctx, autopilotWorkerGuidance)
 	sysBody += "\n\n开始执行上面这条意图：只做它、只产生事实、assets、finding、做完即停。"
 	system, _ := deferredSystem(sysBody, def)
 	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（system 分段拼一条
@@ -578,9 +592,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。
 	tc := taskClockFrom(ctx)
 	maxDur, clamped := clampMaxDuration(tc.DeadlineUnix, w.runTimeout)
-	settle := wrapupSettlement("worker", []string{"Bash"})
+	// 上游 0.4.71：收尾阶段禁用工具扩展——只藏 Bash 不够，job_*/http_request/
+	// session_login/listener_*/扫描执行类在收尾一并隐藏，收尾预算只留给写证据。
+	settle := wrapupSettlement("worker", settlementDisabledTools())
 	if tc.DeadlineUnix > 0 {
-		settle = wrapupSettlementForTask("worker", []string{"Bash"}, clamped)
+		settle = wrapupSettlementForTask("worker", settlementDisabledTools(), clamped)
 	}
 	// O3：公共装配段收敛进 kernelOptions（kernel_options.go）；worker 的差异化
 	// 参数（任务级 UA 注入 BashEnv、12000 字符回显上限、会话级 TodoStore）留在

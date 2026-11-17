@@ -29,6 +29,9 @@ type Planner struct {
 	maxTurns          int                                    // max agent turns per run (0 = unlimited)
 	killWork          func(intentID int64) error             // engine callback to terminate a running work (nil = off)
 	steerWork         func(intentID int64, msg string) error // engine callback to steer a running work mid-run (nil = off)
+	// intentQueue 返回（派发阈值折算值, worker 数）；nil = 不限制（测试/主 agent 场景）。
+	// 派发节流（P4-4）：add_intent 按阈值限本轮新增，提示词带节奏块。
+	intentQueue func() (limit, workers int)
 	attributions      func() map[string]any                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
 	proxyAddr         string                                 // recording proxy for WebFetch (empty = direct)
 	proxyCACert       string                                 // recording proxy's CA cert path (HTTPS verify)
@@ -52,6 +55,10 @@ func NewPlanner(prov llm.Provider, model, workDir string, tx *transcript.Store, 
 }
 
 func (p *Planner) SetCompactionWindowResolver(fn func() int) { p.windowFn = fn }
+
+// SetIntentQueueLimit wires the dispatch-throttle resolver（P4-4，v0.4.68 移植）：
+// 返回（生效阈值, worker 数）。nil = 不限制。
+func (p *Planner) SetIntentQueueLimit(fn func() (int, int)) { p.intentQueue = fn }
 
 // SetCompactor wires the cold-node compactor (cold-digest §7). Called each
 // planner wake-up to advance the round counter, maintain cold stamps, and
@@ -196,6 +203,10 @@ func renderTriggers(ts *db.ExplorationStore, evs []TriggerEvent) string {
 			b.WriteString(fmt.Sprintf("\n- 人修改了目标，由「%s」变为「%s」—— 请据新目标调整探索方向（原方向若已不适用请停派）。", ev.OldGoal, ev.NewGoal))
 		case "finding":
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）的 worker 报告了一个 finding：%s", ev.IntentID, intentSummary(ts, ev.IntentID), ev.Detail))
+		case "autopilot_stall":
+			// 自主推进看门狗（P4-4）：只催促推进，不算「新方向」（不进 freshDirection，
+			// 因此不会重置 auto_finish 的 idle 计数）。
+			b.WriteString(fmt.Sprintf("\n- 自主推进：%s 本轮必须给出一个推进动作：派新意图、换方向重试、或补证据验证；不得以「探索完毕/信息不足」收场。", ev.Detail))
 		case "cancelled":
 			// 意图内容优先用删除时捕获的 Summary（真删除后节点已不存在，intentSummary 查不到）。
 			sm := ev.Summary
@@ -376,8 +387,10 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	// plannerHoneypotRules（蜜罐处置纪律）是代码固定尾，不可被 DB 正文覆盖。
-	return body + artifactSpec(workDir) + plannerHoneypotRules
+	// plannerHoneypotRules（蜜罐处置纪律）与 impactOrchestrationGuidance（危害深度
+	// 编排，0.4.71/0.4.72 #9）都是代码固定尾，不可被 DB 正文覆盖。
+	// engagementFraming（授权口径）是 llmguard 拒答守卫的触发锚，同样是固定尾。
+	return body + artifactSpec(workDir) + plannerHoneypotRules + impactOrchestrationGuidance + engagementFraming
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
@@ -404,8 +417,10 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	tsx.killWork = p.killWork         // enable kill_work tool (nil = unavailable)
 	tsx.steerWork = p.steerWork       // enable steer_work tool (nil = unavailable)
 	tsx.attributions = p.attributions // Guard 归因 → 概览 guard_attributions 块（nil = 省略）
+	tsx.SetEgressProxy(p.proxyAddr, p.proxyCACert) // 与 planner WebFetch 同源出口（tools_http.go）
 	if origin, _ := ts.OriginFactID(); origin > 0 {
 		tsx.SetOwnerNode(origin) // planner-side anchors default to the task root (origin fact)
+	tsx.SetIntentQueueLimit(p.intentQueue) // 派发节流（P4-4）：add_intent 本轮新增上限（nil=不限）
 	}
 	// 领域工具 + 基础默认工具集（Read/Write/Edit/MultiEdit/LS/Glob/Grep/Bash）
 	// 资产覆盖度功能关闭时剔除 add_task_scope/list_untested_assets（不入 prompt）。
@@ -413,14 +428,32 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), Kind: KindPlanner})
 	tools, def, cleanup := AugmentTools(ctx, "planner", base)
 	defer cleanup()
-	// 关键态势（刚完成的意图 + 预取的完整图）改放【本轮 user 输入】(见下方 input)，system
-	// 只留静态规划正文。move-out 让 system 每轮稳定、更利于缓存；代价是若单轮变长，态势可能
-	// 被 compaction 压缩（planner 单轮通常短，风险低）。situational 会拼进下方 input。
-	situational := renderTriggers(ts, triggers) + renderGraphOverview(tsx.graphOverviewData())
 	// 任务级 deadline / 终局模式(经 ctx 注入,见 taskclock.go)。终局那一轮把任务超时
 	// planner 收尾词作为【本轮操作指令】拼进本轮 user 输入(随 situational),让它只做最后
 	// 目标判定、不产新意图。
 	tc := taskClockFrom(ctx)
+	// 上游 0.4.71：终局收尾轮把执行类工具面收窄——收尾预算只留给目标判定与写证据，
+	// 不许再起新探测（job_*/扫描器/auth 请求/监听器都能绕过 Bash 继续打目标）。
+	// 只收窄本轮，普通规划轮不受影响；MCP 延迟工具同名单过滤（schema 本就 withheld，
+	// 名字命中即从清单移除）。
+	if tc.Final {
+		tools = DropSettleTools(tools)
+		def.Deferred = dropSettleDeferred(def.Deferred)
+	}
+	// 关键态势（刚完成的意图 + 预取的完整图）改放【本轮 user 输入】(见下方 input)，system
+	// 只留静态规划正文。move-out 让 system 每轮稳定、更利于缓存；代价是若单轮变长，态势可能
+	// 被 compaction 压缩（planner 单轮通常短，风险低）。situational 会拼进下方 input。
+	situational := renderTriggers(ts, triggers) + renderGraphOverview(tsx.graphOverviewData())
+	// 积压治理（P4-4）：把排太久/前提疑似失效的 open 意图摆到本轮输入，要求裁决。
+	// 只提示不自动杀——退役要由模型调 retire_intent 写原因，保留可追溯性。
+	situational += renderBacklogHygiene(ts)
+	// 派发节奏（P4-4）：本轮新增上限 + 退役护栏说明。与积压治理同为每轮可变内容，
+	// 放 user 输入（system 保持稳定利于缓存）。
+	if p.intentQueue != nil {
+		limit, workers := p.intentQueue()
+		active, _ := ts.CountActiveIntents()
+		situational += pacingPlannerGuidance(limit, workers, active)
+	}
 	if tc.Final {
 		words := resolveTaskTimeoutWrapup("planner")
 		if tc.FinalReason != "" && tc.FinalReason != "timeout" {
@@ -430,11 +463,15 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	}
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	taskDir := ensureRunDir(p.workDir, taskID, 0)
+	tsx.SetRunDir(taskDir) // 任务级 shared（jobs/scripts/sessions）解析基准（planner 无 i<intent> 层）
 	ctx = intercept.WithReviewContext(ctx, taskDir, intercept.ReviewBackground{})
 	sysBody := plannerSystem(goal, p.workDir, taskDir)
 	if p.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,框定探索边界
 	}
+	// 自主推进（P4-4）：完成优先（目标未达成不得以「边际收益」收场）。走 ctx 开关，
+	// 运行中关掉开关下一轮即回到普通模式。
+	sysBody += autopilotTail(ctx, autopilotPlannerGuidance)
 	system, _ := deferredSystem(sysBody, def)
 	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（缓存交 provider 侧）。
 	// planner 无自身墙钟预算;有 deadline 时把 MaxDuration 夹逼到剩余,让在跑的规划轮在

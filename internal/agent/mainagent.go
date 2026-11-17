@@ -103,11 +103,16 @@ func mainAgentSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("mainagent", mainAgentDefaultTmpl, MainVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
 	// mainagent 也有 Bash 工具（基础默认工具集），会自己动手查证，
 	// 所以宿主工具清单同样要给它——不然它只能凭想象回答人。
-	out := body + artifactSpec(workDir)
+	out := body + artifactSpec(workDir) +
+		// mainAgentRoleBoundary（0.4.51 角色边界硬规则：Bash 只许本地文件操作，碰目标
+		// 即越权）与 impactOrchestrationGuidance（危害深度编排，0.4.72 #9 防过早收敛）
+		// 都是判定/验收纪律，走代码固定尾，不随 DB 正文编辑丢失。
+		mainAgentRoleBoundary + impactOrchestrationGuidance
 	if t := hosttools.SummaryText(); t != "" {
 		out += "\n\n【本机可用工具】\n" + t
 	}
-	return out
+	// engagementFraming（授权口径）是 llmguard 拒答守卫的触发锚，代码固定尾。
+	return out + engagementFraming
 }
 
 // Chat handles one human message and returns the assistant reply. emit, if
@@ -128,6 +133,7 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	tsx.SetNotifyHint(notifyHint)     // add_hint 新增提示 → 给 planner 记一条「人新增了 N 条战略提示：…」触发
 	tsx.steerWork = m.steerWork       // enable steer_work tool (nil = unavailable)
 	tsx.attributions = m.attributions // Guard 归因 → 概览 guard_attributions 块（nil = 省略）
+	tsx.SetEgressProxy(m.proxyAddr, m.proxyCACert) // 与 main agent WebFetch 同源出口（tools_http.go）
 	// 领域工具 + 基础默认工具集（Read/Write/Edit/MultiEdit/LS/Glob/Grep/Bash）
 	// 资产覆盖度功能关闭时剔除 add_task_scope/list_untested_assets（不入 prompt）。
 	base := append(tsx.DropCoverageTools(tsx.MainAgentTools()), actool.DefaultTools()...)
@@ -136,6 +142,7 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	defer cleanup()
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	mainDir := ensureRunDir(m.workDir, taskID, 0)
+	tsx.SetRunDir(mainDir) // 任务级 shared（jobs/scripts/sessions）解析基准（main agent 无 i<intent> 层）
 	ctx = intercept.WithReviewWorkingDirectory(ctx, mainDir)
 	system, _ := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
 	// DynamicBoundary（缓存断点）语义按 4zrec V5 定案放弃（system 分段拼一条

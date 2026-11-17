@@ -94,7 +94,20 @@ func chatWorkDirSpec(workDir string) string {
 // chatSystem renders the DB-managed prompt body for agentKey. Custom agents have
 // no per-key in-code default, so DefaultAssistantPrompt is the render fallback.
 func chatSystem(agentKey, dataDir, workDir string) string {
-	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir)
+	out := renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir)
+	// 执行/报告/复测类对话 agent 也注入授权口径（engagementFraming）——它们不走
+	// planner/worker 的 system 装配，只在 chat 路径运行；该口径同时是 llmguard
+	// 拒答守卫的触发锚。pentest 另注入全量危害验证协议与编排纪律；reporter 另注入
+	// SRC 全量证据附录（0.4.71 全量危害验证协议移植）。
+	switch agentKey {
+	case "pentest":
+		out += engagementFraming + impactVerificationGuidance + impactOrchestrationGuidance + srcReportAnnex
+	case "reporter":
+		out += engagementFraming + srcReportAnnex
+	case "retester":
+		out += engagementFraming
+	}
+	return out
 }
 
 // chatVars carries the runtime variables a custom agent's prompt may reference.

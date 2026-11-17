@@ -103,6 +103,9 @@ var localExecToolNames = map[string]bool{
 	"Edit":         true,
 	"MultiEdit":    true,
 	"NotebookEdit": true,
+	// job_start 等价于 Bash（执行任意命令的后台作业，v0.4.64 批次）：local_exec=false
+	// 的 agent 拿不到它，与 Bash 同一道闸（run_script 只组命令、执行仍经 Bash，无需闸）。
+	"job_start": true,
 }
 
 // DropLocalExecTools returns tools minus the local-execution ones, for agents whose

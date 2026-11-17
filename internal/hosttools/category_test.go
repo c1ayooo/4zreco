@@ -8,7 +8,7 @@ func TestEveryToolHasCategory(t *testing.T) {
 	known := map[Category]bool{
 		CatNetwork: true, CatWeb: true, CatDNS: true, CatCred: true,
 		CatCode: true, CatPivot: true, CatOOB: true, CatExploit: true,
-		CatMaterial: true, CatRuntime: true, CatMiddleware: true,
+		CatMaterial: true, CatRuntime: true, CatMiddleware: true, CatMobile: true,
 	}
 	for _, tool := range catalog {
 		if tool.Category == "" {
@@ -33,7 +33,7 @@ func TestCategoryOrderCoversAll(t *testing.T) {
 	}
 	for _, c := range []Category{
 		CatNetwork, CatWeb, CatDNS, CatCred, CatCode,
-		CatPivot, CatOOB, CatExploit, CatMaterial, CatRuntime, CatMiddleware,
+		CatPivot, CatOOB, CatExploit, CatMaterial, CatRuntime, CatMiddleware, CatMobile,
 	} {
 		if !seen[c] {
 			t.Errorf("分类 %q 没进 categoryOrder，页面会漏显示", c)
@@ -50,7 +50,7 @@ func TestEveryCategoryHasLabel(t *testing.T) {
 	}
 }
 
-// 分类不是可有可无的装饰：目录里的工具应当分布在这 11 个分类里，
+// 分类不是可有可无的装饰：目录里的工具应当分布在这 12 个分类里，
 // 而不是全塞进一个。这个断言防止后来者把分类当成摆设。
 func TestCategoriesActuallyPartitionCatalog(t *testing.T) {
 	counts := map[Category]int{}

@@ -21,6 +21,11 @@ func TestProfileRetryRoundTrip(t *testing.T) {
 		Empty:   RetryRule{Attempts: -1},
 		Stream:  RetryRule{IntervalMS: 250},
 	}
+	// 共享库跑多轮的已知坑（AGENTS.md §2）：上一次被 kill 的运行留下的同名
+	// 残留行会撞 llm_profiles_name_key 唯一键，产生假失败。插入前先按名清掉。
+	if _, err := d.Exec(`DELETE FROM llm_profiles WHERE name=$1`, "t-retry-roundtrip"); err != nil {
+		t.Fatal(err)
+	}
 	id, err := d.SaveProfile(&LLMProfile{
 		Name: "t-retry-roundtrip", Format: "openai", Model: "m", APIKey: "k", Retry: want,
 	})
@@ -73,6 +78,10 @@ func TestProfileRetryClampedOnSave(t *testing.T) {
 	}
 	defer d.Close()
 
+	// 同上：插入前先按名清掉共享库可能残留的同名行。
+	if _, err := d.Exec(`DELETE FROM llm_profiles WHERE name=$1`, "t-retry-clamp"); err != nil {
+		t.Fatal(err)
+	}
 	id, err := d.SaveProfile(&LLMProfile{
 		Name: "t-retry-clamp", Format: "openai", Model: "m", APIKey: "k",
 		Retry: RetryOverride{Connect: RetryRule{Attempts: -99, IntervalMS: -5}},

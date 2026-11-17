@@ -27,6 +27,9 @@ type Scheduler struct {
 	// 启动前已打开且无 last_window_key 记录 → 标记 missed，不补跑）。boot 时刻
 	// 同时落 scheduler_state 持久留痕（schedule_boot_at）。
 	startedAt time.Time
+	// autopilotLastScan 是自主推进看门狗（P4-4）上次完整扫描时刻：tick 是 5s，
+	// 看门狗扫描是 60s 一轮（多个跨表聚合查询，不宜 5s 一次），在这里做节流。
+	autopilotLastScan time.Time
 }
 
 const (
@@ -57,9 +60,23 @@ func (sc *Scheduler) Run(ctx context.Context) {
 		case <-t.C:
 			sc.s.reconcileConcurrency() // 并发上限:有空位就把排队任务补位启动
 			sc.fireTaskSchedules()      // 日历式计划任务（A7）:窗口开合联动任务启停
+			sc.autopilotWatchdog()      // 自主推进看门狗（P4-4）:停滞唤醒/续杯,60s 一轮
 			sc.step()
 		}
 	}
+}
+
+// autopilotWatchdog runs the autonomous-progress stall watchdog every 60s on top
+// of the 5s tick. Only the scan is throttled; the tick itself stays shared so the
+// watchdog piggybacks on the same lifecycle as the A7 calendar and P3 triggers
+// (single goroutine, exits with the server ctx — no extra timer to leak).
+func (sc *Scheduler) autopilotWatchdog() {
+	now := time.Now()
+	if now.Sub(sc.autopilotLastScan) < 60*time.Second {
+		return
+	}
+	sc.autopilotLastScan = now
+	sc.s.engine.autopilotTick(now)
 }
 
 // init seeds the watermarks on first run so pre-existing findings/goals don't all

@@ -103,6 +103,15 @@ func (e *Engine) resetTimeoutRevival(taskID string) {
 	e.coordStarted.Delete(taskID)
 }
 
+// resetTerminalRevival 是终态复活（done/failed/timeout → running）的完整清理
+// （上游 task 13 事故回归，task_revival_deadline）：在 resetTimeoutRevival 之上
+// 再清进程内规划轮计数——复活任务若沿用旧轮号，auto_finish 的轮数上限会在复活
+// 第一轮立刻再次触发，把人工跟进秒收掉。
+func (e *Engine) resetTerminalRevival(taskID string) {
+	e.resetTimeoutRevival(taskID)
+	e.plannerRound.Delete(taskID)
+}
+
 // stampFirstRun records first_run_at + deadline_at on the FIRST real run (LLM ready)
 // of a timeout task, once per process. No-op when the task has no timeout.
 func (e *Engine) stampFirstRun(t *Task) {
@@ -222,6 +231,54 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	e.settleTaskWithReason(ctx, t, "timeout", "到达任务超时上限")
 }
 
+// taskGoalProgress 返回本任务目标的达成数与总数（无目标时 0/0，视为无需证明）。
+func taskGoalProgress(t *Task) (met, total int) {
+	if t == nil || t.Store == nil {
+		return 0, 0
+	}
+	goals, err := t.Store.ListByKind(db.KindGoal, 1000)
+	if err != nil {
+		return 0, 0
+	}
+	for _, g := range goals {
+		total++
+		if g.State == "met" {
+			met++
+		}
+	}
+	return met, total
+}
+
+// settleTerminalStatus 计算收尾终态（上游 0.4.81 #28）。
+//
+// 语义：任务有目标时以**数据库里的达成情况**为准——目标全部 met 才是 done；存在
+// 未 met 的目标（state=abandoned 按未达成计）时，无论收尾原因是什么（超时 / 无成果
+// 止损 / 自动空转 / 覆盖度 / 轮数上限），终态一律 timeout——UI 据此显示「未完成」，
+// 而不是把做了一半的任务标成完成。无目标（totalGoals==0）的任务沿用旧语义：由终局
+// planner 轮判定（timeout 家族要求终局轮确认达成，自动收尾类直接 done）。
+//
+// 为什么不信 finalRoundMet（终局轮 planner 的返回值）：goal 的 met 只能由 prove_goal
+// 写入，是逐条证据留下的既成事实，且没有工具能把它改回去；而 finalRoundMet 只表示
+// 「终局这一轮又调用了一次证明工具」。目标已全部 met 时终局轮没有可证明的对象，
+// planner 通常直接回「无需再证明」，此时 finalRoundMet=false 并不提供任何相反证据，
+// 不能据此否定已成立的达成——这正是「终局轮无可证明对象→误 timeout」的根因。
+//
+// 与上游的适配差异：4zreco 的 goal_met 允许「整体声称」收官（未 prove 的目标打
+// unverified 留痕、state 仍 open，v0.3.19 ARTEX 语义），故 planner 明确判定
+// reason=goal_met 时不受「未全 met → timeout」约束，直接 done。
+func settleTerminalStatus(metGoals, totalGoals int, reason string, finalRoundMet bool) string {
+	if totalGoals > 0 {
+		if reason == "goal_met" || metGoals >= totalGoals {
+			return "done"
+		}
+		return "timeout"
+	}
+	if (reason == "timeout" || reason == "no_result") && !finalRoundMet {
+		return "timeout"
+	}
+	return "done"
+}
+
 // settleTaskWithReason 是统一收尾入口。reason:
 //   - timeout      任务绝对 deadline（终态 met?done:timeout）
 //   - no_result    A8 无成果止损（ARTEX 同款：终态沿用 timeout 家族 + stop_reason='no_result'）
@@ -275,12 +332,17 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	}
 	defer e.decInflight(t.ID)
 
-	// ⑥ 定终态(带守卫)：timeout/no_result 保持 met?done:timeout；自动收尾统一 done。
-	// no_result（A8）随终态落 stop_reason='no_result'（on_task_timeout 家族的收尾
-	// 语义不变，只是原因可辨）。
-	status := "done"
-	if (reason == "timeout" || reason == "no_result") && !met {
-		status = "timeout"
+	// ⑥ 定终态(带守卫)：有目标任务以数据库的达成情况为准（见 settleTerminalStatus）；
+	// 无目标（goalless/人工直投）沿用终局轮判定。no_result（A8）随终态落
+	// stop_reason='no_result'（on_task_timeout 家族的收尾语义不变，只是原因可辨）。
+	//
+	// 上游 0.4.81 #28：原先 timeout 守卫对有目标任务同样生效——全部目标已被
+	// prove_goal 证明达成时，终局轮没有可证明对象、planner 返回 met=false，
+	// 任务被误判 timeout。改为以数据库达成情况为准。
+	metGoals, totalGoals := taskGoalProgress(t)
+	status := settleTerminalStatus(metGoals, totalGoals, reason, met)
+	if status == "timeout" && totalGoals > 0 && metGoals < totalGoals {
+		log.Printf("[settle] task %s 目标未全部达成(%d/%d)，终态记 timeout（未完成）而非 done", t.ID, metGoals, totalGoals)
 	}
 	stopReason := ""
 	if reason == "no_result" {

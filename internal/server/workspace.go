@@ -43,15 +43,55 @@ const (
 // 要清就通过 DELETE /api/tasks/{id} 走正规路径，而不是在工作空间里顺手删一棵
 // 目录树。只拦删除，不禁读写——agent 仍要能往这些目录里写东西。
 func (s *Server) wsProtected(abs string) bool {
-	root := filepath.Clean(s.m.dir)
-	target := filepath.Clean(abs)
+	// 判定必须基于**解析符号链接后的真实路径**：工作区里的 alias -> traffic
+	// 词法上只是 data/alias，但实际写入会落进 traffic。只按词法前缀判断等于
+	// 给符号链接留了一条写穿保护目录的路（上游 0.4.80 #17）。
+	baseReal := filepath.Clean(s.m.dir)
+	if resolved, err := filepath.EvalSymlinks(baseReal); err == nil {
+		baseReal = filepath.Clean(resolved)
+	}
+	real, ok := evalExistingPath(abs)
+	if !ok {
+		// 无法解析（权限/异常路径）时保守拒绝，宁可挡住正常写入也不放行
+		// 一个无法证明安全的目标。
+		return true
+	}
 	for _, name := range s.m.dirs().ProtectedWorkspaceDirs() {
-		p := filepath.Join(root, name)
-		if target == p || strings.HasPrefix(target, p+string(os.PathSeparator)) {
+		if pathWithin(filepath.Join(baseReal, name), real) {
 			return true
 		}
 	}
 	return false
+}
+
+// evalExistingPath resolves abs to its real path. The target itself may not
+// exist yet (write/mkdir/upload): resolve the nearest existing ancestor and
+// re-append the remaining suffix, so a symlinked parent still resolves to the
+// directory the OS will actually write into.
+func evalExistingPath(abs string) (string, bool) {
+	abs = filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(resolved), true
+	} else if !os.IsNotExist(err) {
+		return "", false
+	}
+	parent := filepath.Dir(abs)
+	for {
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			rel, err := filepath.Rel(parent, abs)
+			if err != nil {
+				return "", false
+			}
+			return filepath.Clean(filepath.Join(resolved, rel)), true
+		} else if !os.IsNotExist(err) {
+			return "", false
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", false
+		}
+		parent = next
+	}
 }
 
 // wsResolve maps a user-supplied relative path to an absolute path INSIDE the work
@@ -65,7 +105,41 @@ func (s *Server) wsResolve(rel string) (string, bool) {
 	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
 		return "", false
 	}
-	return abs, true
+	// 符号链接需要第二道校验：Clean+HasPrefix 是词法判断，工作区内的链接
+	// 仍可能指向 /etc 或 JWT key。已存在的目标解析真实路径；新目标则解析
+	// 最近的存在父目录后再接受。这是 check-then-use 防护，非 openat 竞态修复。
+	baseReal := base
+	if resolved, err := filepath.EvalSymlinks(base); err == nil {
+		baseReal = filepath.Clean(resolved)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		if !pathWithin(baseReal, resolved) {
+			return "", false
+		}
+		return abs, true
+	} else if !os.IsNotExist(err) {
+		return "", false
+	}
+	// 目标尚不存在：校验最近存在的父目录，剩余后缀在已验证的真实父目录之下创建。
+	parent := filepath.Dir(abs)
+	for {
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			return abs, pathWithin(baseReal, resolved)
+		} else if !os.IsNotExist(err) {
+			return "", false
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", false
+		}
+		parent = next
+	}
+}
+
+func pathWithin(base, target string) bool {
+	base = filepath.Clean(base)
+	target = filepath.Clean(target)
+	return target == base || strings.HasPrefix(target, base+string(os.PathSeparator))
 }
 
 // wsRel renders an absolute path back as a workspace-relative path (forward slashes).
@@ -303,6 +377,12 @@ func (s *Server) wsUpload(w http.ResponseWriter, r *http.Request) {
 		destAbs, okd := s.wsResolve(filepath.Join(s.wsRel(dirAbs), name))
 		if !okd {
 			continue
+		}
+		// 目录本身可能安全，但同名文件可能是指向保护目录的符号链接；每个
+		// 最终目标都要按真实路径再检查一次。
+		if s.wsProtected(destAbs) {
+			writeErr(w, 403, "系统数据目录不可写入（"+strings.Join(s.m.dirs().ProtectedWorkspaceDirs(), " / ")+"）")
+			return
 		}
 		if err := saveUpload(hdr, destAbs); err != nil {
 			writeErr(w, 500, err.Error())

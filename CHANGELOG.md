@@ -4,6 +4,79 @@
 
 ## [Unreleased]
 
+### 迁移：上游 Pojun v0.4.31–0.4.81 内容全量移植（16 单元，第一批安全修复）
+
+- **DSL 顶层 OR 成组（跨任务资产泄露绕过，上游 0.4.78）**：`asset_dsl.go` buildDSLWhereBase
+  返回前整体括号成组——调用方追加的 type/task_ids/scope AND 原先只约束最后一个 OR 分支。
+  红检查证：还原旧码复现任务 B 网段资产泄漏，修复后回归全绿（`asset_dsl_or_scope_test.go`）。
+- **workspace 符号链接绕过受保护目录（上游 0.4.80 #17）**：`wsProtected` 从词法前缀改为
+  EvalSymlinks 真实路径判定（fail-closed），write/mkdir/upload/delete 全覆盖，upload 对最终
+  落点二次核验；A5 的 task_files（os.Root）不受影响。
+- **scan_with_nuclei 命令注入 + diff_responses OOM（上游 0.4.71）**：target/severity 语义校验
+  + 逐参数单引号包裹 + GNU timeout 600s 双重墙钟；diff 文件模式防 FIFO 挂死 + 16MB 上限。
+- **报告交付乱码（上游 0.4.71）**：文件名按 rune 边界截断（原字节截断劈中文/emoji）、
+  OOXML 文本统一过 cleanText（docx esc() 唯一汇点）、.md 导出加 BOM、附件中文名
+  RFC 5987（新增 internal/report/sanitize.go + http_names.go，接线 4 个下载落点）。
+
+### 迁移：拦截范围 / 拒答守卫 / 范围锚定（第二批）
+
+- **拦截规则 tool_scope（上游 0.4.81 PR #26）**：规则可选限定适用工具（空=不限，存量不变；
+  与 intercept_enabled_tools 是 AND）；被排除规则不参与匹配也不参与 allow 短路；
+  match_target=tool_name 拒非空范围。schema 幂等加列 + db/intercept/server/web 五处一体 +
+  归一化（≤32 项、单项 ≤128 字符）。
+- **llmguard 拒答守卫（上游 llmguard 包）**：判定逐字拷入 internal/llmguard（纯 Go 零依赖）；
+  接入层在 norma provider 链重写——Complete 重试 ≤2、Stream 前 160 字缓冲判定、思考增量
+  透传、工具调用即非拒答；挂在 llmpool 成员内、llmrec 之上（failover 后仍生效）。settings
+  `refusal_guard_enabled`（默认 on）+ `refusal_guard_retries`；授权口径段作为代码固定尾注入
+  三角色 system（否则守卫无识别标记成死代码）。
+- **prove_goal 能力型目标证据等级（上游 0.4.80 #20）**：RCE/命令执行/控制权/敏感数据类目标
+  只接受 high/critical finding，fact 与 low/medium 拒绝附中文纠正。
+- **范围锚定守卫（上游 0.4.63）**：record_fact/report_finding/record_intelligence 的 asset_ids
+  只能锚定本任务自有范围资产，继承范围只读、越界拒绝、校验失败 fail-open（不引入资产围栏，
+  insert_assets 拦截语义不变）。
+- **自动范围公共设施排除 + scope-audit（上游 0.4.71）**：auto scope 行生成排除 min.io/github/
+  cloudflare 等 35 项公共设施；4zreco-maint 新增 scope-audit 只读回放子命令。
+
+### 迁移：技能 / 宿主工具 / 部署 / 交付面（第三批）
+
+- **19 个新技能**（AD 攻击/云/移动逆向/智能合约/SRC 方法论等）+ MCP 页 9 个预设 + mcp-servers/fofa
+  （三账号容灾 + ONEFOX 免 key 通道；Dockerfile 同步 COPY + uv）。
+- **hosttools 69→93 项**：24 个新工具（AD 链/移动逆向/武器库）+ KindScript/Detect 多候选/
+  AssetTmpl/Raw/DestPath 基础设施 + hostd 执行面（script 900s 墙钟、版本解析双通道、代理注入）；
+  前端 kind/category 同步。
+- **部署形态**：docker/install-tools.sh + entrypoint（首启后台预装 catalog，ZRECO_PREINSTALL_TOOLS
+  开关）；Dockerfile 换源 build-arg、kerbrute/waybackurls 现场编译、渗透 apt 组逐包容错、nuclei
+  双通道；macOS/Windows compose（named volume 防 NTFS/VirtioFS 小文件 I/O 慢）；install.sh 弱网
+  韧性（apt 组失败逐包重试 + catalog 三轮重试）+ uv 落位 /usr/local/bin。顺带修两处既有 bug：
+  hostd 补 `-install-all`；install_fonts 字体 URL 404（分支/路径错误）。
+- **交付面**：数据文件在线表格化预览（JSON/JSONL/CSV/TSV，≤20MB）+ ZoomableImageDialog 图片
+  缩放（0.5x-8x）+ 证据 auto-bind（域名交叉唯一命中才绑）+ Word 批量导出（每漏洞独立 docx 打包
+  zip）+ goals 达成状态进报告 + finding 多键去重（endpoint/param 降弱键 rank99 只进归并提示、
+  可选 root_cause_key 强合并、finding_cases 候选打分联动）。
+
+### 迁移：提示词纪律 / 红队工具 / 引擎收尾 / 自主推进（第四批，eino 适配）
+
+- **提示词纪律批**（全部代码固定尾，走蜜罐先例，不随用户编辑丢失）：全量危害验证协议（405 换法
+  /upload handler 追踪/critical 后保留并行意图）、mainagent Bash 越权边界、seedFirstIntent
+  ≤200 字符闸门、critical/high 凭据机械验证校验、evidence_check 13 项只读审查（新工具）。
+- **红队工具第二批**：http_request 原生执行器（自定义 UA、大响应落盘、走 traffic 记录代理+
+  CA 信任）、session_login 五形态 + 任务级 cookie jar、job_start/status/output/stop 后台作业
+  （进程组/收尸/PID 归属校验/暂停清理）、save_script/run_script、poc_scaffold 九类骨架、
+  js_audit（sourcemap 泄露→源码还原→密钥扫描）、report_finding 攻击链自动续跳（关联
+  finding_cases）、同资产×同手法维度去重。全部注册三件套。
+- **引擎收尾语义批**：goal_met 先登记收尾再取消 worker（原登记恒不可达，空转一个心跳周期）+
+  消费前数据库复核目标集（适配 4zreco 整体声称语义）；有目标任务的终态以数据库达成情况为准
+  （修终局轮无可证明对象误 timeout）；重启/取消 running 意图回 open 落 server_shutdown 原因；
+  终态复活重开 blocked="context canceled" 遗留意图 + 清挂起收尾与时钟（修 done 复活沿用过期
+  deadline 秒收）；tasks.paused_at 暂停时长从 deadline 顺延；收尾阶段禁用执行类工具全名单。
+- **Autopilot 自主推进**：任务级开关（停滞看门狗 60s 唤醒、连续停滞自动延长 deadline ≤10 次、
+  完成优先、goal_met 后按剩余资产/未取数漏洞续杯 ≤10 波，挂 Scheduler tick）+ 派发节流
+  （intent_queue_limit 默认 8、按积压折算本轮派发量）+ retire_intent 退役工具（每轮 ≤6、禁
+  自指/链式退役、reason 必须引用节点号）。
+- **杂项**：LLM 出站 User-Agent 可配置（quotaAwareTransport 统一注入、CR/LF 拒绝、17 个
+  编程工具/浏览器模板，与目标侧 ZRECO_UA 池无关）；SessionsTab 数值崩溃守卫；终态任务未复测
+  提醒。
+
 ## [0.3.19] - 2026-11-17
 
 ### 修复：C2 SSH 隧道四缺陷返工 + server 层四处——工作流批量缺陷清偿

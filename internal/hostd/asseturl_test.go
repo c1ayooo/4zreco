@@ -8,10 +8,11 @@ import (
 )
 
 // 各项目的 release 资产命名规范极不统一（架构在前/后、版本带不带 v、
-// 扩展名 .zip/.tar.gz/.gz、架构名有 amd64/x86_64/x86/x64 四套）。
+// 扩展名 .zip/.tar.gz/.gz、架构名有 amd64/x86_64/x86/x64/64bit 五套）。
 // 模板拼错的后果是「一键安装」下载 404，而用户只看到安装失败。
 //
 // 这里的断言值是 2026-10 实测 GitHub API 得到的真实资产名。
+// 多候选模板（"||"）取首候选验证——候选回退语义在下载端。
 func TestAssetURLMatchesRealReleaseNames(t *testing.T) {
 	cases := []struct {
 		id   string
@@ -41,9 +42,9 @@ func TestAssetURLMatchesRealReleaseNames(t *testing.T) {
 			"https://github.com/hahwul/dalfox/releases/download/v3.2.4/dalfox-v3.2.4-linux-x86_64.tar.gz",
 		},
 		{
-			// feroxbuster 架构在前
+			// feroxbuster 架构在前（多候选首候选）
 			"feroxbuster", "v2.13.1",
-			"https://github.com/epi052/feroxbuster/releases/download/v2.13.1/x86_64-linux-feroxbuster.tar.gz",
+			"https://github.com/epi052/feroxbuster/releases/download/v2.13.1/x86_64-linux-feroxbuster.zip",
 		},
 		{
 			"notify", "v1.0.7",
@@ -53,6 +54,15 @@ func TestAssetURLMatchesRealReleaseNames(t *testing.T) {
 			"interactsh-client", "v1.4.1",
 			"https://github.com/projectdiscovery/interactsh/releases/download/v1.4.1/interactsh-client_1.4.1_linux_amd64.zip",
 		},
+		{
+			// trivy 用第五套架构命名 Linux-64bit
+			"trivy", "v0.65.0",
+			"https://github.com/aquasecurity/trivy/releases/download/v0.65.0/trivy_0.65.0_Linux-64bit.tar.gz",
+		},
+		{
+			"gau", "v2.3.0",
+			"https://github.com/lc/gau/releases/download/v2.3.0/gau_2.3.0_linux_amd64.tar.gz",
+		},
 	}
 	for _, c := range cases {
 		tool, ok := hosttools.Lookup(c.id)
@@ -60,7 +70,8 @@ func TestAssetURLMatchesRealReleaseNames(t *testing.T) {
 			t.Errorf("%s 不在 catalog 里", c.id)
 			continue
 		}
-		got := GitHubAssetURL(tool, c.tag)
+		tmpl := strings.Split(tool.AssetTmpl, "||")[0] // 多候选取首候选验证
+		got := GitHubAssetURL(tool, tmpl, c.tag)
 		if got != c.want {
 			t.Errorf("%s URL 不对:\n  得到 %s\n  期望 %s", c.id, got, c.want)
 		}
@@ -71,7 +82,7 @@ func TestAssetURLMatchesRealReleaseNames(t *testing.T) {
 func TestNoUnknownPlaceholdersInTemplates(t *testing.T) {
 	known := map[string]bool{
 		"{ver}": true, "{verv}": true,
-		"{arch}": true, "{arch2}": true, "{arch3}": true, "{arch4}": true,
+		"{arch}": true, "{arch2}": true, "{arch3}": true, "{arch4}": true, "{arch5}": true,
 	}
 	for _, tool := range hosttools.Catalog() {
 		if tool.Kind != hosttools.KindGitHub {

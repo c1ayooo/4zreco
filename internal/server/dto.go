@@ -69,6 +69,9 @@ type TaskDTO struct {
 	NoResultMinFindings int    `json:"no_result_min_findings"`
 	NoResultMinSeverity string `json:"no_result_min_severity,omitempty"`
 	StopReason          string `json:"stop_reason,omitempty"`
+	// 自主推进（Autopilot，P4-4）：任务级开关的当前快照（真值每次经
+	// Task.AutopilotEnabled 现查；关闭后下一次规划/执行即回到普通语义）。
+	Autopilot bool `json:"autopilot"`
 }
 
 // FindingSeverityDTO 是任务列表里按严重度分档的漏洞计数（严重/高/中/低）。
@@ -148,6 +151,7 @@ func taskDTO(t *Task, status string) TaskDTO {
 		NoResultMinFindings: t.NoResultMinFindings,
 		NoResultMinSeverity: t.NoResultMinSeverity,
 		StopReason:          lifecycle.StopReason,
+		Autopilot:           t.AutopilotEnabled(),
 	}
 }
 
@@ -649,6 +653,10 @@ type LLMProfileDTO struct {
 	// 自定义会话头名：非空时每次请求带该 HTTP 头，头值=当前会话/意图的 session id。
 	// ''=不发送。用于按 session-id 头做提示缓存/粘性路由的网关。
 	SessionHeaderKey string `json:"session_header_key"`
+	// 自定义 User-Agent：非空时替换每个 LLM 请求的 User-Agent（含重试）。部分网关/
+	// WAF 直接拦默认 Go UA；仅作用于 LLM 出站请求，与目标侧 ZRECO_UA 池无关。
+	// ''=不覆盖（走内置兜底 UA）。
+	UserAgent string `json:"user_agent"`
 	// 本配置对重试的覆盖(建连/空响应/同 provider 安全窗口)。每项 attempts:
 	// 0=继承全局策略 | -1=关闭该层重试 | >0=次数；interval_ms: 0=用默认指数退避 |
 	// >0=改用该固定毫秒间隔。全 0 = 完全跟随全局，即历史行为。
@@ -676,6 +684,7 @@ func llmProfileDTO(p *db.LLMProfile) LLMProfileDTO {
 		MaxTokens:        p.MaxTokens,
 		MaxTokensField:   p.MaxTokensField,
 		SessionHeaderKey: p.SessionHeaderKey,
+		UserAgent:        p.UserAgent,
 		Retry:            p.Retry,
 	}
 }

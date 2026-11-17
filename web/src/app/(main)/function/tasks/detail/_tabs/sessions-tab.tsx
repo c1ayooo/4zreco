@@ -1729,28 +1729,31 @@ export function SessionsTab({ taskId }: { taskId: string }) {
                     <span>任务总计</span>
                     <span>·</span>
                     <TokenMetrics
-                      input={taskTokens.input_tokens}
-                      cache={taskTokens.cache_read_tokens}
-                      output={taskTokens.output_tokens}
+                      input={taskTokens.input_tokens ?? 0}
+                      cache={taskTokens.cache_read_tokens ?? 0}
+                      output={taskTokens.output_tokens ?? 0}
                     />
-                    {taskCost && taskCost.cost_usd > 0 ? (
+                    {taskCost && (taskCost.cost_usd ?? 0) > 0 ? (
                       <>
                         <span>·</span>
-                        <span>≈${taskCost.cost_usd.toFixed(2)}</span>
+                        <span>≈${(taskCost.cost_usd ?? 0).toFixed(2)}</span>
                       </>
                     ) : null}
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
-                  输入 {taskTokens.input_tokens.toLocaleString()} · 输出 {taskTokens.output_tokens.toLocaleString()} ·
-                  缓存读取 {taskTokens.cache_read_tokens.toLocaleString()} · 缓存写入{" "}
-                  {taskTokens.cache_write_tokens.toLocaleString()}
+                  {/* 字段缺失（mock/旧接口）时 ?? 0 兜底：直接 .toFixed/.toLocaleString
+                      会抛 TypeError，把整个任务详情页拖进错误边界（上游 0.4.31 同款修复）。 */}
+                  输入 {(taskTokens.input_tokens ?? 0).toLocaleString()} · 输出{" "}
+                  {(taskTokens.output_tokens ?? 0).toLocaleString()} · 缓存读取{" "}
+                  {(taskTokens.cache_read_tokens ?? 0).toLocaleString()} · 缓存写入{" "}
+                  {(taskTokens.cache_write_tokens ?? 0).toLocaleString()}
                   {taskCost ? (
                     <>
                       <br />
-                      成本 ≈ ${taskCost.cost_usd.toFixed(2)}（{taskCost.pricing_note}）
-                      {taskCost.unpriced_models.length > 0
-                        ? ` 未定价模型：${taskCost.unpriced_models.join("、")}（成本被低估）`
+                      成本 ≈ ${(taskCost.cost_usd ?? 0).toFixed(2)}（{taskCost.pricing_note}）
+                      {(taskCost.unpriced_models ?? []).length > 0
+                        ? ` 未定价模型：${(taskCost.unpriced_models ?? []).join("、")}（成本被低估）`
                         : ""}
                     </>
                   ) : null}

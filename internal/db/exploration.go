@@ -393,9 +393,11 @@ func (s *ExplorationStore) DeleteGoal(id int64) error {
 // is re-claimed. Called on startup: a 'running' intent with no live worker (a
 // backend restart or crashed worker goroutine left it stuck) would otherwise spin
 // forever in the UI. Workers resume from their transcript, so reopening is safe.
+// 重开时把 blocked_reason 记为 server_shutdown（上游 0.4.37）：重启不是 worker 的错，
+// 界面/规划者能看到「这条为什么被打断」，而不是只看到一个空状态。
 func (s *ExplorationStore) ResetRunningIntents() (int64, error) {
-	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='open', completed_at=NULL, blocked_reason=NULL
-WHERE exploration_id=$1 AND kind='intent' AND state='running'`, s.expID)
+	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='open', completed_at=NULL, blocked_reason=$2
+WHERE exploration_id=$1 AND kind='intent' AND state='running'`, s.expID, IntentStopShutdown)
 	if err != nil {
 		return 0, err
 	}
@@ -440,6 +442,25 @@ WHERE id=$1 AND exploration_id=$2 AND kind='intent' AND state='done'`, id, s.exp
 func (s *ExplorationStore) ReopenBlockedIntents() (int64, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='open', completed_at=NULL, blocked_reason=NULL
 WHERE exploration_id=$1 AND kind='intent' AND state='blocked'`, s.expID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// ReopenCanceledIntents 重开「因服务停止被取消」的 blocked 意图（上游 0.4.57 复活
+// 自愈：部署重启的遗留物，不是真实失败——任务从终态复活时调用，继续 = 把没跑完的
+// 跑完）。只匹配 blocked_reason 含 context canceled 的行：用户手动 block 的意图
+// 不在此列。blocked（错误收场）是唯一的可安全重开源状态——stopped/task_done 是
+// goal_met 收官的主动放弃、done 语义由 ReopenDegradedIntent 单独管、exhausted 是
+// 撞墙钟上限的有意截断，都不该在复活时被批量掀开（对照 internal/kernel/termmap
+// 的终态语义：canceled 类中断映射为可恢复的 blocked，而非终局态）。
+func (s *ExplorationStore) ReopenCanceledIntents() (int64, error) {
+	res, err := s.db.Exec(`UPDATE exploration_nodes
+SET state='open', completed_at=NULL, blocked_reason=NULL, content_version=content_version+1
+WHERE exploration_id=$1 AND kind='intent' AND state='blocked'
+  AND blocked_reason ILIKE '%context canceled%'`, s.expID)
 	if err != nil {
 		return 0, err
 	}
@@ -915,6 +936,109 @@ func (s *ExplorationStore) CountOpenIntents() (int, error) {
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM exploration_nodes
 WHERE exploration_id=$1 AND kind='intent' AND state='open'`, s.expID).Scan(&n)
 	return n, err
+}
+
+// CountActiveIntents counts this exploration's unfinished intents (open+running).
+// 派发节流（v0.4.68 移植）的积压口径：worker 数与阈值都以此为分母。
+func (s *ExplorationStore) CountActiveIntents() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state IN ('open','running')`, s.expID).Scan(&n)
+	return n, err
+}
+
+// IntentHygiene 是规划轮「积压治理」的单条视图：这条 open 意图排了多久，
+// 以及它的锚点事实是否已被后续事实显式否定（例如 #5263 推翻 #5224 的目标）。
+type IntentHygiene struct {
+	ID       int64    `json:"id"`
+	Summary  string   `json:"summary"`
+	Priority int      `json:"priority"`
+	AgeHours float64  `json:"age_hours"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// premiseNegationRe 识别「后续事实明确否定前一条」的措辞。#NNN 引用 + 否定词
+// 同时出现才算命中——只认这一种强信号，避免把「部分成立」「不排除」误判成作废。
+const premiseNegationRe = `(不成立|已推翻|推翻|否定|证伪|已过期|死目标|不可用|无效|与事实不符)`
+
+// OpenIntentHygiene 列出「排太久」或「前提疑似失效」的 open 意图。
+// 只做提示不做自动杀——退役动作由 planner 显式调 retire_intent 并写原因，保留可追溯性。
+func (s *ExplorationStore) OpenIntentHygiene(staleAfter time.Duration, limit int) ([]IntentHygiene, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 40
+	}
+	rows, err := s.db.Query(`SELECT id, priority, created_at, COALESCE(payload->>'summary','')
+FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state='open'
+ORDER BY created_at ASC LIMIT $2`, s.expID, limit)
+	if err != nil {
+		return nil, err
+	}
+	type openIntent struct {
+		IntentHygiene
+		created time.Time
+	}
+	var all []openIntent
+	for rows.Next() {
+		var it openIntent
+		if err := rows.Scan(&it.ID, &it.Priority, &it.created, &it.Summary); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		all = append(all, it)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	out := make([]IntentHygiene, 0, len(all))
+	for _, it := range all {
+		it.AgeHours = now.Sub(it.created).Hours()
+		// 锚点事实（derived_from 的 fact 父节点）是否被更新的事实否定。
+		parents, err := s.db.Query(`SELECT n.id
+FROM exploration_edges e JOIN exploration_nodes n ON n.id=e.src_id AND n.kind='fact'
+WHERE e.exploration_id=$1 AND e.dst_id=$2 AND e.rel='derived_from'`, s.expID, it.ID)
+		if err != nil {
+			return nil, err
+		}
+		var pids []int64
+		for parents.Next() {
+			var pid int64
+			if err := parents.Scan(&pid); err != nil {
+				parents.Close()
+				return nil, err
+			}
+			pids = append(pids, pid)
+		}
+		parents.Close()
+		for _, pid := range pids {
+			var newer string
+			err := s.db.QueryRow(`SELECT COALESCE(payload->>'summary','') FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='fact' AND id > $2
+  AND payload->>'summary' ~ ('#' || $2 || '([^0-9]|$)')
+  AND payload->>'summary' ~ $3
+ORDER BY id DESC LIMIT 1`, s.expID, pid, premiseNegationRe).Scan(&newer)
+			if err == nil && newer != "" {
+				it.Warnings = append(it.Warnings, fmt.Sprintf("锚点 fact#%d 疑似被后续 fact 否定：%s", pid, clampRunes(newer, 80)))
+			} else if err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+		}
+		if it.AgeHours >= staleAfter.Hours() || len(it.Warnings) > 0 {
+			out = append(out, it.IntentHygiene)
+		}
+	}
+	return out, nil
+}
+
+// clampRunes 截断到 n 个字符（用于把事实摘要塞进提示词/日志）。
+func clampRunes(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	return string(r[:n]) + "…"
 }
 
 // FindSimilarOpenIntent 在同任务的 open/running 意图里找与 summary 高度相似的一条，

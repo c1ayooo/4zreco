@@ -334,6 +334,13 @@ type RecordFindingInput struct {
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
+	// RootCauseKey 可选的显式根因标识（多键去重，finding_keys.go）：归一后生成
+	// root 强键参与自动合并；空/过短/通用词 = 不生成。
+	RootCauseKey string
+	// Endpoint / Parameter 可选的定位信息（多键去重）：endpoint 生成弱键
+	// （只进 merge_candidates 提示不自动合并）；Parameter 缺省时从证据文本推断。
+	Endpoint  string
+	Parameter string
 }
 
 type RecordedFinding struct {
@@ -388,52 +395,29 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 			return nil, errors.New("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
-	// ── 同任务内指纹去重:同一 (vulnclass,name,assets) 视为同一漏洞的重复上报,
-	// 证据合并进已有记录而不是再插一行——"报了 A 又把 A 重新报一遍"在写入层被
-	// 硬性拦住,不依赖模型自觉。
-	// 仅对【带资产锚定】的上报启用:无资产锚定时无法区分"同一目标"与"两个
+	// ── 同任务内去重（写入层硬拦，不依赖模型自觉），两级合并目标查找：
+	// ① 指纹去重：同一 (vulnclass,name,assets) 视为同一漏洞的重复上报；
+	// ② 多键强键合并（多键去重，finding_keys.go）：root_cause_key / CVE 等强键
+	//    命中即同一底层漏洞（root>cve>legacy 优先级）。endpoint/param/name/
+	//    asset_class 都是弱键（rank 99），只进 merge_candidates 提示，绝不自动合并。
+	// 两级都只对【带资产锚定】的上报启用:无资产锚定时无法区分"同一目标"与"两个
 	// 不同入口的同名漏洞",合并会误伤(如不同端口各一个 SQLi 都叫 SQL injection);
 	// 宁漏勿误,worker 正常上报都会带 asset_ids。
 	// resolved/fixed/false_positive/ignored 已是终态或人工结论,不参与合并
 	// (修复后再复现 = 值得新开一条;误报后再证实 = 翻案)。
-	// vulnclass 归一(变体写法→标准类别):写入即归一,聚合视图与指纹去重
+	// vulnclass 归一(变体写法→标准类别):写入即归一,聚合视图与去重
 	// 都基于标准值——SQLi 与 SQL注入 从此是同一类别、同一指纹。
 	in.VulnClass = NormalizeVulnClass(in.VulnClass)
 	fp := FindingFingerprint(in)
-	if in.TaskID > 0 && fp != "" && len(in.AssetIDs) > 0 {
-		var (
-			dupeID     int64
-			dupeNode   int64
-			dupeStatus string
-		)
-		err := tx.QueryRow(`SELECT id, COALESCE(node_id,0), status FROM findings
-			WHERE task_id=$1 AND fingerprint=$2
-			  AND status IN ('pending','in_progress','confirmed')
-			ORDER BY id LIMIT 1 FOR UPDATE`, in.TaskID, fp).Scan(&dupeID, &dupeNode, &dupeStatus)
-		if err == nil {
-			stamp := time.Now().UTC().Format("2006-01-02 15:04")
-			appendix := fmt.Sprintf("\n\n--- 二次确认(worker=%s, %s UTC) ---\n%s", in.Worker, stamp, in.Evidence)
-			if _, err := tx.Exec(`UPDATE findings SET evidence = evidence || $2, severity = $3 WHERE id=$1`,
-				dupeID, appendix, in.Severity); err != nil {
-				return nil, err
-			}
-			// 血缘:这个 intent 也(再次)产出了该漏洞节点,planner 链路完整。
-			if in.IntentID > 0 && dupeNode > 0 {
-				if _, err := tx.Exec(`INSERT INTO exploration_edges(exploration_id,src_id,rel,dst_id)
-					SELECT $1,$2,$3,$4 WHERE NOT EXISTS(
-						SELECT 1 FROM exploration_edges WHERE exploration_id=$1 AND src_id=$2 AND rel=$3 AND dst_id=$4)`,
-					in.ExplorationID, in.IntentID, RelYields, dupeNode); err != nil {
-					return nil, err
-				}
-			}
-			out := &RecordedFinding{FindingID: dupeID, NodeID: dupeNode, Duplicate: true}
-			// 重复上报同样要把本次带来的流量挂到原记录上:二次确认往往带着
-			// 更新后的复现包(不同响应码/新载荷),只并文字证据会把它丢掉。
-			if err := AddFindingTrafficTx(tx, dupeID, prepared); err != nil {
-				return nil, err
-			}
-			out.Traffic, err = FindingTrafficTx(tx, dupeID)
-			return out, err
+	keys := FindingDedupKeys(in, fp)
+	if in.TaskID > 0 && len(in.AssetIDs) > 0 {
+		mergeTarget, err := findFindingMergeTargetTx(tx, in, fp, keys)
+		if err != nil {
+			return nil, err
+		}
+		if mergeTarget > 0 {
+			// 证据/严重度/资产/身份键合并进已有主记录（指纹与强键同一合并路径）。
+			return mergeReportIntoTargetTx(tx, mergeTarget, in, fp, prepared)
 		}
 	}
 	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
@@ -457,8 +441,14 @@ VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string
 		assets = []int64{}
 	}
 	raw, _ := json.Marshal(assets)
-	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids,fingerprint)
-VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw), fp).Scan(&out.FindingID); err != nil {
+	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids,fingerprint,root_cause_key)
+VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw), fp, normalizeRootCauseKey(in.RootCauseKey)).Scan(&out.FindingID); err != nil {
+		return nil, err
+	}
+	// 多键去重：落身份键（含弱键——它们不参与自动合并，但供 merge_candidates
+	// 提示与 finding_cases 候选打分）。失败跟随事务回滚：宁可上报报错也不留
+	// 没有身份键的记录（后续同键上报会各自成行）。
+	if err := insertFindingKeysTx(tx, out.FindingID, keys); err != nil {
 		return nil, err
 	}
 	// 在**同一事务**里登记一条推送事件：提交即保证「漏洞落库」与「推送任务存在」

@@ -41,7 +41,9 @@ func writeFindingsZipEntries(zw *zip.Writer, findings []*db.DBFinding, stage str
 		if err != nil {
 			return err
 		}
-		if _, err = io.WriteString(w, report.SingleFindingMarkdown(f, now)); err != nil {
+		// 带 BOM：Windows 记事本/部分编辑器默认按 ANSI(GBK) 打开无 BOM 的 UTF-8，
+		// 中文正文会整段乱码。Markdown 本身允许 BOM（0.4.71 乱码修复）。
+		if _, err = io.WriteString(w, "\xef\xbb\xbf"+report.SingleFindingMarkdown(f, now)); err != nil {
 			return err
 		}
 		for _, b := range f.TrafficBindings {

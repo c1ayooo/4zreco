@@ -31,6 +31,7 @@ var credentialInputKeys = map[string]bool{
 	"refresh_token": true,
 	"authorization": true,
 	"credential":    true,
+	"basic_auth":    true, // http_request 的 Basic 认证（user:pass 整体是凭据本体）
 }
 
 // maskedValue 是打码后的占位值（与 zombie/proton 输出打码同一形态）。

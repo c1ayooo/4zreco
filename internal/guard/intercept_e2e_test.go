@@ -154,3 +154,22 @@ func TestE2ERuleWithoutTimeoutUsesGlobal(t *testing.T) {
 		t.Errorf("规则未启用 timeout 时应走全局 180s，实际 %v", seen)
 	}
 }
+
+// 规则级适用工具（上游 0.4.81 PR #26）：写文件工具的正文提到命令名不应被当成
+// 执行该命令——tool_scope 限定的规则对范围外工具不命中。
+func TestE2ERuleToolScopeExcludesWrite(t *testing.T) {
+	ic := intercept.New(nil)
+	rule := e2eRule(1, "[测试] 导出类命令", `(?i)\bexample-dump\b`, "deny", 100, false, 60, "deny")
+	rule.ToolScope = []string{"Bash", "shell_open"}
+	ic.SetRulesInMemory([]db.InterceptRule{rule})
+	g := NewWithInterceptor(ic)
+
+	writeIn := json.RawMessage(`{"file_path":"report.md","content":"本次未使用 example-dump"}`)
+	if blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "Write", writeIn); blocked {
+		t.Fatal("写文件正文提到命令名不应被拦截")
+	}
+	bashIn := json.RawMessage(`{"command":"example-dump --all"}`)
+	if blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "Bash", bashIn); !blocked {
+		t.Fatal("shell 执行该命令应被拦截")
+	}
+}

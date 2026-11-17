@@ -205,6 +205,9 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 		if err := s.m.pg.ResetTaskProgress(t.ID); err != nil {
 			log.Printf("[auto-finish] task %s 复活时重置进度失败: %v", t.ID, err)
 		}
+		// 上一轮生命周期遗留的挂起收尾请求同样作废——否则复活的第一个规划轮
+		// 会先消费它，把刚复活的任务又收一遍（上游 0.4.81 #27 同款清理）。
+		t.clearSettle()
 	}
 	if err := s.m.ApplyTaskAdmission(t.ID, lifecycle.Status, status, shouldQueue, mode, wasQueued); err != nil {
 		if !engineWasPaused && !wasPaused && !wasQueued {
@@ -212,11 +215,27 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 		}
 		return false, err
 	}
-	if lifecycle.Status == "timeout" && status == "running" {
-		// ApplyTaskAdmission reset this timed-out run's persisted clock. Clear the
-		// matching Engine gates before either parking it in FIFO or starting work;
-		// otherwise the old settling flag would make every worker skip forever.
-		s.engine.resetTimeoutRevival(t.ID)
+	if wasTerminal && status == "running" {
+		// ApplyTaskAdmission reset this run's persisted clock（任何终态复活都重置，
+		// 不只 timeout——done/failed 复活若沿用过期 deadline，新起的 deadline 协调器
+		// 会当场把复活的任务再收一遍，人工跟进意图被静默吞掉；上游 task 13 实证）。
+		// Clear the matching Engine gates before either parking it in FIFO or
+		// starting work; otherwise the old settling flag would make every worker
+		// skip forever.
+		s.engine.resetTerminalRevival(t.ID)
+		// 复活自愈（上游 0.4.57）：重开「因服务停止被取消」（部署重启的遗留物，
+		// blocked=context canceled）而卡死的意图——继续 = 把没跑完的跑完。用户手动
+		// block 的意图原因不含 context canceled，不受影响。
+		if t.Store != nil {
+			if n, err := t.Store.ReopenCanceledIntents(); err != nil {
+				log.Printf("[admission] task %s 重开 canceled 意图失败: %v", t.ID, err)
+			} else if n > 0 {
+				log.Printf("[admission] task %s 复活时重开 %d 条 canceled blocked 意图", t.ID, n)
+				s.engine.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+					Summary: fmt.Sprintf("复活时自动重开 %d 条因服务停止而中断的意图", n)})
+			}
+		}
+		log.Printf("[admission] task %s 从终态 %q 复活，超时预算已重置", t.ID, lifecycle.Status)
 	}
 	if shouldQueue {
 		if !wasQueued {

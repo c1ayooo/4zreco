@@ -51,7 +51,23 @@ type taskCtxKey int
 const (
 	taskInfoCtxKey taskCtxKey = 1
 	taskEmitCtxKey taskCtxKey = 2
+	// autopilotCtxKey 是自主推进开关的读取器（每次调用现查，中途关掉开关时
+	// 下一次规划/执行就回到普通任务语义）。P4-4 移植自上游 0.4.68。
+	autopilotCtxKey taskCtxKey = 3
 )
+
+// WithAutopilot 注入自主推进开关读取器（nil/返回 false = 普通任务）。
+// engine 在派发 planner/worker ctx 时挂上任务运行态镜像（Task.AutopilotEnabled），
+// agent 层经 AutopilotFromContext 读取并决定是否追加自主推进提示词尾巴。
+func WithAutopilot(ctx context.Context, enabled func() bool) context.Context {
+	return context.WithValue(ctx, autopilotCtxKey, enabled)
+}
+
+// AutopilotFromContext 取回自主推进开关读取器；未注入时返回 nil。
+func AutopilotFromContext(ctx context.Context) func() bool {
+	f, _ := ctx.Value(autopilotCtxKey).(func() bool)
+	return f
+}
 
 type taskCtxInfo struct{ taskID, agentName string }
 
@@ -746,7 +762,27 @@ func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	return Decision{}, false
 }
 
+// toolScopeAllows reports whether a rule carrying the given scope should be
+// evaluated for toolName. 空 scope 表示不限工具——加列前的全部规则都是这个
+// 状态，因此行为不变（上游 0.4.81 PR #26）。
+func toolScopeAllows(scope []string, toolName string) bool {
+	if len(scope) == 0 {
+		return true
+	}
+	for _, s := range scope {
+		if s == toolName {
+			return true
+		}
+	}
+	return false
+}
+
 func ruleMatches(r compiledRule, toolName string, input []byte) bool {
+	// 规则级适用工具：先按工具过滤，再选匹配对象。被排除的规则既不参与匹配，
+	// 也不参与 allow 短路——否则一条只针对 shell 的 allow 会顺带豁免掉别的工具。
+	if !toolScopeAllows(r.ToolScope, toolName) {
+		return false
+	}
 	var subject string
 	switch r.MatchTarget {
 	case "tool_name":
