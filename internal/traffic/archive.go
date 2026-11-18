@@ -60,7 +60,7 @@ func (t *Traffic) ExportHosts(hosts []string, dir string) (int64, error) {
 		placeholders[i] = "?"
 		args[i] = host
 	}
-	rows, err := t.db.Query(`SELECT id,ts,host,method,url_template,url,status,content_type,req_len,resp_len,path
+	rows, err := t.db.Query(`SELECT id,COALESCE(ts,0),COALESCE(host,''),COALESCE(method,''),COALESCE(url_template,''),COALESCE(url,''),COALESCE(status,0),COALESCE(content_type,''),COALESCE(req_len,0),COALESCE(resp_len,0),COALESCE(path,'') 
 FROM exchanges WHERE host IN (`+strings.Join(placeholders, ",")+`) ORDER BY ts,id`, args...)
 	if err != nil {
 		return 0, err

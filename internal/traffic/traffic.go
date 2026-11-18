@@ -869,7 +869,7 @@ func (t *Traffic) Search(host string, page, size int) ([]ExchangeMeta, error) {
 	if size <= 0 || size > 500 {
 		size = 100
 	}
-	q := `SELECT id,ts,host,method,url_template,url,status,content_type,resp_len,path FROM exchanges`
+	q := `SELECT ` + exchangesMetaCols + ` FROM exchanges`
 	args := []any{}
 	if host != "" {
 		q += ` WHERE host=?`
@@ -1030,7 +1030,7 @@ func (t *Traffic) Page(f PageQuery, page, size int) (rows []ExchangeMeta, total 
 	}
 	// id embeds capture timestamp + sequence, so a trailing id DESC makes the order
 	// total and pagination stable even when the sort column has many ties.
-	sel := `SELECT id,ts,host,method,url_template,url,status,content_type,resp_len,path FROM exchanges` +
+	sel := `SELECT ` + exchangesMetaCols + ` FROM exchanges` +
 		where + ` ORDER BY ` + col + ` ` + dir + `, id DESC LIMIT ? OFFSET ?`
 	qargs := append(append([]any{}, args...), size, page*size)
 	rs, err := t.db.Query(sel, qargs...)
@@ -1068,7 +1068,7 @@ FROM exchange_bodies b JOIN exchanges e ON e.id=b.id WHERE b.id=?`, id).
 	}
 
 	var rel string
-	if err = t.db.QueryRow(`SELECT path FROM exchanges WHERE id=?`, id).Scan(&rel); err != nil {
+	if err = t.db.QueryRow(`SELECT COALESCE(path,'') FROM exchanges WHERE id=?`, id).Scan(&rel); err != nil {
 		return "", "", err
 	}
 	if strings.TrimSpace(rel) == "" {
@@ -1094,6 +1094,12 @@ func assembleRaw(head string, body []byte, blob sql.NullString, total int) strin
 }
 
 // HostCount is one distinct recorded host plus its exchange count.
+// exchangesMetaCols 是元数据查询的统一列清单。exchanges 表的业务列全部可空
+// （建表没有 NOT NULL，历史库与异常写入都可能留下 NULL），直接扫描进 string/int
+// 会报 "converting NULL to string is unsupported"——一条脏行就能让整页流量查询
+// 失败。这里统一 COALESCE，查询侧不再依赖「写入永远填满」的假设。
+const exchangesMetaCols = `id,COALESCE(ts,0),COALESCE(host,''),COALESCE(method,''),COALESCE(url_template,''),COALESCE(url,''),COALESCE(status,0),COALESCE(content_type,''),COALESCE(resp_len,0),COALESCE(path,'')`
+
 type HostCount struct {
 	Host  string `json:"host"`
 	Count int    `json:"count"`
@@ -1102,7 +1108,7 @@ type HostCount struct {
 // Hosts returns distinct recorded hosts with exchange counts, most recent
 // activity first — powers the page's target picker.
 func (t *Traffic) Hosts() ([]HostCount, error) {
-	rows, err := t.db.Query(`SELECT host, COUNT(*) AS n, MAX(ts) AS last FROM exchanges GROUP BY host ORDER BY last DESC`)
+	rows, err := t.db.Query(`SELECT COALESCE(host,''), COUNT(*) AS n, COALESCE(MAX(ts),0) AS last FROM exchanges GROUP BY host ORDER BY last DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -1312,7 +1318,7 @@ func (t *Traffic) deleteWhere(tx *sql.Tx, where string, args ...any) (int64, err
 // already gone can still have an orphaned directory, and deleting the host should
 // take that with it.
 func (t *Traffic) hostTrees(where string, args ...any) ([]string, error) {
-	rows, err := t.db.Query(`SELECT DISTINCT host FROM exchanges WHERE `+where, args...)
+	rows, err := t.db.Query(`SELECT DISTINCT COALESCE(host,'') FROM exchanges WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2009,7 +2015,7 @@ func (t *Traffic) query(host, contains, bodyContains string, page, limit int) ([
 	if page < 0 {
 		page = 0
 	}
-	q := `SELECT id,ts,host,method,url_template,url,status,content_type,resp_len,path FROM exchanges WHERE 1=1`
+	q := `SELECT ` + exchangesMetaCols + ` FROM exchanges WHERE 1=1`
 	args := []any{}
 	if host != "" {
 		hostName, port, err := normalizeSearchHost(host)

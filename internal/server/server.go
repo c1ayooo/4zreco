@@ -298,8 +298,8 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 		go s.evidenceStore().RunGC(s.ctx)
 		go s.recoverPendingPreviews()     // 文档预览：恢复上次未完成的队列（v0.4.23）
 		go s.recoverEmptyFindingReports() // 空报告巡检：重启/崩溃后补写被中断的报告（U5，上游 v0.4.63）
-		s.seedPythonInterpreter()     // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
-		go newScheduler(s).Run(s.ctx) // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
+		s.seedPythonInterpreter()         // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
+		go newScheduler(s).Run(s.ctx)     // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
 		// 与触发器的业务节奏不同，且两者失败互不牵连——推送卡住不该影响 agent 触发。
 		go newNotifier(s).Run(s.ctx)
@@ -991,8 +991,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/auth-check", s.taskAuthCheck) // 登录凭据自检（真实发一次登录请求）
 	// 证据附件（v0.5.0）：列表 / 单文件下载 / 证据包 zip。
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts", s.listTaskArtifacts)
-	mux.HandleFunc("PATCH /api/tasks/{id}/artifacts/{aid}", s.patchTaskArtifact) // 改归属（任务级 ↔ 漏洞）
-	mux.HandleFunc("POST /api/tasks/{id}/artifacts/scan", s.scanTaskArtifacts)   // 历史目录补登记
+	mux.HandleFunc("PATCH /api/tasks/{id}/artifacts/{aid}", s.patchTaskArtifact)   // 改归属（任务级 ↔ 漏洞）
+	mux.HandleFunc("POST /api/tasks/{id}/artifacts/scan", s.scanTaskArtifacts)     // 历史目录补登记
 	mux.HandleFunc("POST /api/tasks/{id}/artifacts/autobind", s.autoBindArtifacts) // 主机交叉自动归属（v0.4.42 移植）
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/export", s.exportTaskArtifacts)
 	mux.HandleFunc("GET /api/tasks/{id}/artifacts/{aid}", s.serveTaskArtifact)
@@ -4715,7 +4715,39 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
+	// 5xx 脱敏（U8）：内部错误文本常带 SQL 片段、文件路径、上游报文甚至驱动细节，
+	// 直接回给浏览器等于把实现面当情报送出去。对外只给固定文案 + 短关联 id，
+	// 细节进服务端日志供管理员按 id 定位。4xx 原样透传——那里大量是 409 业务
+	// 可操作提示（"任务正在删除" 之类），脱敏只会让人不知道下一步该干什么。
+	if code >= 500 {
+		id := errRefID()
+		log.Printf("[api] 500 err_id=%s: %s", id, redactErrDetail(msg))
+		writeJSON(w, code, map[string]any{
+			"error":  "服务内部错误，请稍后重试；如持续出现，请把错误编号反馈给管理员（详情见服务端日志）",
+			"err_id": id,
+		})
+		return
+	}
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+// errRefID 生成一次 5xx 的短关联 id（时间戳 + 进程内序号），只用于把用户反馈
+// 对到日志行，不进任何业务键。
+func errRefID() string {
+	n := atomic.AddUint64(&errRefSeq, 1)
+	return fmt.Sprintf("%x-%x", time.Now().UnixNano()&0xffffffff, n)
+}
+
+var errRefSeq uint64
+
+// dsnPasswordRE 命中 `scheme://user:password@host` 里的密码段——驱动错误有时会把
+// DSN 原样带进 message，日志里也不能留明文凭据（AGENTS 凭据纪律）。
+var dsnPasswordRE = regexp.MustCompile(`(://[^:/@\s]+:)[^@/\s]+@`)
+
+// redactErrDetail 只用于日志落盘前的凭据打码，不影响返回给前端的内容（前端本来
+// 就只拿到固定文案）。
+func redactErrDetail(msg string) string {
+	return dsnPasswordRE.ReplaceAllString(msg, "${1}***@")
 }
 
 func atoiDefault(s string, d int) int {
