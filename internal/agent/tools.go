@@ -1916,6 +1916,13 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			result.EvidenceNote += " ⚠ 以下流量引用未生效（ID 不存在或正文不可读）：" + strings.Join(ids, ", ") +
 				"。已生效的引用已正常绑定；若这些 ID 确实存在，请用 traffic_get 核实真实 ID 后用 bind_finding_traffic 补绑。"
 		}
+		// 回溯归属（U6，上游 v0.4.47）：同一意图目录下所有 finding_id 为空的证据
+		// 一次性归属本漏洞——worker 先 save_evidence、后 report_finding 时补上证据链。
+		if bindIntent := pid(a.IntentID); bindIntent > 0 && t.taskID > 0 {
+			if n, err := t.ts.RetroBindIntentEvidence(t.taskID, bindIntent, recorded.FindingID); err == nil && n > 0 {
+				result.EvidenceNote += fmt.Sprintf(" ✨ 自动归属了本意图的 %d 条历史证据。", n)
+			}
+		}
 		// 攻击链自动续跳（chain.go，v0.4.64 批次）：只有新建的 finding 才续跳；
 		// 重复上报（已合并）不派——续跳锚在新 finding 节点上，合并再派会重复铺链。
 		if !recorded.Duplicate {

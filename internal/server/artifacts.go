@@ -162,6 +162,7 @@ func (s *Server) RecordArtifact(taskID, findingID int64, runDir, relPath, name, 
 		}
 	}
 
+	// 意图 provenance（U6）在 recordArtifactAbs 内从 abs 路径的意图段提取。
 	return s.recordArtifactAbs(abs, taskKey, findingID, name, kind, sourceURL, note, info.Size())
 }
 
@@ -528,6 +529,18 @@ func artifactListJSON(list []db.TaskArtifact) []map[string]any {
 }
 
 // recordArtifactAbs 以绝对路径登记附件（调用方已完成路径边界校验）。
+// intentFromRunDir 从运行目录基名提取意图 ID：worker 的 runDir 是
+// tasks/<taskID>/i<intentID>（config.Paths.TaskRunDir）；其余形态返回 0。
+func intentFromRunDir(runDir string) int64 {
+	b := filepath.Base(runDir)
+	if len(b) > 1 && b[0] == 'i' {
+		if id, err := strconv.ParseInt(b[1:], 10, 64); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 0
+}
+
 func (s *Server) recordArtifactAbs(abs, taskKey string, findingID int64, name, kind, sourceURL, note string, size int64) (*db.TaskArtifact, error) {
 	pg := s.m.PG()
 	if pg == nil {
@@ -581,7 +594,7 @@ func (s *Server) recordArtifactAbs(abs, taskKey string, findingID int64, name, k
 		return nil, fmt.Errorf("写入附件失败：%w", err)
 	}
 	a := &db.TaskArtifact{
-		TaskID: taskKey, FindingID: findingID, Name: name, Kind: kind, Mime: autoMime,
+		TaskID: taskKey, FindingID: findingID, IntentID: intentFromRunDir(filepath.Dir(abs)), Name: name, Kind: kind, Mime: autoMime,
 		SizeBytes: int64(len(data)), SHA256: sha, SourceURL: sourceURL,
 		Note: note, Storage: storage,
 	}

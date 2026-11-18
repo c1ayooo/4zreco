@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strconv"
 	"context"
 	"time"
 )
@@ -14,6 +15,10 @@ type TaskArtifact struct {
 	// FindingID 可选：这张图/这个样本证明哪个漏洞（worker 报完漏洞后登记时带上）。
 	// 0 = 任务级材料（如目标首页截图），不进单个漏洞的详情页。
 	FindingID int64  `json:"finding_id,omitempty"`
+	// IntentID 意图 provenance（U6）：save_evidence 登记时从 runDir 基名
+	// i<intentID> 提取；0 = 非意图运行目录（planner 直投/历史补登记）。
+	// report_finding 落库后按本列回溯归属同意图全部未绑定证据。
+	IntentID int64  `json:"intent_id,omitempty"`
 	Name      string `json:"name"` // 展示名（含扩展名）
 	Kind      string `json:"kind"` // image|data|log|html|other
 	Mime      string `json:"mime,omitempty"`
@@ -49,6 +54,11 @@ CREATE TABLE IF NOT EXISTS task_artifacts (
 CREATE INDEX IF NOT EXISTS idx_task_artifacts_task ON task_artifacts(task_id);
 ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS finding_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_task_artifacts_finding ON task_artifacts(finding_id);
+-- 意图 provenance（U6 证据回溯归属，上游 v0.4.47）：本地附件存储是扁平的
+-- tasks/<id>/artifacts/，意图来源不再编码在 storage_path 里，改由本列承载
+-- （save_evidence 登记时从 runDir 基名 i<intentID> 提取）。
+ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS intent_id BIGINT;
+CREATE INDEX IF NOT EXISTS idx_task_artifacts_intent ON task_artifacts(intent_id);
 ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS preview_state TEXT;
 ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS preview_pages INT NOT NULL DEFAULT 0;
 ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS preview_error TEXT;
@@ -60,10 +70,10 @@ ALTER TABLE task_artifacts ADD COLUMN IF NOT EXISTS previewed_at TIMESTAMPTZ;
 // InsertTaskArtifact 登记一个附件（文件已由 host 落盘）。
 func (d *DB) InsertTaskArtifact(ctx context.Context, a *TaskArtifact) error {
 	return d.QueryRowContext(ctx, `
-INSERT INTO task_artifacts(task_id,finding_id,name,kind,mime,size_bytes,sha256,source_url,note,storage_path,preview_state)
-VALUES ($1,NULLIF($2,0),$3,$4,NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),$10,NULLIF($11,''))
+INSERT INTO task_artifacts(task_id,finding_id,intent_id,name,kind,mime,size_bytes,sha256,source_url,note,storage_path,preview_state)
+VALUES ($1,NULLIF($2,0),NULLIF($3,0),$4,$5,NULLIF($6,''),$7,NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),$11,NULLIF($12,''))
 RETURNING id, created_at`,
-		a.TaskID, a.FindingID, a.Name, a.Kind, a.Mime, a.SizeBytes, a.SHA256, a.SourceURL, a.Note, a.Storage, a.PreviewState).
+		a.TaskID, a.FindingID, a.IntentID, a.Name, a.Kind, a.Mime, a.SizeBytes, a.SHA256, a.SourceURL, a.Note, a.Storage, a.PreviewState).
 		Scan(&a.ID, &a.CreatedAt)
 }
 
@@ -193,4 +203,24 @@ func (d *DB) ListArtifactTaskIDs() ([]string, error) {
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// RetroBindIntentEvidence 把指定意图运行目录下的全部未归属证据一次性绑定到漏洞
+// （U6，上游 v0.4.47）。触发时机：report_finding 落库后——worker 在意图执行中先
+// save_evidence、后 report_finding，此时该意图下所有已保存但 finding_id 为空的
+// 证据都属于这个漏洞。本地附件存储不含意图目录（扁平 tasks/<id>/artifacts/），
+// provenance 由 intent_id 列承载（登记时从 runDir 基名提取），不再按路径 LIKE。
+// 返回实际绑定的数量。调用方（report_finding）不需要额外确认——意图列是天然的
+// provenance 边界，不会误绑其他意图的证据。
+func (s *ExplorationStore) RetroBindIntentEvidence(taskID, intentID, findingID int64) (int, error) {
+	res, err := s.db.Exec(`
+UPDATE task_artifacts
+SET finding_id=$3
+WHERE task_id=$1 AND finding_id IS NULL AND COALESCE(intent_id,0)=$2`,
+		strconv.FormatInt(taskID, 10), intentID, findingID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
