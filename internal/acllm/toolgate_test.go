@@ -8,6 +8,7 @@ package acllm
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -398,4 +399,96 @@ func slowWriter(firstStarted chan<- struct{}, firstRelease <-chan struct{}, seco
 			return actool.Text("second written"), nil
 		},
 	})
+}
+
+// ---- U2 ExecuteExtraTool 守卫解包：gate 端点机械行为 ----
+
+// TestGateExecuteExtraToolUnwrapReachesPipeline: an unlocked deferred tool
+// invoked through the wrapper runs the INNER tool through execOne — OnCallStart
+// (trace binding) and OnResult both see the real name/params, and the tool runs.
+func TestGateExecuteExtraToolUnwrapReachesPipeline(t *testing.T) {
+	var ran []string
+	inner := actool.Build(actool.Spec{
+		Name:        "zombie_probe",
+		Description: "deferred probe",
+		Schema:      objSchema(map[string]string{"command": "string"}),
+		Permissions: func(context.Context, json.RawMessage, acperm.Context) acperm.Decision { return acperm.Allowed() },
+		Run: func(_ context.Context, in json.RawMessage, _ *actool.ToolContext) (actool.Result, error) {
+			ran = append(ran, string(in))
+			return actool.Text("probe ok"), nil
+		},
+	})
+	reg := actool.NewRegistry(inner)
+	exec := actool.NewExecuteExtraTool(reg, nil) // gate's step 0 owns the unlock check
+	g := NewToolGate([]actool.CoreTool{inner, exec}, ToolTemplate{}, 0).
+		SetDeferred([]string{"zombie_probe"}, actool.NewUnlockSet("zombie_probe"))
+
+	var startName string
+	var startInput json.RawMessage
+	var resultName string
+	g.OnCallStart = func(callID, name string, input json.RawMessage) { startName, startInput = name, input }
+	g.OnResult = func(callID, name, text string, isErr bool, extras []llm.Message) { resultName = name }
+
+	out, err := endpointOf(t, g, "ExecuteExtraTool", "c1")(context.Background(),
+		`{"tool_name":"zombie_probe","params":{"command":"inspect"}}`)
+	if err != nil {
+		t.Fatalf("gate endpoint returned Go error: %v", err)
+	}
+	if out != "probe ok" || len(ran) != 1 || !strings.Contains(ran[0], "inspect") {
+		t.Fatalf("inner tool not executed via unwrap: out=%q ran=%v", out, ran)
+	}
+	if startName != "zombie_probe" || !strings.Contains(string(startInput), "inspect") {
+		t.Fatalf("OnCallStart must bind the real tool name (trace correlation): %q %s", startName, startInput)
+	}
+	if resultName != "zombie_probe" {
+		t.Fatalf("OnResult must report the real tool name: %q", resultName)
+	}
+}
+
+// TestGateExecuteExtraToolLockedDeferredRejected: a deferred tool not in the
+// unlock set is rejected locally without execution — same wording the wrapper's
+// Run produces (execOne step 0 is the execution-time half of the V5 双保险).
+func TestGateExecuteExtraToolLockedDeferredRejected(t *testing.T) {
+	var ran []string
+	inner := deferredProbe(&ran)
+	reg := actool.NewRegistry(inner)
+	exec := actool.NewExecuteExtraTool(reg, nil)
+	g := NewToolGate([]actool.CoreTool{inner, exec}, ToolTemplate{}, 0).
+		SetDeferred([]string{"zombie_probe"}, actool.NewUnlockSet()) // nothing unlocked
+
+	out, err := endpointOf(t, g, "ExecuteExtraTool", "c1")(context.Background(),
+		`{"tool_name":"zombie_probe","params":{"command":"boom"}}`)
+	if err != nil {
+		t.Fatalf("gate endpoint returned Go error: %v", err)
+	}
+	if len(ran) != 0 {
+		t.Fatalf("locked deferred tool executed: %v", ran)
+	}
+	if !strings.Contains(out, "not unlocked in this session") {
+		t.Fatalf("unlock rejection text = %q", out)
+	}
+}
+
+// TestGateExecuteExtraToolNonDeferredStaysWrapper: a core (non-deferred) tool
+// name inside the wrapper keeps the wrapper's own semantics — its Run rejects
+// non-unlocked names, so the wrapper cannot be used to launder core-tool calls.
+func TestGateExecuteExtraToolNonDeferredStaysWrapper(t *testing.T) {
+	var ran []string
+	// deferredProbe 在 middleware_test.go；此处该工具**不在** deferred 集合里。
+	core := deferredProbe(&ran)
+	reg := actool.NewRegistry(core)
+	exec := actool.NewExecuteExtraTool(reg, actool.NewUnlockSet())
+	g := NewToolGate([]actool.CoreTool{core, exec}, ToolTemplate{}, 0) // no deferred set armed
+
+	out, err := endpointOf(t, g, "ExecuteExtraTool", "c1")(context.Background(),
+		`{"tool_name":"zombie_probe","params":{"command":"x"}}`)
+	if err != nil {
+		t.Fatalf("gate endpoint returned Go error: %v", err)
+	}
+	if len(ran) != 0 {
+		t.Fatalf("non-deferred inner call must keep wrapper semantics (rejected): ran=%v", ran)
+	}
+	if !strings.Contains(out, "not unlocked") {
+		t.Fatalf("wrapper rejection text = %q", out)
+	}
 }

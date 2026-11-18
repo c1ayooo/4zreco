@@ -36,6 +36,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
 	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
@@ -204,8 +205,20 @@ func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.Invok
 	}
 	return func(ctx context.Context, args string, _ ...tool.Option) (string, error) {
 		input := ArgsFromEino(args)
+		// U2 守卫解包（上游 v0.4.80 #21.3）：ExecuteExtraTool 包装调用解出内层
+		// tool_name+params 后走完整管线——trace（OnCallStart 绑定）、规则匹配、
+		// LLM judge、审批、审计与并发标记全部看到真实工具名，按内层工具名/参数
+		// 写的拦截规则不再被包装器绕过。仅解包 deferred 集合内的内层工具（未解锁
+		// 的会在 execOne 步骤 0 被拦，文案与包装器 Run 一致）；非 deferred 名或
+		// 解包失败（坏 JSON/空名/未知名）保持包装器原语义，由其 Run 给出错误结果。
+		et, ename, einput := t, t.Name(), input
+		if t.Name() == actool.ExecuteExtraToolName {
+			if inner, innerInput, ok := unwrapDeferredCall(g.tools, g.deferred, input); ok {
+				et, ename, einput = inner, inner.Name(), innerInput
+			}
+		}
 		if g.OnCallStart != nil {
-			g.OnCallStart(tCtx.CallID, t.Name(), input)
+			g.OnCallStart(tCtx.CallID, ename, einput)
 		}
 		// P2-3 恢复重入：本调用此前被审批中断，框架带着 checkpoint 重放本端点。
 		// 命中的调用把决定交 guard 核对（db.WithHitlResume → guard 顶部）；未命中
@@ -220,13 +233,13 @@ func (g *ToolGate) WrapInvokableToolCall(ctx context.Context, endpoint adk.Invok
 				ctx = db.WithHitlResume(ctx, data)
 			}
 		}
-		text, isErr, extras, intErr := g.execOne(ctx, t, tCtx.CallID, input)
+		text, isErr, extras, intErr := g.execOne(ctx, et, tCtx.CallID, einput)
 		if intErr != nil {
 			// 审批中断：工具未执行、无结果可记——结果在恢复后落 DTO。
 			return "", intErr
 		}
 		if g.OnResult != nil {
-			g.OnResult(tCtx.CallID, t.Name(), text, isErr, extras)
+			g.OnResult(tCtx.CallID, ename, text, isErr, extras)
 		}
 		return text, nil
 	}, nil
@@ -353,6 +366,31 @@ func (g *ToolGate) execOne(ctx context.Context, t actool.CoreTool, callID string
 	}
 
 	return text, res.IsError, res.Extra, nil
+}
+
+// unwrapDeferredCall resolves an ExecuteExtraTool wrapper input to the inner
+// deferred tool and its params (U2, 上游 v0.4.80 #21.3). Only names inside the
+// deferred set resolve — anything else (core tool names, unknown names, bad
+// JSON, empty tool_name) keeps the wrapper's own semantics, so the unlock
+// discipline is unchanged: a locked deferred tool is rejected at execOne step 0
+// with the same message the wrapper's Run produces.
+func unwrapDeferredCall(tools map[string]actool.CoreTool, deferred map[string]bool, input json.RawMessage) (actool.CoreTool, json.RawMessage, bool) {
+	var in struct {
+		ToolName string          `json:"tool_name"`
+		Params   json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(input, &in); err != nil || strings.TrimSpace(in.ToolName) == "" {
+		return nil, nil, false
+	}
+	inner, ok := tools[in.ToolName]
+	if !ok || !deferred[in.ToolName] {
+		return nil, nil, false
+	}
+	params := in.Params
+	if len(params) == 0 {
+		params = json.RawMessage("{}")
+	}
+	return inner, params, true
 }
 
 // safeToolCall invokes the tool with guardPanic semantics: a panicking tool

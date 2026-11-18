@@ -18,7 +18,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/c1ayooo/4zreco/internal/db"
 	"github.com/c1ayooo/4zreco/internal/guard"
+	"github.com/c1ayooo/4zreco/internal/intercept"
 	"github.com/c1ayooo/4zreco/internal/norma/llm"
 	acperm "github.com/c1ayooo/4zreco/internal/norma/permission"
 	actool "github.com/c1ayooo/4zreco/internal/norma/tool"
@@ -840,5 +842,115 @@ func TestGateGuardEgressBlocksBeforeExecution(t *testing.T) {
 	// a blocked call never produced a result → no ok attribution
 	if got := g.Attributions()["ok"]; got != 0 {
 		t.Fatalf("blocked call should not count as ok, got %d", got)
+	}
+}
+
+// ---- U2 ExecuteExtraTool 守卫解包（上游 v0.4.80 #21.3）----
+//
+// 模型经 ExecuteExtraTool 调用延迟注册的工具时，拦截链路（规则匹配、judge、
+// 审计）必须看到内层 tool_name+params——按真实工具名/参数内容写的拦截规则
+// 不能被包装器绕过。unwrap 做在 gate 端点（toolgate.go），guard 链代码不动。
+
+// deferredProbe builds a deferred 强动作 tool recording its invocation input.
+// name 默认 zombie_probe；测试按内层工具名写规则时传 "Bash"（defaultEnabledTools
+// 成员，规则匹配路径才会进入——生产上被 defer 的强动作工具同样在启用集合里）。
+func deferredProbe(ran *[]string, name ...string) actool.CoreTool {
+	toolName := "zombie_probe"
+	if len(name) > 0 && name[0] != "" {
+		toolName = name[0]
+	}
+	return actool.Build(actool.Spec{
+		Name:        toolName,
+		Description: "deferred strong-action probe",
+		Schema:      objSchema(map[string]string{"command": "string"}),
+		Permissions: func(context.Context, json.RawMessage, acperm.Context) acperm.Decision { return acperm.Allowed() },
+		Run: func(_ context.Context, in json.RawMessage, _ *actool.ToolContext) (actool.Result, error) {
+			*ran = append(*ran, string(in))
+			return actool.Text("probe done"), nil
+		},
+	})
+}
+
+// gateWithDeferred assembles the deferred wiring the way askernel/session.go
+// does: inner tool + access tool in one registry, gate over both, unlock armed.
+func gateWithDeferred(inner actool.CoreTool, unlock *actool.UnlockSet) (*ToolGate, error) {
+	reg := actool.NewRegistry(inner)
+	exec := actool.NewExecuteExtraTool(reg, unlock)
+	gate := NewToolGate([]actool.CoreTool{inner, exec}, ToolTemplate{}, 0).
+		SetDeferred([]string{inner.Name()}, unlock)
+	return gate, nil
+}
+
+// 按内层工具名写的 tool_name 规则必须拦住包装调用；审计记真实工具名。
+func TestGateExecuteExtraToolUnwrapsInnerToolName(t *testing.T) {
+	var ran []string
+	ic := intercept.New(nil)
+	ic.SetRulesInMemory([]db.InterceptRule{{
+		ID: 1, Name: "[测试] 禁止 Bash", Enabled: true, Priority: 100,
+		MatchTarget: "tool_name", MatchType: "regex", Pattern: `^Bash$`,
+		Action: "deny", Message: "测试规则",
+	}})
+	g := guard.NewWithInterceptor(ic)
+	unlock := actool.NewUnlockSet("Bash")
+	gate, _ := gateWithDeferred(deferredProbe(&ran, "Bash"), unlock)
+	gate.SetHooks(g.Hooks())
+
+	text := gateEndpoint(t, gate, "ExecuteExtraTool", "c1",
+		`{"tool_name":"Bash","params":{"command":"boom"}}`)
+	if len(ran) != 0 {
+		t.Fatalf("包装调用未被按内层工具名规则拦截: ran=%v", ran)
+	}
+	if !strings.Contains(text, "平台管控") {
+		t.Fatalf("block text = %q", text)
+	}
+	audit := g.Audit()
+	if len(audit) == 0 || audit[len(audit)-1].Tool != "Bash" || audit[len(audit)-1].Action != "block" {
+		t.Fatalf("审计必须记真实工具名并拦截（preToolUse 先记 allow 再记 block）: %+v", audit)
+	}
+}
+
+// 内层 params 必须参与规则匹配：不解包则命令特征规则永远不命中。
+func TestGateExecuteExtraToolUnwrapsInnerParams(t *testing.T) {
+	var ran []string
+	ic := intercept.New(nil)
+	ic.SetRulesInMemory([]db.InterceptRule{{
+		ID: 1, Name: "[测试] 危险参数", Enabled: true, Priority: 100,
+		MatchTarget: "tool_input", MatchType: "regex", Pattern: `(?i)forbidden-flag`,
+		Action: "deny", Message: "测试规则",
+	}})
+	g := guard.NewWithInterceptor(ic)
+	unlock := actool.NewUnlockSet("Bash")
+	gate, _ := gateWithDeferred(deferredProbe(&ran, "Bash"), unlock)
+	gate.SetHooks(g.Hooks())
+
+	gateEndpoint(t, gate, "ExecuteExtraTool", "c1",
+		`{"tool_name":"Bash","params":{"command":"run --forbidden-flag"}}`)
+	if len(ran) != 0 {
+		t.Fatalf("包装调用未被按内层参数规则拦截: ran=%v", ran)
+	}
+	if audit := g.Audit(); len(audit) == 0 || audit[len(audit)-1].Action != "block" {
+		t.Fatalf("包装调用必须被按内层参数规则拦截: %+v", audit)
+	}
+}
+
+// 规则不命中时正常放行，内层工具真执行，PostToolUse 审计也记真实工具名。
+func TestGateExecuteExtraToolAllowPathRecordsRealName(t *testing.T) {
+	var ran []string
+	g := guard.New()
+	unlock := actool.NewUnlockSet("zombie_probe")
+	gate, _ := gateWithDeferred(deferredProbe(&ran), unlock)
+	gate.SetHooks(g.Hooks())
+
+	text := gateEndpoint(t, gate, "ExecuteExtraTool", "c1",
+		`{"tool_name":"zombie_probe","params":{"command":"safe probe"}}`)
+	if len(ran) != 1 || !strings.Contains(ran[0], "safe probe") {
+		t.Fatalf("内层工具未按解包后参数执行: ran=%v", ran)
+	}
+	if !strings.Contains(text, "probe done") {
+		t.Fatalf("result = %q", text)
+	}
+	audit := g.Audit()
+	if len(audit) != 1 || audit[0].Tool != "zombie_probe" || audit[0].Action != "allow" {
+		t.Fatalf("audit 必须记真实工具名: %+v", audit)
 	}
 }
