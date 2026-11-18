@@ -719,7 +719,7 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.nodeDetail(),
 		// search_vulns / get_vuln：worker 识别出目标组件与版本后直接查已知漏洞与
 		// 影响区间——公开情报优先于模型现想 payload。
-		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
+		t.searchVulns(), t.getVuln(), t.getPoc(), t.parsePocTemplate(), t.scanWithNuclei(), t.netContext(),
 		// gogo_scan / spray_finger（§5.5 P2）：端口/服务发现与 Web 指纹领域工具——
 		// SDK 进程内直跑、只读发现类（readTool，exploit 关闭），一次调用回紧凑摘要。
 		t.gogoScan(), t.sprayFinger(),
@@ -791,7 +791,7 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		// list_untested_assets：按需查本任务范围内未测资产(类型+分页)，自行决定补测。
 		t.listUntestedAssets(),
 		// search_vulns / get_vuln：人在环路上也可直接查公开已知漏洞情报。
-		t.searchVulns(), t.getVuln(), t.getPoc(), t.scanWithNuclei(), t.netContext(),
+		t.searchVulns(), t.getVuln(), t.getPoc(), t.parsePocTemplate(), t.scanWithNuclei(), t.netContext(),
 		// gogo_scan / spray_finger（§5.5 P2）：与 worker 同款只读发现工具。
 		t.gogoScan(), t.sprayFinger(),
 		// katana_scan / passive_search / web_search（§5.5 P4）：与 worker 同款只读发现工具。

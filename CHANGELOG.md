@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 新增：nuclei 模板结构化解析（Jingwei 同步第三批 J1）
+
+- **`parse_poc_template` 领域工具**（移植自 Jingwei v1.6.5 `pocparse`）：把一份 nuclei
+  YAML 模板解析成 `id/name/severity/protocol/CVE/CWE/CVSS/tags/author/references` 与
+  sha256 `digest`——`scan_with_nuclei` 之前先判断模板针对哪个漏洞、严重性是否值得跑、
+  是否与已跑模板重复（digest 相同即同一模板）。
+- **安全边界**：`path` 模式必须落在 `<Base>/nuclei-templates` 树内（两侧 `EvalSymlinks`
+  后做前缀校验，符号链接翻不出去），只接受 `.yaml/.yml` 普通文件，读取上限 2MB；
+  `content` 模式直给原文。工具进 planner/worker/mainagent 三张清单并经工具目录播种。
+
 ### 修复：预置凭据熔断改账号级共享（方案 G3 折中，行为变更）
 
 - **跨任务共享失败计数**：熔断状态键由「任务/资产/凭据」改为「资产/凭据」——同一客户

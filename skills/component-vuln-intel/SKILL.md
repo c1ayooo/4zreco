@@ -1,6 +1,6 @@
 ---
 name: component-vuln-intel
-description: 拿到组件指纹或版本号、要判断是否存在已知 CVE、找 PoC 或决定是否值得打时调用——平台内置漏洞情报（search_vulns/get_vuln/get_poc/scan_with_nuclei）的标准用法与版本区间判定、误报规避。当意图涉及「已知漏洞/CVE/版本匹配/PoC」时使用。
+description: 拿到组件指纹或版本号、要判断是否存在已知 CVE、找 PoC 或决定是否值得打时调用——平台内置漏洞情报（search_vulns/get_vuln/get_poc/parse_poc_template/scan_with_nuclei）的标准用法与版本区间判定、误报规避。当意图涉及「已知漏洞/CVE/版本匹配/PoC」时使用。
 tags:
   cwe: [CWE-1104, CWE-1395, CWE-1035]
   attack: [T1190, T1203]
@@ -35,6 +35,9 @@ tags:
 ## nuclei 的正确用法
 
 - 先确认模板覆盖：`nuclei -t <匹配的模板/标签> -u <url> -severity high,critical -stats`；
+- 拿不准某个模板针对哪个漏洞、严重性够不够、是否与已跑的重复时，先 `parse_poc_template`
+  （给模板树内的 path 或 YAML 原文）：返回 severity/CVE/CWE/tags 与 sha256 digest——
+  digest 相同即同一模板，不要重复跑；
 - 平台工具 `scan_with_nuclei` 会组好命令并留流量；自己跑时结果落文件后 `save_evidence`；
 - 模板命中 ≠ 漏洞：核对请求/响应是否真的触发（有些模板只匹配版本 banner）；
 - 高危模板（如 RCE）先确认目标有授权且不影响业务，再执行。
