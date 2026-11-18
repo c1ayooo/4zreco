@@ -35,6 +35,13 @@ func nowStr() string { return time.Now().Format("2006-01-02 15:04:05 MST") }
 // default template, then to the raw default string — an agent never starts with a
 // half-rendered prompt. Callers append the code-owned tail (trafficTool / 中间产物
 // 输出规约) AFTER this, so those can't be edited away via the DB body.
+// SkillIndexBlock（U4，上游 v0.4.60，宿主注入）：把该 agent 已绑定的 skill 索引块
+// 追加进 system prompt。为什么必须进 prompt 而不只是工具描述：Skill 是元工具，
+// 模型不被显式提醒就几乎不会主动调（上游实测 56k 次调用里 Skill 触发 8 次、任务
+// 18 零次——与当年宿主工具「装了没用起来」同一病根，解法也同款：清单进 system
+// prompt）。server/assembly.go 装配处赋值；返回空串 = 该 agent 没绑技能，不加块。
+var SkillIndexBlock func(agentKey string) string
+
 func renderSystem(agentKey, def string, vars any) string {
 	tmpl := def
 	if PromptOverride != nil {
@@ -42,14 +49,18 @@ func renderSystem(agentKey, def string, vars any) string {
 			tmpl = t
 		}
 	}
+	body := def
 	if out, err := renderTmpl(tmpl, vars); err == nil {
-		return out
+		body = out
+	} else if out, err := renderTmpl(def, vars); err == nil {
+		body = out
 	}
-	// DB template broke (e.g. references an out-of-catalog var) → code default.
-	if out, err := renderTmpl(def, vars); err == nil {
-		return out
+	if SkillIndexBlock != nil {
+		if blk := SkillIndexBlock(agentKey); blk != "" {
+			body += "\n\n" + blk
+		}
 	}
-	return def
+	return body
 }
 
 func renderTmpl(tmpl string, vars any) (string, error) {

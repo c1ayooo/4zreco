@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c1ayooo/4zreco/internal/agent"
@@ -26,6 +27,60 @@ import (
 // capture is on) to add to EVERY agent's base list — the DB tools table then
 // filters them per-agent binding. Empty/nil → no host tools this run (capture off).
 func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
+	// 技能速查块注入 system prompt（U4，上游 v0.4.60）：Skill 是元工具，模型不被
+	// system prompt 显式提醒就几乎不调（上游 56k 调用里 Skill 只触发 8 次、任务 18
+	// 零次）。按 agent 绑定清单生成「名称+何时用」速查表；描述按触发场景撰写，
+	// 截首句即可。registry 60s 缓存——prompt 每次 run 都渲染，不能每次读技能文件。
+	var (
+		idxMu      sync.Mutex
+		idxCacheAt time.Time
+		idxDesc    map[string]string
+	)
+	loadDesc := func() map[string]string {
+		idxMu.Lock()
+		defer idxMu.Unlock()
+		if time.Since(idxCacheAt) < time.Minute {
+			return idxDesc
+		}
+		idxDesc = map[string]string{}
+		if allReg, err := skill.LoadDir(skillDir); err == nil && allReg != nil {
+			for _, sk := range allReg.List() {
+				if sk.Dir == "" {
+					continue
+				}
+				d := strings.TrimSpace(sk.Description)
+				if i := strings.IndexAny(d, "。；;\n"); i > 0 {
+					d = d[:i]
+				}
+				if r := []rune(d); len(r) > 80 {
+					d = string(r[:80]) + "…"
+				}
+				idxDesc[filepath.Base(sk.Dir)] = d
+			}
+		}
+		idxCacheAt = time.Now()
+		return idxDesc
+	}
+	agent.SkillIndexBlock = func(agentKey string) string {
+		a, err := pg.GetAgentByKey(agentKey)
+		if err != nil || a == nil {
+			return ""
+		}
+		names, err := pg.AgentSkillNames(a.ID)
+		if err != nil || len(names) == 0 {
+			return ""
+		}
+		desc := loadDesc()
+		var b strings.Builder
+		b.WriteString("【技能速查（你已绑定的 skill；命中场景必须先调 Skill 元工具加载全文再动手）】\n")
+		for _, n := range names {
+			if d, ok := desc[n]; ok && d != "" {
+				b.WriteString("- " + n + "：" + d + "\n")
+			}
+		}
+		b.WriteString("调用方式：Skill(name=\"<名称>\")。技能内有验证口径/假点清单/报告模板，先加载可避免漏检与误报。")
+		return b.String()
+	}
 	agent.ToolAugment = func(ctx context.Context, agentKey string) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 		a, err := pg.GetAgentByKey(agentKey)
 		if err != nil || a == nil {

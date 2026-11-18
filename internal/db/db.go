@@ -322,6 +322,10 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV6(); err != nil {
 		return fmt.Errorf("seed intercept rules v6: %w", err)
 	}
+	// 内置任务 Playbook（U4，上游 v0.4.60）：建任务一键套用验证过的目标结构。
+	if err := d.seedBuiltinTaskPlaybooks(); err != nil {
+		return fmt.Errorf("seed task playbooks: %w", err)
+	}
 	if err := d.migrateListenerRuleTimeout(); err != nil {
 		return fmt.Errorf("migrate listener rule timeout: %w", err)
 	}
