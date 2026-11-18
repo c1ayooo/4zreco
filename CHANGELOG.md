@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+### 迁移：上游同步第二批——v0.4.86 宿主工具安装源镜像 + 巡检四件（U1-U6）
+
+- **宿主工具安装源镜像（上游 v0.4.86 `d448bc1`）**：「系统 → 宿主环境 → 安装源」
+  可为 APT / PyPI 分别选腾讯云 / TUNA 镜像（settings 键 `host_install_sources`），
+  保存后对单项安装与一键装齐生效。特权助手只接受预设 ID（拒绝任意 URL）；
+  APT 镜像只对本次任务用临时源目录（不动 `/etc/apt`，保留签名/发行版/架构与
+  第三方源，官方源精确 host 匹配、拒后缀伪装）；PyPI 走 `PIP_INDEX_URL`；
+  老助手收到镜像任务返回 409 显式失败而非静默走默认源（fail-closed）；
+  附手动 Git 克隆地址生成器（GitHub 原站 / gh-proxy.cn，仅公开仓库）。
+- **预置凭据登录熔断（上游 v0.4.82 #24）**：预置凭据连续 2 次 401/403 熔断 30 分钟，
+  期间本地直接拒绝、不发任何网络请求，防触发目标账号锁定策略锁死客户账号；
+  half-open 自愈、改密自动复位、传输错误不计失败。
+- **ExecuteExtraTool 守卫解包（上游 v0.4.80 #21.3）**：包装器调用解出内层
+  tool_name+params 后走完整判定管线（trace/规则/judge/审批/审计），按真实工具名
+  写的拦截规则不再被绕过。
+- **idle-stop 真收场（上游 v0.4.62/72 #2/#8）**：提示后到 prevent 轮取消 run
+  context 真正结束本轮（不再逐轮辩论烧 token）；同轮并发 tool_use 不跳终结；
+  收场原因落库 exhausted(idle_stop)；save_evidence 计入写回豁免。
+- **技能速查注入 + 任务 Playbook + 独立复现（上游 v0.4.60）**：system prompt 注入
+  绑定技能速查块；内置 4 个任务 Playbook；planner 对无独立复验的 critical/high
+  派只复现不扩大的验证意图。
+- **交付质量巡检（上游 v0.4.57/58/63）**：落终态前点名空报告漏洞；启动+每 15min
+  自动唤起 reporter 补写（指数退避 6 次上限）；纵深/覆盖缺口确定性提醒；
+  开局窄面预期提示。全部引擎侧纯 Go 判定，无 LLM 依赖。
+- **证据回溯归属（上游 v0.4.47）**：report_finding 落库后自动把同一意图运行目录下
+  全部未归属证据归入本漏洞（本地经 task_artifacts.intent_id 列承载 provenance）。
+- **更新代理语义与文案修正（上游 v0.4.86 `713af3e`）**：讲清检查/下载更新优先走
+  装机代理（未配置才用全局代理），去误导提示；update-card 链到装机代理设置。
+- **CI go mod download 退避重试（上游 v0.4.86 `ee9605b`）**：module proxy 瞬时
+  断流不再拖红构建（上游 v0.4.84 即因此未发布）。
+
 ### 迁移：上游 Pojun v0.4.31–0.4.81 内容全量移植（16 单元，第一批安全修复）
 
 - **DSL 顶层 OR 成组（跨任务资产泄露绕过，上游 0.4.78）**：`asset_dsl.go` buildDSLWhereBase
