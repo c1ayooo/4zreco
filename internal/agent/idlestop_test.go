@@ -124,10 +124,23 @@ func TestIdleStopNudgesBeforeStopping(t *testing.T) {
 	if !strings.Contains(blocking[0], "写回") {
 		t.Errorf("提示语应说明要写回: %q", blocking[0])
 	}
-	// 提示之后还不停 → 真的收场。
+	// 提示之后还不停：再给 idleStopPreventRounds-idleStopRounds 轮写回机会，
+	// 到 prevent 轮才真的收场（U3/上游 v0.4.62：不再「提示后立即终止」，
+	// 也不无限 block）。中途每轮应仍是 blocking 提醒。
+	p := false
+	for i := 0; i < idleStopPreventRounds-idleStopRounds-1; i++ {
+		var bl []string
+		p, bl, _ = h.Stop(ctx, nil)
+		if p {
+			t.Fatalf("第 %d 个中间轮不该真收场（prevent 档是 %d）", i+1, idleStopPreventRounds)
+		}
+		if len(bl) == 0 {
+			t.Fatalf("第 %d 个中间轮应继续给提示", i+1)
+		}
+	}
 	prevent, _, msg := h.Stop(ctx, nil)
 	if !prevent {
-		t.Fatal("提示之后仍不收场，应真的终止")
+		t.Fatalf("到 prevent 轮(%d)应真的终止", idleStopPreventRounds)
 	}
 	if msg == "" {
 		t.Error("终止时应带收场原因")
@@ -263,7 +276,8 @@ func TestIdleStopReasonExplainsWhy(t *testing.T) {
 // 措辞直接影响模型的行为：说「预算耗尽被终止」会让模型以为被惩罚，
 // 于是倾向于把没验证的猜测也写成结论。
 func TestIdleStopMessageContent(t *testing.T) {
-	for _, want := range []string{"新发现", "insert_assets", "record_fact", "不要"} {
+	// v0.4.62 口径扩大：四种产出都列出（save_evidence 计入写回豁免），负结果也算事实。
+	for _, want := range []string{"insert_assets", "record_fact", "report_finding", "save_evidence", "负结果", "不要"} {
 		if !strings.Contains(idleStopMessage, want) {
 			t.Errorf("收场提示缺少 %q: %s", want, idleStopMessage)
 		}

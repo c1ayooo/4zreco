@@ -43,6 +43,11 @@ type KernelRunParams struct {
 	// 指令（指纹核对通过、映射钥匙已消费、决定已签名）；指纹不匹配按 P2-6 回退
 	// ——不返回该条，正常重跑可能重审。nil = 未接。
 	HitlResumeSeed func(sessionID, fingerprint string) []askernel.ResumeDirective
+	// WorkCancel（U3 idle-stop 真收场，上游 v0.4.62）：本 run 的 context 取消器
+	// （engine 持有的 workCancel，带 cause 语义）。idle-stop 提示后仍无写回时带
+	// AbortIdleStop 调用它真正收场——PreToolUse 的 block 只拦单次工具调用，run
+	// 会继续，模型会逐轮辩论烧 token。nil = 退化为只拦截，由 Stop hook 兜底。
+	WorkCancel func(err error)
 }
 
 // Worker is an LLM work agent (docs §4.4): it claims ONE intent, completes it
@@ -644,11 +649,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		logged := wrapToolLog(hooks, KindWorker, fmt.Sprintf("%s · #%d", name, intent.ID))
 		stopChain = wrapIdleStop(logged, tsx.Writes, func(reason string) {
 			logIdleStop(name, taskID, intent.ID, reason)
-		})
+		}, params.WorkCancel)
 	} else {
 		stopChain = wrapIdleStop(toolLogSink(KindWorker), tsx.Writes, func(reason string) {
 			logIdleStop(name, taskID, intent.ID, reason)
-		})
+		}, params.WorkCancel)
 	}
 	opts.Hooks = stopChain
 	// P2 HITL（hitl_mode=eino）：engine 接线 CheckpointStore + Park 后，工具审批

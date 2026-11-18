@@ -585,6 +585,10 @@ const (
 	IntentStopTaskDone = "task_done"
 	// IntentStopKilled 被规划者终止。
 	IntentStopKilled = "killed"
+	// IntentStopIdleStop 无增量自动收场（U3，上游 v0.4.62）：连续多轮零写回，
+	// 提示后到 prevent 轮仍无写回，系统主动取消 run context 结束本轮。规划者
+	// 据此判断该方向是否值得换角度续探。
+	IntentStopIdleStop = "idle_stop"
 	// IntentStopShutdown 服务重启/进程停止：残留 running 意图回 open 时的落库原因
 	// （上游 0.4.37——重启不是 worker 的错，恢复后重新领取而不是算失败）。
 	IntentStopShutdown = "server_shutdown"

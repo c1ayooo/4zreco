@@ -1267,6 +1267,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			LimitN: e.emptyTurnNudgeLimit(),
 			LabelS: label,
 		},
+		// U3 idle-stop 真收场：prevent 条件满足时带 AbortIdleStop 取消本 run 的
+		// context（workCtx 的取消器）——block 只拦单次调用，模型会逐轮辩论。
+		WorkCancel: workCancel,
 		Checkpoint: func(sessionID, checkpointID, fingerprint string) {
 			if e.m.pg == nil {
 				return
@@ -1343,7 +1346,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// unregister would always be true (unregister cancels it) → every completed
 	// work would be wrongly marked stopped.
 	workCause := context.Cause(workCtx)
-	killed := workCtx.Err() != nil && ectx.Err() == nil
+	// U3：idle-stop 的收场取消（AbortIdleStop）不是 planner 终止——排除在 killed
+	// 之外，由下方终态分流落 exhausted(idle_stop)。
+	killed := workCtx.Err() != nil && ectx.Err() == nil && !errors.Is(workCause, agent.AbortIdleStop)
 	action, completeWork := e.detachWork(intent.ID)
 	// A caller may stop waiting and release its in-memory reservation before the
 	// agent honors cancellation. The named context cause remains authoritative and
@@ -1471,6 +1476,18 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	state := "done"
 	stopReason := ""
 	switch {
+	// U3 idle-stop 真收场（上游 v0.4.62）：PreToolUse prevent 轮带 AbortIdleStop
+	// 取消 run context（走 err 非零的取消路径），或 Stop hook prevent 兜底（走
+	// ReasonStopHookPrevented，此前未分流 → done+空原因完全不可见）。两条路都落
+	// exhausted(idle_stop)，规划者据此判断该方向是否值得换角度续探。
+	case errors.Is(workCause, agent.AbortIdleStop):
+		state = "exhausted"
+		stopReason = db.IntentStopIdleStop
+		log.Printf("[worker %s] intent %d 无增量自动收场(exhausted/idle_stop)，本次写回 %s", name, intent.ID, wrote)
+	case reason == harness.ReasonStopHookPrevented:
+		state = "exhausted"
+		stopReason = db.IntentStopIdleStop
+		log.Printf("[worker %s] intent %d Stop 钩子收场(exhausted/idle_stop)，本次写回 %s", name, intent.ID, wrote)
 	case err != nil:
 		state = "blocked"
 		stopReason = db.IntentStopError

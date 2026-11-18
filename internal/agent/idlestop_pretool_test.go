@@ -96,14 +96,67 @@ func TestIdleStopPreToolUseNudgesThenStops(t *testing.T) {
 		t.Error("第一次拦截不应直接收场（要给模型写回的机会）")
 	}
 
-	// 模型收到提示后仍不停（继续零写回）→ 第二次真收场。
-	block2, _, _ := hooks.PreToolUse(context.Background(), "Bash", []byte(`{}`))
-	hooks.PostToolUse(context.Background(), "Bash", []byte(`{}`), []byte(`ok`), false)
+	// 模型收到提示后仍不停（继续零写回）：先继续拦截提醒，到 prevent 轮
+	// 才真收场（U3/上游 v0.4.62：nudge 3 轮 + prevent 5 轮，不再无限 block 辩论）。
+	var block2 bool
+	// nudge 后再推进 prevent-nudge 轮；cancel 发生在「到 prevent 轮的那次
+	// PreToolUse」上（peek 判据），所以循环后再补一次 PreToolUse 触发。
+	for i := 0; i < idleStopPreventRounds-idleStopRounds; i++ {
+		block2, _, _ = hooks.PreToolUse(context.Background(), "Bash", []byte(`{}`))
+		if !block2 {
+			t.Fatalf("提示后第 %d 轮仍零写回，应继续拦截", i+1)
+		}
+		hooks.PostToolUse(context.Background(), "Bash", []byte(`{}`), []byte(`ok`), false)
+	}
+	block2, _, _ = hooks.PreToolUse(context.Background(), "Bash", []byte(`{}`))
 	if !block2 {
-		t.Fatal("第二次仍零写回应继续拦截")
+		t.Fatal("到 prevent 轮仍应拦截")
 	}
 	if stoppedReason == "" {
-		t.Error("第二次仍不停应真收场并记原因")
+		t.Errorf("到 prevent 轮(%d)应真收场并记原因", idleStopPreventRounds)
+	}
+}
+
+// 同轮并发工具调用（issue #8，上游 v0.4.72）：prevent 必须**额外要求 nudge 之后
+// 又推进过至少一轮**——同轮并发发出的其余 tool_use 不能从「首次提示」直接跳到
+// 终结，worker 没机会写回就被打断、在途结果永久丢失。
+func TestIdleStopConcurrentSameRoundDoesNotSkipToPrevent(t *testing.T) {
+	fw := &fakeWrites{}
+	var cancelCalls int
+	hooks := wrapIdleStop(nil, fw.get, func(string) {}, func(err error) { cancelCalls++ })
+	ageStopper(hooks.stop, time.Hour)
+
+	// 推到 nudge 档（连续 idleStopRounds 轮零写回）。
+	for i := 0; i < idleStopRounds+1; i++ {
+		hooks.PreToolUse(context.Background(), "Bash", []byte(`{}`))
+		hooks.PostToolUse(context.Background(), "Bash", []byte(`{}`), []byte(`ok`), false)
+	}
+	// nudge 之后的**同一轮**里并发发出的第二个 tool_use：rounds 未推进，
+	// 只能落在提示档，绝不触发 cancel。
+	block, msg, _ := hooks.PreToolUse(context.Background(), "Bash", []byte(`{}`))
+	if !block {
+		t.Fatal("已 nudge 后的同轮并发调用应继续拦截")
+	}
+	if strings.Contains(msg, "本轮就此结束") {
+		t.Errorf("同轮并发调用不得跳到终结档: %q", msg)
+	}
+	if cancelCalls != 0 {
+		t.Fatalf("同轮并发调用不得取消 run context，cancel 被调了 %d 次", cancelCalls)
+	}
+
+	// 之后逐轮推进（模型仍未写回）：cancel 只会在 rounds 达到 prevent 档且
+	// 已推进过（≠nudge 当轮）时首次触发。生产上 cancel 之后 run 已死，不会再有
+	// 后续 PreToolUse；这里验证「同轮不取消、推进后必取消」。
+	fired := false
+	for i := 0; i < idleStopPreventRounds+1; i++ {
+		hooks.PostToolUse(context.Background(), "Bash", []byte(`{}`), []byte(`ok`), false)
+		if block, _, _ := hooks.PreToolUse(context.Background(), "Bash", []byte(`{}`)); block && cancelCalls > 0 {
+			fired = true
+			break
+		}
+	}
+	if !fired {
+		t.Fatal("推进到 prevent 档后应触发 run context 取消")
 	}
 }
 
