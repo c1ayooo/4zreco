@@ -24,7 +24,10 @@ func TestSkillIndexBlockCoversBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 给 worker 绑两个 skill（模拟用户/默认绑定）。
+	// 给 worker 绑两个 skill（模拟用户/默认绑定）。共享库：先快照原绑定，
+	// 测试结束后恢复，不残留改动（AGENTS.md §2 共享库纪律）。
+	orig, _ := s.m.pg.AgentSkillNames(worker.ID)
+	t.Cleanup(func() { _ = s.m.pg.SetAgentSkillVisibility(worker.ID, orig) })
 	if err := s.m.pg.SetAgentSkillVisibility(worker.ID, []string{"vuln-hunting", "web-attack-methods"}); err != nil {
 		t.Fatal(err)
 	}

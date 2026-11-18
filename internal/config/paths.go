@@ -78,8 +78,8 @@ func (p Paths) Transcripts() string { return filepath.Join(p.Data, "transcripts"
 
 // SignaturesDir / HoneypotSignatures 是蜜罐签名库的位置（可选覆盖文件，缺失回落
 // 内嵌库）。
-func (p Paths) SignaturesDir() string        { return filepath.Join(p.Data, "signatures") }
-func (p Paths) HoneypotSignatures() string   { return filepath.Join(p.SignaturesDir(), "honeypot.json") }
+func (p Paths) SignaturesDir() string      { return filepath.Join(p.Data, "signatures") }
+func (p Paths) HoneypotSignatures() string { return filepath.Join(p.SignaturesDir(), "honeypot.json") }
 
 // DeleteStaging 是任务删除的两阶段文件暂存区（隐藏目录，工作区不可见）。
 func (p Paths) DeleteStaging() string { return filepath.Join(p.Data, ".delete-staging") }
@@ -98,11 +98,11 @@ func (p Paths) TasksRoot() string    { return filepath.Join(p.Data, "tasks") }
 func (p Paths) SessionsRoot() string { return filepath.Join(p.Data, "sessions") }
 func (p Paths) DraftsRoot() string   { return filepath.Join(p.Data, "drafts") }
 
-func (p Paths) TaskDir(taskID string) string      { return filepath.Join(p.TasksRoot(), taskID) }
-func (p Paths) TaskUploads(taskID string) string  { return filepath.Join(p.TaskDir(taskID), "uploads") }
-func (p Paths) SessionDir(id string) string       { return filepath.Join(p.SessionsRoot(), id) }
-func (p Paths) SessionUploads(id string) string   { return filepath.Join(p.SessionDir(id), "uploads") }
-func (p Paths) DraftUploads(id string) string     { return filepath.Join(p.DraftsRoot(), id, "uploads") }
+func (p Paths) TaskDir(taskID string) string     { return filepath.Join(p.TasksRoot(), taskID) }
+func (p Paths) TaskUploads(taskID string) string { return filepath.Join(p.TaskDir(taskID), "uploads") }
+func (p Paths) SessionDir(id string) string      { return filepath.Join(p.SessionsRoot(), id) }
+func (p Paths) SessionUploads(id string) string  { return filepath.Join(p.SessionDir(id), "uploads") }
+func (p Paths) DraftUploads(id string) string    { return filepath.Join(p.DraftsRoot(), id, "uploads") }
 
 // TaskRunDir 任务内单个 agent run 的工作目录：planner/mainagent 用任务目录本身
 // （intentID<=0），worker 用意图专属子目录 i<intentID>（与 sessions/<id> 的会话
@@ -115,8 +115,23 @@ func (p Paths) TaskRunDir(taskID, intentID int64) string {
 	return dir
 }
 
+// IntentIDFromRunDir 从运行目录基名反解意图 ID（TaskRunDir 的逆映射，U6 证据
+// 回溯归属用）：tasks/<taskID>/i<intentID> → intentID；任务目录/其他形态 → 0。
+// 布局知识收敛在本文件——TaskRunDir 改名规则时同步改这里。
+func IntentIDFromRunDir(runDir string) int64 {
+	b := filepath.Base(filepath.Clean(runDir))
+	if len(b) > 1 && b[0] == 'i' {
+		if id, err := strconv.ParseInt(b[1:], 10, 64); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 0
+}
+
 // TaskArtifacts 任务附件目录（tasks/<id>/artifacts）。
-func (p Paths) TaskArtifacts(taskID string) string { return filepath.Join(p.TaskDir(taskID), "artifacts") }
+func (p Paths) TaskArtifacts(taskID string) string {
+	return filepath.Join(p.TaskDir(taskID), "artifacts")
+}
 
 // TaskArtifactRel 任务附件文件相对 Data 根的落盘路径（DB TaskArtifact.Storage
 // 列存的就是这个相对形态；读取侧以 Data 为根还原绝对路径）。

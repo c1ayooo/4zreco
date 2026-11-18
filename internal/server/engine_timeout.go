@@ -332,6 +332,10 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	}
 	defer e.decInflight(t.ID)
 
+	// ⑤′ 落终态前点名缺报告的漏洞（U5，上游 v0.4.57：终局后不再派 worker，
+	// 只能提示人补齐——上游复盘 7 条静默空报告漏洞正走本统一收尾路径）。
+	e.warnFindingsWithoutReport(t)
+
 	// ⑥ 定终态(带守卫)：有目标任务以数据库的达成情况为准（见 settleTerminalStatus）；
 	// 无目标（goalless/人工直投）沿用终局轮判定。no_result（A8）随终态落
 	// stop_reason='no_result'（on_task_timeout 家族的收尾语义不变，只是原因可辨）。

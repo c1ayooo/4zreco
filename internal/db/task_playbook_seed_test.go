@@ -12,8 +12,9 @@ func TestSeedBuiltinTaskPlaybooks(t *testing.T) {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
 	defer d.Close()
-	// 干净批次：清掉本测试的历史种子标记与同名模板（共享测试库）。
-	_, _ = d.Exec(`DELETE FROM task_templates WHERE name LIKE 'Playbook：%'`)
+	// 共享库纪律：**不删**同名模板（种子语义就是「用户删除/修改不复活」，测试
+	// 不能反过来清掉用户数据）。只清本测试自己的批次标记重放种子行为，随后
+	// 校验「每个内置名都存在」而非「恰好 N 条」。
 	_, _ = d.Exec(`DELETE FROM settings WHERE key='task_playbooks_v1'`)
 
 	if err := d.seedBuiltinTaskPlaybooks(); err != nil {
@@ -23,17 +24,21 @@ func TestSeedBuiltinTaskPlaybooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count := 0
+	byName := map[string]*TaskTemplate{}
 	for _, tpl := range list {
 		if strings.HasPrefix(tpl.Name, "Playbook：") {
-			count++
-			if !strings.Contains(tpl.Goal, "【内部工作流") && !strings.Contains(tpl.Goal, "【工作流") && !strings.Contains(tpl.Goal, "【产出】") {
-				t.Errorf("playbook %q 缺少结构化工作流段", tpl.Name)
-			}
+			byName[tpl.Name] = tpl
 		}
 	}
-	if count != len(builtinTaskPlaybooks) {
-		t.Fatalf("playbook 数=%d want %d", count, len(builtinTaskPlaybooks))
+	for _, pb := range builtinTaskPlaybooks {
+		tpl, ok := byName[pb.name]
+		if !ok {
+			t.Errorf("playbook %q 未入库", pb.name)
+			continue
+		}
+		if !strings.Contains(tpl.Goal, "【内部工作流") && !strings.Contains(tpl.Goal, "【工作流") && !strings.Contains(tpl.Goal, "【产出】") {
+			t.Errorf("playbook %q 缺少结构化工作流段", tpl.Name)
+		}
 	}
 	// 幂等：再跑一次不新增、不报错（flag 已 done）。
 	before := len(list)

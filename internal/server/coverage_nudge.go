@@ -22,7 +22,7 @@ import (
 var coverageClasses = []struct {
 	key   string
 	label string
-	re    string // 意图文本命中即视为已覆盖
+	re    string // 意图文本命中即视为已覆盖（编译进 coverageClassRes）
 	tip   string
 }{
 	{"sqli", "SQL 注入", `sql注入|sqli|sqlmap`, "对带参数的接口（GET 参数 / POST 表单 / JSON 字段）做只读注入探测，至少覆盖登录/查询/详情各 1 个端点。"},
@@ -33,14 +33,23 @@ var coverageClasses = []struct {
 	{"dirscan", "目录/路径发现", `目录|路径爆破|ffuf|gobuster|dirsearch`, "对主站/后台/网关跑一次目录发现，结果写回资产。"},
 }
 
+// coverageClassRes 是 coverageClasses 正则的预编译表（每次 planner 轮都会
+// 判定，不能逐轮 MustCompile）。
+var coverageClassRes = func() []*regexp.Regexp {
+	res := make([]*regexp.Regexp, len(coverageClasses))
+	for i, c := range coverageClasses {
+		res[i] = regexp.MustCompile(c.re)
+	}
+	return res
+}()
+
 // missingCoverageClasses 返回尚未被任何意图文本覆盖的类别 key（按声明顺序）。
 // 纯函数——表驱动测试的判定面。
 func missingCoverageClasses(intentTexts []string) []string {
 	joined := strings.ToLower(strings.Join(intentTexts, "\n"))
 	var out []string
-	for _, c := range coverageClasses {
-		re := regexp.MustCompile(c.re)
-		if !re.MatchString(joined) {
+	for i, c := range coverageClasses {
+		if !coverageClassRes[i].MatchString(joined) {
 			out = append(out, c.key)
 		}
 	}

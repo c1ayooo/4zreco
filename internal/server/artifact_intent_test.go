@@ -3,10 +3,14 @@ package server
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/c1ayooo/4zreco/internal/config"
 )
 
-// U6：意图 provenance 从运行目录基名提取——worker runDir 是
-// tasks/<taskID>/i<intentID>（config.Paths.TaskRunDir），其余形态 → 0。
+// U6：意图 provenance 从运行目录基名提取（config.IntentIDFromRunDir，
+// TaskRunDir 的逆映射）——worker runDir 是 tasks/<taskID>/i<intentID>，
+// 其余形态 → 0。recordArtifactAbs 先于 join relPath 提取，嵌套相对路径
+// （save_evidence 的 shots/x.png 形态）不影响归属。
 func TestIntentFromRunDir(t *testing.T) {
 	// 入参契约 = 运行目录（recordArtifactAbs 传 filepath.Dir(abs)，即 runDir）。
 	cases := map[string]int64{
@@ -15,10 +19,10 @@ func TestIntentFromRunDir(t *testing.T) {
 		filepath.Join("data", "tasks", "12", "shared"): 0,
 		filepath.Join("data", "tasks", "12", "i0"):     0, // i0 非法
 		filepath.Join("data", "tasks", "12", "ix"):     0, // 非数字
-		"":                                             0,
+		"": 0,
 	}
 	for dir, want := range cases {
-		if got := intentFromRunDir(dir); got != want {
+		if got := config.IntentIDFromRunDir(dir); got != want {
 			t.Errorf("intentFromRunDir(%q)=%d want %d", dir, got, want)
 		}
 	}

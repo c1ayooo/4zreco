@@ -1,8 +1,8 @@
 package db
 
 import (
-	"strconv"
 	"context"
+	"strconv"
 	"time"
 )
 
@@ -14,11 +14,11 @@ type TaskArtifact struct {
 	TaskID string `json:"task_id"`
 	// FindingID 可选：这张图/这个样本证明哪个漏洞（worker 报完漏洞后登记时带上）。
 	// 0 = 任务级材料（如目标首页截图），不进单个漏洞的详情页。
-	FindingID int64  `json:"finding_id,omitempty"`
+	FindingID int64 `json:"finding_id,omitempty"`
 	// IntentID 意图 provenance（U6）：save_evidence 登记时从 runDir 基名
 	// i<intentID> 提取；0 = 非意图运行目录（planner 直投/历史补登记）。
 	// report_finding 落库后按本列回溯归属同意图全部未绑定证据。
-	IntentID int64  `json:"intent_id,omitempty"`
+	IntentID  int64  `json:"intent_id,omitempty"`
 	Name      string `json:"name"` // 展示名（含扩展名）
 	Kind      string `json:"kind"` // image|data|log|html|other
 	Mime      string `json:"mime,omitempty"`
