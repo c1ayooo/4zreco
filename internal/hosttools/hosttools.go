@@ -558,8 +558,34 @@ func pythonModuleAvailable(module string) bool {
 	return ok
 }
 
-// Inventory 探测全部目录项(顺序与 catalog 一致)。
+// invCacheTTL 是 Inventory 探测结果的缓存时长。
+//
+// 为什么缓存：worker **每条意图启动**都走 workerSystem → SummaryText → Inventory，
+// 逐工具 exec.LookPath 在 PATH 含 WSL /mnt/c（drvfs）条目时冷态可拖 5s+（实测
+// 本机 14 工具 × 31 条 PATH，drvfs stat 抖动时整体 ~5s）——直接吃掉每条意图
+// 首轮模型调用的启动窗口。长驻进程缓存后只有进程首调/过期重探付这个代价。
+// 代价：装完工具后 hostenv 体检页与 worker 工具清单最多延迟一个 TTL 才刷新，
+// 可接受（装机走 hostd 任务，完成后前端本就整页刷新）。
+const invCacheTTL = 30 * time.Second
+
+var (
+	invMu       sync.Mutex
+	invCache    []Tool
+	invCacheAt  time.Time
+	invCacheEnv string // 生成缓存时的 PATH；变了立即失效（测试改 PATH / 进程内改环境）
+)
+
+// Inventory 探测全部目录项(顺序与 catalog 一致)。带 TTL 缓存；返回副本，
+// 调用方改动不影响缓存。
 func Inventory() []Tool {
+	invMu.Lock()
+	path := os.Getenv("PATH")
+	if invCache != nil && time.Since(invCacheAt) < invCacheTTL && invCacheEnv == path {
+		out := append([]Tool(nil), invCache...)
+		invMu.Unlock()
+		return out
+	}
+	invMu.Unlock()
 	out := make([]Tool, len(catalog))
 	for i, t := range catalog {
 		n := normalize(t)
@@ -572,7 +598,12 @@ func Inventory() []Tool {
 		}
 		out[i] = n
 	}
-	return out
+	invMu.Lock()
+	invCache = out
+	invCacheAt = time.Now()
+	invCacheEnv = path
+	invMu.Unlock()
+	return append([]Tool(nil), out...)
 }
 
 // Summary 注入 graph_overview / API 的紧凑形态:

@@ -174,13 +174,16 @@ func TestChatMentionWorkerReceivesServerDetails(t *testing.T) {
 	if w := send(message); w.Code != 200 {
 		t.Fatalf("send: %d %s", w.Code, w.Body)
 	}
+	// 30s 有界等待（原 5s）：worker 启动段 workerSystem→hosttools.Inventory 的
+	// 逐工具 LookPath 在 WSL（PATH 含 /mnt/c drvfs）冷态可拖 5s+，进程首调
+	// 缓存未热时吃满窗口误报。这是事件等待（非 sleep），上限只拖慢失败路径。
 	select {
 	case req := <-requests:
 		blob, _ := json.Marshal(req.Messages)
 		if !strings.Contains(string(blob), "worker-hidden-proof") || !strings.Contains(string(blob), "用户引用的记录快照") {
 			t.Fatalf("worker missing reference details: %s", blob)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("worker did not receive a model request")
 	}
 	drain, stop := context.WithTimeout(context.Background(), 5*time.Second)
