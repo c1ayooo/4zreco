@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +15,9 @@ import (
 // captchaMaxFileBytes 是单张图片的读取上限。滑块验证码的两张图正常 <200KB，
 // 8MB 足够覆盖整页截图，同时挡住「误传大文件」把 worker 卡住。
 const captchaMaxFileBytes = 8 << 20
+
+// captchaImageExts 是允许的图片扩展名白名单（文件路径模式下校验）。
+var captchaImageExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true}
 
 // solveSliderCaptcha 用纯图像算法求解滑块验证码（第三批 J3，移植自 Jingwei
 // v1.6.5 `captcha`）。
@@ -114,78 +116,15 @@ func captchaImageBytes(runDir, raw string) ([]byte, string, error) {
 	}
 	switch strings.ToLower(filepath.Ext(raw)) {
 	case ".png", ".jpg", ".jpeg", ".gif":
-		return readCaptchaFile(runDir, raw)
+		data, rel, err := readWorkspaceFile(runDir, raw, captchaImageExts, captchaMaxFileBytes)
+		if err != nil {
+			return nil, "", err
+		}
+		return data, rel, nil
 	}
 	b, err := captcha.DecodeDataURL(raw)
 	if err != nil {
 		return nil, "", errors.New("既不是任务目录内的图片路径（.png/.jpg/.jpeg/.gif），也不是合法的 base64 / data URL")
 	}
 	return b, "base64", nil
-}
-
-// readCaptchaFile 读任务目录内的图片文件，路径必须落在 runDir 内。
-func readCaptchaFile(runDir, path string) ([]byte, string, error) {
-	r := strings.TrimSpace(runDir)
-	if r == "" {
-		return nil, "", errors.New("当前运行没有工作目录，只能用 data URL / base64")
-	}
-	target := path
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(r, target)
-	}
-	rel, abs, err := captchaRelPath(r, target)
-	if err != nil {
-		return nil, "", err
-	}
-	switch strings.ToLower(filepath.Ext(rel)) {
-	case ".png", ".jpg", ".jpeg", ".gif":
-	default:
-		return nil, "", fmt.Errorf("只接受 .png/.jpg/.jpeg/.gif 图片，得到 %q", rel)
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return nil, "", fmt.Errorf("图片不可读: %v", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, "", fmt.Errorf("不是普通文件: %s", rel)
-	}
-	if info.Size() > captchaMaxFileBytes {
-		return nil, "", fmt.Errorf("图片 %d 字节超过上限 %d", info.Size(), captchaMaxFileBytes)
-	}
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return nil, "", fmt.Errorf("读取失败: %v", err)
-	}
-	return data, rel, nil
-}
-
-// captchaRelPath 校验 target 在 root 内并返回相对路径。两侧 EvalSymlinks：
-// 词法前缀挡不住「任务目录内符号链接指向目录外」。目标不存在时解析父目录再拼回，
-// 让调用方拿到「不可读」而不是含糊的「越界」。
-func captchaRelPath(root, target string) (rel, abs string, err error) {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", "", fmt.Errorf("工作目录非法: %v", err)
-	}
-	targetAbs, err := filepath.Abs(target)
-	if err != nil {
-		return "", "", fmt.Errorf("路径非法: %v", err)
-	}
-	realRoot, err := filepath.EvalSymlinks(rootAbs)
-	if err != nil {
-		return "", "", fmt.Errorf("工作目录不可用: %v", err)
-	}
-	realTarget, err := filepath.EvalSymlinks(targetAbs)
-	if err != nil {
-		parent, perr := filepath.EvalSymlinks(filepath.Dir(targetAbs))
-		if perr != nil {
-			return "", "", fmt.Errorf("路径不可用: %v", err)
-		}
-		realTarget = filepath.Join(parent, filepath.Base(targetAbs))
-	}
-	rel, err = filepath.Rel(realRoot, realTarget)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", errors.New("路径越界：不在本意图工作目录内")
-	}
-	return rel, realTarget, nil
 }

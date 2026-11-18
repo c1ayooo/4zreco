@@ -39,6 +39,10 @@ tags:
   （给模板树内的 path 或 YAML 原文）：返回 severity/CVE/CWE/tags 与 sha256 digest——
   digest 相同即同一模板，不要重复跑；
 - 平台工具 `scan_with_nuclei` 会组好命令并留流量；自己跑时结果落文件后 `save_evidence`；
+- 跑完先 `parse_nuclei_output`（给 JSONL 文件或原文）拿结构化命中：按 template_id+matched_at
+  去重、给 severity 分布、自动抹掉 Cookie/Authorization —— 空输出=无命中，不是错误；
+- 上报前逐条 `assess_nuclei_hit`（模板 path/content + status_code/response/extracted）：
+  只匹配状态码、5xx、无响应正文、XSS 无反射位置的命中会被判 needs_review 并列出缺什么证据；
 - 模板命中 ≠ 漏洞：核对请求/响应是否真的触发（有些模板只匹配版本 banner）；
 - 高危模板（如 RCE）先确认目标有授权且不影响业务，再执行。
 
