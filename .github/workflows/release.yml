@@ -45,6 +45,16 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
+      # Go module proxy 偶发 stream INTERNAL_ERROR（2026-11-18 上游 v0.4.84 发版即因此失败）。
+      # setup-go 的 cache 只在命中时省下载；首次/换 go.sum 仍需拉模块，这里显式重试。
+      - name: Download Go modules (retry transient proxy errors)
+        run: |
+          for i in 1 2 3 4; do
+            if go mod download; then exit 0; fi
+            echo "go mod download failed (attempt $i), retrying in $((i * 10))s..."
+            sleep $((i * 10))
+          done
+          go mod download
       - uses: actions/download-artifact@v4
         with:
           name: web-dist
