@@ -2846,7 +2846,7 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.listUntestedAssets(),
 		// search_vulns / get_vuln：识别出目标组件后查公开已知漏洞（NVD+KEV），
 		// 规划阶段把「有现成利用的方向」排进 todolist。
-		t.searchVulns(), t.getVuln(), t.getPoc(), t.parsePocTemplate(), t.scanWithNuclei(), t.netContext(),
+		t.searchVulns(), t.getVuln(), t.getPoc(), t.parsePocTemplate(), t.assessNucleiHit(), t.scanWithNuclei(), t.netContext(),
 		// gogo_scan / spray_finger（§5.5 P2）：规划阶段也可直接摸端口面/指纹补态势。
 		t.gogoScan(), t.sprayFinger(),
 		// katana_scan / passive_search / web_search（§5.5 P4）：Web 爬虫端点发现、
