@@ -748,6 +748,8 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		// 原生 HTTP 执行器 + 会话复用（v0.4.64 批次）：直接发请求拿结构化结果，
 		// 登录态进任务级 cookie jar 跨意图复用——「登录→越权→回读」成为基本能力。
 		t.httpRequest(), t.sessionLogin(),
+		// solve_slider_captcha（J3）：登录/注册链路的滑块求解（纯图像，不发请求）。
+		t.solveSliderCaptcha(),
 		// PoC 脚手架（v0.4.64 批次）：按类别生成可运行的验证骨架。
 		t.pocScaffold(),
 		// 任务级后台作业（v0.4.64 批次）：长扫描跨意图存活；任务暂停/删除时由
@@ -815,6 +817,8 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		// 原生 HTTP 执行器 + 会话复用（v0.4.64 批次）：与 worker 同款；主控人工验证
 		// 接口/登录态时一次调用拿结构化结果，不再手搬 cookie。
 		t.httpRequest(), t.sessionLogin(),
+		// solve_slider_captcha（J3）：登录/注册链路的滑块求解（纯图像，不发请求）。
+		t.solveSliderCaptcha(),
 	}
 	// finding_cases 归并七件套（C1）：主控会话可检索/归并重复上报。
 	return append(tools, t.FindingCaseTools()...)

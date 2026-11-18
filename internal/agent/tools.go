@@ -2865,6 +2865,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
+		// solve_slider_captcha（J3）：滑块求解只读工具——规划期判断登录链路是否可推进。
+		t.solveSliderCaptcha(),
 	}
 	// finding_cases 归并七件套（C1）：规划者研判重复上报、发起归并/建议。
 	return append(tools, t.FindingCaseTools()...)
