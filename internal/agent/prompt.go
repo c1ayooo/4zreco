@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"text/template"
 	"time"
+
+	"github.com/c1ayooo/4zreco/internal/chains"
 )
 
 // PromptOverride, if set, returns the stored system-prompt template for an agent
@@ -59,6 +61,13 @@ func renderSystem(agentKey, def string, vars any) string {
 		if blk := SkillIndexBlock(agentKey); blk != "" {
 			body += "\n\n" + blk
 		}
+	}
+	// chains L2 反问纪律（J4，移植自 Jingwei v1.6.5）：元认知铁律不分场景常驻，
+	// 只给真正动手/规划的 planner 与 worker——mainagent/goals 的短提示不掺。
+	// 放在这里而不是模板里：DB 模板、代码默认模板、hook 三条渲染路径行为一致，
+	// 用户改提示词也删不掉这层纪律。
+	if agentKey == "planner" || agentKey == "worker" {
+		body += chains.Discipline()
 	}
 	return body
 }

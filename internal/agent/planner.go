@@ -20,27 +20,27 @@ import (
 // assets, judges whether the task goal is met, and emits 0..N exploration intents
 // into the frontier. It is the sole intent generator.
 type Planner struct {
-	findingRecorder   FindingRecorder
-	prov              llm.Provider
-	model             string
-	tx                *transcript.Store                      // raw LLM conversation persistence (nil = off)
-	window            int                                    // context window in tokens (for compaction)
-	windowFn          func() int                             // optional dynamic task-chain minimum
-	maxTurns          int                                    // max agent turns per run (0 = unlimited)
-	killWork          func(intentID int64) error             // engine callback to terminate a running work (nil = off)
-	steerWork         func(intentID int64, msg string) error // engine callback to steer a running work mid-run (nil = off)
+	findingRecorder FindingRecorder
+	prov            llm.Provider
+	model           string
+	tx              *transcript.Store                      // raw LLM conversation persistence (nil = off)
+	window          int                                    // context window in tokens (for compaction)
+	windowFn        func() int                             // optional dynamic task-chain minimum
+	maxTurns        int                                    // max agent turns per run (0 = unlimited)
+	killWork        func(intentID int64) error             // engine callback to terminate a running work (nil = off)
+	steerWork       func(intentID int64, msg string) error // engine callback to steer a running work mid-run (nil = off)
 	// intentQueue 返回（派发阈值折算值, worker 数）；nil = 不限制（测试/主 agent 场景）。
 	// 派发节流（P4-4）：add_intent 按阈值限本轮新增，提示词带节奏块。
-	intentQueue func() (limit, workers int)
-	attributions      func() map[string]any                  // Guard 归因读取（nil = 概览不带 guard_attributions 块）
-	proxyAddr         string                                 // recording proxy for WebFetch (empty = direct)
-	proxyCACert       string                                 // recording proxy's CA cert path (HTTPS verify)
-	webSearch         WebSearchOpts                          // web_search tool backend selection (off by default)
-	workDir           string                                 // shared work dir (surfaced in prompt as artifact-output target)
-	injectConstraints func() bool                            // resolver: inject task operation constraints into system prompt? (nil = yes)
-	nonStreamingFn    func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
-	maxTokensFn       func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
-	compactor         *Compactor                             // cold-node compaction (§7); nil = disabled
+	intentQueue       func() (limit, workers int)
+	attributions      func() map[string]any // Guard 归因读取（nil = 概览不带 guard_attributions 块）
+	proxyAddr         string                // recording proxy for WebFetch (empty = direct)
+	proxyCACert       string                // recording proxy's CA cert path (HTTPS verify)
+	webSearch         WebSearchOpts         // web_search tool backend selection (off by default)
+	workDir           string                // shared work dir (surfaced in prompt as artifact-output target)
+	injectConstraints func() bool           // resolver: inject task operation constraints into system prompt? (nil = yes)
+	nonStreamingFn    func() bool           // resolver: use non-streaming (Complete) path? (nil = streaming)
+	maxTokensFn       func() int            // resolver: per-reply output cap (nil/0 = send no cap)
+	compactor         *Compactor            // cold-node compaction (§7); nil = disabled
 
 	// todos keeps ONE plan-scratchpad per task (keyed by exploration id) so the
 	// planner's multi-step plan survives across wake-ups — each Plan() is a fresh
@@ -339,6 +339,8 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 2. **判目标（核心职责）**：goals 字段已含目标与状态；对已被某发现/事实证明的未达成目标，调 prove_goal(goal_id, evidence_id, reason) 标 met。**当你标记的恰是最后一个未完成目标时，系统自动判定整个任务完成**——收官只由逐个 prove_goal 驱动，没有别的"一键完成"手段。
    - ⚠️ **量化验收核对（严禁提前盖章）**：目标含可量化条件（覆盖度达 X%、拿 N 个 flag、获得某权限）时，prove_goal 前【必须】核对上方 graph_overview 的实测值（coverage.pct、findings_total 计数等）：未达标就【禁止】prove_goal，改派意图补差；不得以"大体达成/核心已拿下"为由提前标 met。例：要求覆盖度 100% 而实测 coverage.pct=40% → 未达成，继续派补测意图。
    - **独立复现（critical/high 必配，U4/上游 v0.4.60，借鉴 pentest-ai 的 machine oracle）**：recent_facts/漏洞里出现 critical/high、但证据仅来自单一 worker、**没有独立复验事实**（换入口/换参数/换会话/换身份重新触发一次并写回 fact）时，派一条**只做复现、不扩大**的验证意图；已有独立复验事实的不重复派。复现失败 → 把严重性降级并写清原因，不许保留 critical/high。
+   - **时间军规 / 升级阶梯（U7，上游 v0.4.35，借鉴 sapper-v2 竞赛军规）**：每条意图的 wall_ms 已在态势里。单条方向**累计 > 25 分钟且连续两轮零新增** → 不再接续，必须换本质不同的打法或换目标面；**> 45 分钟**仍未突破 → 直接放弃该方向并在 fact 里记录"已试穷尽+失败特征"，把资源转给未覆盖面；同一目标面被 park 后，除非有新证据（新 fact/凭据/入口），否则不再重开。**最后 1/4 时间预算**（任务带 deadline 时）优先收官：补齐已确认漏洞的证据与报告，不再开新长链。
+   - **同族迁移（variant hunting，U7，上游 v0.4.35，借鉴 sapper-v2 情报广播）**：确认一个漏洞后 30 秒内自问——**同一产品/同版本/同框架/同资产族的其他地方是否同款？** 同族线索（同厂商组件、同网关后的同类测试控制器前缀、同 CMS 的其他站点、同批子域）优先派 1–2 条 variant 意图去验证同一机理；把已确认的 PoC/路径/参数写进 summary 作为可复用线索。variant 意图必须锚定 task_scope 内资产，不得借同族迁移越界。
    - **边际收益收官(目标模糊型任务)**：态势里 stall.hint 出现（连续多轮零新产出、无 open 意图）且目标描述中没有更多可量化缺口——用 goal_met 收官，reason 写「边际收益已耗尽：最近 6 小时无新 fact/finding,已覆盖 <列已测的主要面>」这类诚实小结,【不许】编造达成证据。收官比无产出空转更负责——空转每轮都在烧 token。
 
 3. **（可选，仅开局、极轻量）探测理解**：仅当图里几乎还没有 fact（recent_facts 基本为空、任务刚开始）、仅凭态势无法把初始意图说具体时，才用 Bash 等对目标做极少量、只读的探测（如 1–2 次 curl 看首页/指纹）。**唯一合法产物是一句更精准的意图描述**——绝不是漏洞的发现/验证/利用，也不是端点/目录/参数的枚举结果（那些是 worker 的活，写成意图派下去）。三条硬边界：
@@ -415,13 +417,13 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	}
 	tsx.SetTaskID(taskID)
 	tsx.SetCoverageEnabled(as == nil || as.CoverageEnabled(taskID))
-	tsx.killWork = p.killWork         // enable kill_work tool (nil = unavailable)
-	tsx.steerWork = p.steerWork       // enable steer_work tool (nil = unavailable)
-	tsx.attributions = p.attributions // Guard 归因 → 概览 guard_attributions 块（nil = 省略）
+	tsx.killWork = p.killWork                      // enable kill_work tool (nil = unavailable)
+	tsx.steerWork = p.steerWork                    // enable steer_work tool (nil = unavailable)
+	tsx.attributions = p.attributions              // Guard 归因 → 概览 guard_attributions 块（nil = 省略）
 	tsx.SetEgressProxy(p.proxyAddr, p.proxyCACert) // 与 planner WebFetch 同源出口（tools_http.go）
 	if origin, _ := ts.OriginFactID(); origin > 0 {
-		tsx.SetOwnerNode(origin) // planner-side anchors default to the task root (origin fact)
-	tsx.SetIntentQueueLimit(p.intentQueue) // 派发节流（P4-4）：add_intent 本轮新增上限（nil=不限）
+		tsx.SetOwnerNode(origin)               // planner-side anchors default to the task root (origin fact)
+		tsx.SetIntentQueueLimit(p.intentQueue) // 派发节流（P4-4）：add_intent 本轮新增上限（nil=不限）
 	}
 	// 领域工具 + 基础默认工具集（Read/Write/Edit/MultiEdit/LS/Glob/Grep/Bash）
 	// 资产覆盖度功能关闭时剔除 add_task_scope/list_untested_assets（不入 prompt）。
