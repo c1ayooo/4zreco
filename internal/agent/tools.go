@@ -460,6 +460,9 @@ func intp(desc string) map[string]any {
 func idp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
+func boolp(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
+}
 
 func readTool(name, desc string, schema map[string]any, run func(context.Context, json.RawMessage) (actool.Result, error)) actool.CoreTool {
 	return actool.Build(actool.Spec{

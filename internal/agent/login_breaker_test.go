@@ -24,7 +24,7 @@ func TestLoginBreakerStateMachine(t *testing.T) {
 	defer resetLoginBreakers()
 	key, hash := "t/1/0", "h1"
 
-	if locked, _ := loginBreakerCheck(key, hash); locked {
+	if locked, _ := loginBreakerCheck(key, hash, 1, false); locked {
 		t.Fatal("首次调用不应熔断")
 	}
 	if msg := loginBreakerRecordFailure(key, hash, 401); !strings.Contains(msg, "再失败 1 次") {
@@ -39,13 +39,13 @@ func TestLoginBreakerStateMachine(t *testing.T) {
 	if msg := loginBreakerRecordFailure(key, hash, 401); !strings.Contains(msg, "已熔断") {
 		t.Fatalf("连续两次 401 应熔断，得到 %q", msg)
 	}
-	if locked, msg := loginBreakerCheck(key, hash); !locked || !strings.Contains(msg, "已熔断") {
+	if locked, msg := loginBreakerCheck(key, hash, 1, false); !locked || !strings.Contains(msg, "已熔断") {
 		t.Fatalf("熔断期内应本地拒绝，locked=%v msg=%q", locked, msg)
 	}
 
 	// 凭据内容变化（改密）→ 自动复位
-	_, hash2 := loginBreakerKey(1, 2, 0, "ops", "new-pass")
-	if locked, _ := loginBreakerCheck(key, hash2); locked {
+	_, hash2 := loginBreakerKey(2, 0, "ops", "new-pass")
+	if locked, _ := loginBreakerCheck(key, hash2, 1, false); locked {
 		t.Fatal("凭据更新后不应继续熔断")
 	}
 
@@ -53,20 +53,88 @@ func TestLoginBreakerStateMachine(t *testing.T) {
 	key3, hash3 := "t/3/0", "h3"
 	loginBreakerRecordFailure(key3, hash3, 401)
 	loginBreakerRecordFailure(key3, hash3, 403)
-	if locked, _ := loginBreakerCheck(key3, hash3); !locked {
+	if locked, _ := loginBreakerCheck(key3, hash3, 1, false); !locked {
 		t.Fatal("两次失败后应熔断")
 	}
 	base := time.Now()
 	loginBreakerNow = func() time.Time { return base.Add(loginBreakerLockTTL + time.Minute) }
 	defer func() { loginBreakerNow = time.Now }()
-	if locked, _ := loginBreakerCheck(key3, hash3); locked {
+	if locked, _ := loginBreakerCheck(key3, hash3, 1, false); locked {
 		t.Fatal("TTL 到期应 half-open 放行")
 	}
 	if msg := loginBreakerRecordFailure(key3, hash3, 401); !strings.Contains(msg, "已熔断") {
 		t.Fatalf("half-open 后仍失败应重新熔断，得到 %q", msg)
 	}
-	if locked, _ := loginBreakerCheck(key3, hash3); !locked {
+	if locked, _ := loginBreakerCheck(key3, hash3, 1, false); !locked {
 		t.Fatal("重新熔断期内应继续拒绝")
+	}
+}
+
+// 跨任务共享计数：同一账号在两个任务里各失败一次即熔断（G3 折中方案核心）。
+func TestLoginBreakerSharedAcrossTasks(t *testing.T) {
+	resetLoginBreakers()
+	defer resetLoginBreakers()
+	key, hash := "asset/42/0", "h"
+
+	// 任务 1 失败 1 次：还没到阈值
+	if msg := loginBreakerRecordFailure(key, hash, 401); !strings.Contains(msg, "再失败 1 次") {
+		t.Fatalf("任务 1 首次失败应提示剩余次数，得到 %q", msg)
+	}
+	if locked, _ := loginBreakerCheck(key, hash, 2, false); locked {
+		t.Fatal("仅 1 次失败时任务 2 不应被熔断")
+	}
+	// 任务 2 失败 1 次：账号维度累计到 2 → 熔断
+	if msg := loginBreakerRecordFailure(key, hash, 403); !strings.Contains(msg, "已熔断") {
+		t.Fatalf("跨任务累计两次失败应熔断，得到 %q", msg)
+	}
+	// 两个任务都被本地拒绝——这正是「防 N 个任务各打 2 次锁死账号」的形态
+	for _, taskID := range []int64{1, 2, 99} {
+		if locked, msg := loginBreakerCheck(key, hash, taskID, false); !locked || !strings.Contains(msg, "熔断") {
+			t.Fatalf("任务 %d 应被共享熔断拒绝，locked=%v msg=%q", taskID, locked, msg)
+		}
+	}
+}
+
+// 任务级一次性试探豁免：每任务每凭据仅一次；失败不回退计数，成功整条复位。
+func TestLoginBreakerTaskProbe(t *testing.T) {
+	resetLoginBreakers()
+	defer resetLoginBreakers()
+	key, hash := "asset/7/1", "h"
+
+	loginBreakerRecordFailure(key, hash, 401)
+	loginBreakerRecordFailure(key, hash, 401) // 熔断
+
+	// 不申请 → 拒绝，且提示可用 breaker_probe
+	if locked, msg := loginBreakerCheck(key, hash, 10, false); !locked || !strings.Contains(msg, "breaker_probe") {
+		t.Fatalf("未申请时应在拒绝文案里提示 breaker_probe，locked=%v msg=%q", locked, msg)
+	}
+	// 任务 10 显式申请 → 放行一次，并带回提示
+	locked, msg := loginBreakerCheck(key, hash, 10, true)
+	if locked || !strings.Contains(msg, "一次性试探") {
+		t.Fatalf("任务 10 首次申请应放行并给出提示，locked=%v msg=%q", locked, msg)
+	}
+	// 同一任务再次申请 → 拒绝（每任务仅一次）
+	if locked, msg := loginBreakerCheck(key, hash, 10, true); !locked || !strings.Contains(msg, "已用完") {
+		t.Fatalf("任务 10 第二次申请应被拒绝并说明已用完，locked=%v msg=%q", locked, msg)
+	}
+	// 另一个任务仍有自己的一次机会
+	if locked, msg := loginBreakerCheck(key, hash, 11, true); locked || !strings.Contains(msg, "一次性试探") {
+		t.Fatalf("任务 11 应仍可申请一次，locked=%v msg=%q", locked, msg)
+	}
+	// 试探失败 → 立即重新熔断，计数不回退（仍是 3 次）
+	if msg := loginBreakerRecordFailure(key, hash, 401); !strings.Contains(msg, "已熔断") {
+		t.Fatalf("试探失败应立即重新熔断，得到 %q", msg)
+	}
+	if locked, _ := loginBreakerCheck(key, hash, 10, false); !locked {
+		t.Fatal("重新熔断后任务 10 应继续被拒绝")
+	}
+	// 成功 → 整条状态删除，豁免机会与计数一并复位
+	loginBreakerRecordSuccess(key, hash)
+	if locked, msg := loginBreakerCheck(key, hash, 10, false); locked || msg != "" {
+		t.Fatalf("成功后应完全复位，locked=%v msg=%q", locked, msg)
+	}
+	if msg := loginBreakerRecordFailure(key, hash, 401); !strings.Contains(msg, "再失败 1 次") {
+		t.Fatalf("复位后计数应从 0 开始，得到 %q", msg)
 	}
 }
 

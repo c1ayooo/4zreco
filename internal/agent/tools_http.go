@@ -655,19 +655,20 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 			"返回 status、是否拿到 Set-Cookie（cookie_names）与正文片段——2xx 且 cookie_names 非空基本可判定登录成功；"+
 			"若返回登录页/401，换 auth_mode 或换资产上的另一条凭据（auth_index）。",
 		obj(map[string]any{
-			"session":      str("会话名（字母数字-_），后续请求用它复用登录态"),
-			"url":          str("登录接口绝对 URL"),
-			"method":       str("HTTP 方法，默认 POST"),
-			"asset_id":     intp("凭据登记在哪个资产上（可选；优先使用）"),
-			"auth_index":   intp("用该资产上的第几条凭据（从 0 开始）"),
-			"username":     str("用户名（可选，asset_id 为空时用）"),
-			"password":     str("密码（可选；观测面打码）"),
-			"token":        str("token/会话值（可选；观测面打码）"),
-			"auth_mode":    str("form|json|basic|bearer|cookie，默认 form"),
-			"user_field":   str("表单用户名字段名，默认 username"),
-			"pass_field":   str("表单密码字段名，默认 password"),
-			"extra_fields": str("额外字段，'k=v&k2=v2' 形式（可选）"),
-			"header":       str("附加请求头，每行 'Key: Value'（可选，如 X-Requested-With: XMLHttpRequest）；传 User-Agent 可覆盖默认 Chrome UA"),
+			"session":       str("会话名（字母数字-_），后续请求用它复用登录态"),
+			"url":           str("登录接口绝对 URL"),
+			"method":        str("HTTP 方法，默认 POST"),
+			"asset_id":      intp("凭据登记在哪个资产上（可选；优先使用）"),
+			"auth_index":    intp("用该资产上的第几条凭据（从 0 开始）"),
+			"username":      str("用户名（可选，asset_id 为空时用）"),
+			"password":      str("密码（可选；观测面打码）"),
+			"token":         str("token/会话值（可选；观测面打码）"),
+			"auth_mode":     str("form|json|basic|bearer|cookie，默认 form"),
+			"user_field":    str("表单用户名字段名，默认 username"),
+			"pass_field":    str("表单密码字段名，默认 password"),
+			"extra_fields":  str("额外字段，'k=v&k2=v2' 形式（可选）"),
+			"header":        str("附加请求头，每行 'Key: Value'（可选，如 X-Requested-With: XMLHttpRequest）；传 User-Agent 可覆盖默认 Chrome UA"),
+			"breaker_probe": boolp("【仅 asset_id 预置凭据】该凭据已熔断时，是否使用本任务的一次性试探放行（每任务每凭据仅一次；默认 false = 本地直接拒绝、不发请求）"),
 		}, "session", "url"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
@@ -684,6 +685,7 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 				PassField    string `json:"pass_field"`
 				ExtraFields  string `json:"extra_fields"`
 				Header       string `json:"header"`
+				BreakerProbe bool   `json:"breaker_probe"`
 			}
 			_ = json.Unmarshal(in, &a)
 			if strings.TrimSpace(a.Session) == "" || strings.TrimSpace(a.URL) == "" {
@@ -696,6 +698,7 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 			user, pass, token := strings.TrimSpace(a.Username), a.Password, strings.TrimSpace(a.Token)
 			authKindLabel := "explicit"
 			var breakerKey, breakerHash string // 非空 = 走预置凭据熔断（U1，上游 v0.4.82）
+			breakerNotice := ""                // 非空 = 本次用掉/拒绝了任务级一次性试探，需回给模型
 			if a.AssetID > 0 {
 				if t.as == nil {
 					return actool.Errorf("asset_id 需要 AssetStore（当前环境未启用）"), nil
@@ -724,10 +727,14 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 				// 预置凭据熔断（U1）：已因连续 401/403 熔断时，本地直接拒绝、不发
 				// 任何网络请求——这是它与「模型自己看 401 停手」的本质区别。凭据
 				// 内容变化（操作员改密）后哈希不同，熔断自动复位。
-				breakerKey, breakerHash = loginBreakerKey(t.taskID, a.AssetID, int64(idx), e.Username, e.Password+"\x00"+e.Token)
-				if locked, msg := loginBreakerCheck(breakerKey, breakerHash); locked {
+				// 计数按账号维度跨任务共享（G3 折中方案）；熔断期内本任务可用
+				// breaker_probe=true 申请一次试探放行。
+				breakerKey, breakerHash = loginBreakerKey(a.AssetID, idx, e.Username, e.Password+"\x00"+e.Token)
+				locked, msg := loginBreakerCheck(breakerKey, breakerHash, t.taskID, a.BreakerProbe)
+				if locked {
 					return actool.Errorf(msg), nil
 				}
+				breakerNotice = msg
 			}
 			mode := strings.ToLower(strings.TrimSpace(a.AuthMode))
 			if mode == "" {
@@ -844,6 +851,9 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 				case "success":
 					loginBreakerRecordSuccess(breakerKey, breakerHash)
 				}
+			}
+			if breakerNotice != "" {
+				res["note"] = res["note"].(string) + "\n" + breakerNotice
 			}
 			return jsonResult(res)
 		},
