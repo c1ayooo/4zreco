@@ -783,6 +783,8 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	}
 	rt := e.registerTaskRoutines(ctx, t.ID, 1+workers)
 	e.deleteMu.RUnlock()
+	// 开局窄面提示（U5）：任务首次启动时范围内资产 <10 → 活动流提醒预期。
+	e.warnNarrowScope(t)
 	e.touch(t.ID)
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.plannerLoop(loopCtx, t) })
 	for i := 0; i < workers; i++ {
@@ -894,6 +896,68 @@ func resetPlannerTimer(timer *time.Timer, d time.Duration) {
 	timer.Reset(d)
 }
 
+// warnFindingsWithoutReport 在任务落终态前检查「已上报但详细报告为空」的漏洞
+// （U5，上游 v0.4.57）。终局之后不再派 worker，这些缺口只能提示人在漏洞页补齐
+// ——报告导出时一条空报告漏洞会直接拉低交付质量（上游复盘：12 个任务累计 7 条
+// 无报告漏洞）。用 ListFindingsForExport（唯一带 report 列的查询）。
+func (e *Engine) warnFindingsWithoutReport(t *Task) {
+	if e.m == nil || e.m.pg == nil {
+		return
+	}
+	fs, err := e.m.pg.ListFindingsForExport(db.FindingFilter{TaskID: t.ID}, nil)
+	if err != nil {
+		return
+	}
+	var missing []string
+	for _, f := range fs {
+		if strings.TrimSpace(f.Report) == "" {
+			title := strings.TrimSpace(f.Name)
+			if title == "" {
+				title = strings.TrimSpace(f.VulnClass)
+			}
+			if title == "" {
+				title = "未分类"
+			}
+			missing = append(missing, fmt.Sprintf("#%d %s", f.ID, title))
+			if len(missing) >= 5 {
+				break
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+		Summary: fmt.Sprintf("收尾检查：%d 条漏洞缺少详细报告（%s…），可在漏洞页补齐后再导出", len(missing), strings.Join(missing, "、"))})
+}
+
+// warnNarrowScope 任务开局提示资产面宽窄（U5，上游 v0.4.58：薄面站点完整跑完
+// 流程但产出有限——提前让操作者知道预期，好调整目标/预算/超时）。settings 键
+// 记「已提醒过」：只在任务生命周期内发一次，重启不重发。
+func (e *Engine) warnNarrowScope(t *Task) {
+	if e.m == nil || e.m.pg == nil || e.m.assets == nil {
+		return
+	}
+	tid, err := strconv.ParseInt(t.ID, 10, 64)
+	if err != nil || tid <= 0 {
+		return
+	}
+	cov, err := e.m.assets.TaskCoverageWithSources(tid)
+	if err != nil || cov == nil || !cov.Enabled {
+		return
+	}
+	if cov.Denominator == 0 || cov.Denominator >= 10 {
+		return
+	}
+	key := "narrow_scope_warn_" + t.ID
+	if v, ok, _ := e.m.pg.GetSetting(key); ok && v == "done" {
+		return
+	}
+	_ = e.m.pg.SetSetting(key, "done")
+	e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
+		Summary: fmt.Sprintf("开局提示：当前范围内仅 %d 个资产——资产面较窄，预期产出有限；可考虑扩大范围或调低该任务的预算/超时", cov.Denominator)})
+}
+
 func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 	interval := plannerHeartbeatInterval(t)
 	// 心跳定时器在 loop 入口臂 = 从任务 start 计时:即使是跳过首轮 planner 的 seed 任务
@@ -969,6 +1033,8 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			}
 			t.drainTriggers() // 丢弃累积的 done/finding 触发，避免 goalless 长会话里无界增长
 			if active, err := t.Store.HasActiveIntent(); err == nil && !active {
+				// 落 done 前点名缺报告的漏洞（U5，见 warnFindingsWithoutReport）。
+				e.warnFindingsWithoutReport(t)
 				// frontier 抽干且无在跑意图 → 收尾。用 Guarded 版做 CAS，避免踩到并发的
 				// pause/delete/超时收尾的状态转换。
 				if won, err := e.m.SetTaskStatusGuarded(t.ID, "done"); err != nil {
@@ -1111,6 +1177,12 @@ func (e *Engine) handlePlannerRoundOutcome(t *Task, round int, triggers []agent.
 	// 不能拿来杀 worker。
 	if res.met && res.err == nil {
 		e.cancelExec(t.ID, agent.AbortGoalMet)
+	}
+	// 覆盖矩阵 / 纵深缺口提醒（U5，上游 v0.4.63）：提示词约束不住弱模型时，
+	// 引擎侧确定性补一层。不要求本轮 res.err==nil——超时/模型故障时同样要提醒。
+	if ectx.Err() == nil && !e.isSettling(t.ID) {
+		e.nudgeCoverageGaps(t)
+		e.nudgeDepthGaps(t)
 	}
 }
 

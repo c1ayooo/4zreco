@@ -296,7 +296,8 @@ func New(ctx context.Context, m *Manager, paths config.Paths) *Server {
 			log.Printf("[retester] seed: %v", err)
 		}
 		go s.evidenceStore().RunGC(s.ctx)
-		go s.recoverPendingPreviews() // 文档预览：恢复上次未完成的队列（v0.4.23）
+		go s.recoverPendingPreviews()     // 文档预览：恢复上次未完成的队列（v0.4.23）
+		go s.recoverEmptyFindingReports() // 空报告巡检：重启/崩溃后补写被中断的报告（U5，上游 v0.4.63）
 		s.seedPythonInterpreter()     // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
 		go newScheduler(s).Run(s.ctx) // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
