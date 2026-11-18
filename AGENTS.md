@@ -8,7 +8,13 @@
 
 4zreco = AI 自主渗透测试平台（Go 单体后端 + Next.js 静态导出前端 + PostgreSQL 唯一存储）。
 planner/worker 双角色多 Agent 自主推进，双图架构（资产图×探索图），三层拦截规则，全程证据留痕。
-接手自已删除的原作者仓库（基线 v0.3.15），现为独立演进项目。**仅供授权测试**（README 免责条款）。
+接手自已删除的原作者仓库（接手线 v0.3.15），现为独立演进项目。上游同源活跃仓库两支：
+chu0119/Pojun（remote `upstream`，通用同步）与 Domren/Jingwei（remote `upstream-jw`，
+深度同步；均**只 fetch、push url 已 DISABLED**）：内容基线 Pojun v0.4.30（2026-11-03），
+v0.4.31–0.4.81 已于 03f8469 全量迁移，余量（次级缺口 + 净新增）与双源监控说明见
+`docs/上游同步方案-2026-11-18.md`；上游增量由本机雷达自动监控（`~/.zcode/upstream-watch/`，
+仓库外基建，报告在 `~/.zcode/upstream-watch/reports/`，勿移入仓库）。**仅供授权测试**
+（README 免责条款）。
 
 ## 1. 常用命令
 
@@ -51,8 +57,12 @@ DSN 已落 `config.json`（.gitignore 已覆盖该文件），启动**不需要*
   关联远端时已按下方警示从本节移除明文）
 - 本机无 Docker、无 sudo 常规可用（sudo 密码属用户本人，勿写入任何文件）；
   全量测试连库方案（按需三选一）：(a) 系统 PG 上的 `4zreco_ci` 库（角色无 CREATEDB，
-  需用户本人手工建）；(b) `/usr/lib/postgresql/<版本>/bin` 的 initdb 在 /tmp 起一次性
-  trust 集群（15432 端口，测完即删，不碰系统 PG）；(c) §1 的 Docker 容器（有 Docker 时）。
+  需用户本人手工建）；(b) **`./scripts/setup-postgres.sh`**（已落地，2026-11-19）——
+  用 `/usr/lib/postgresql/<版本>/bin/initdb` 在 `mktemp -d /tmp` 起一次性 trust 集群，
+  默认 15432、被占则自动顺延，建 `4zreco_ci` 后直接 `go test -p 1 ./... -count=1`，
+  `trap` 清理、不碰系统 PG；可传包名只跑子集（如 `./scripts/setup-postgres.sh ./internal/agent/`），
+  也可用 `ZRECO_TEST_PG_PORT` / `ZRECO_PG_BIN` 覆盖端口与版本目录；
+  (c) §1 的 Docker 容器（有 Docker 时）。
 - ⚠️ 任何本机凭据（PG 密码、API key）一律不得写入本文件或任何入库文件。
 
 开发模式启动（后端 :8787 读 config.json，代理 :8788，前端 dev :3000）：
@@ -243,6 +253,8 @@ data/ dist/ *.key    运行态/构建产物（本地生成，已 gitignore，不
 部署与排障：`docs/部署手册.md`（含 LAN 源安装配方）。接手背景：`docs/项目交接文档.md`。
 项目主轴与对话绑定（projects/project_scope/任务对话挂载/切换器）：`docs/项目管理与对话绑定改造-2026-11-04.md`
 （明确不接资产围栏，project_scope 仅组织定义）。
+**上游（Pojun）同步话题的当前权威：`docs/上游同步方案-2026-11-18.md`**（U1-U6 工单、
+后排/不接清单、上游查阅姿势；新一轮同步直接在该文件追加工单，勿另开散篇）。
 核心设计四篇：`docs/01-双图架构.md` ~ `docs/04-审批与拦截.md`（04 为 2026-11-06 终稿：
 审批链路=hitl_mode 双轨 + checkpoint/Interrupt 版，表结构深权文仍是上方 Eino 方案；
 旧版在其下方 `docs/archive/`，只作背景）。
