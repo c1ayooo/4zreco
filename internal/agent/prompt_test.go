@@ -3,14 +3,19 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/c1ayooo/4zreco/internal/chains"
 )
+
+// stripChainsDiscipline 去掉 renderSystem 追加的 chains L2 固定尾，便于断言模板本体。
+func stripChainsDiscipline(s string) string { return strings.TrimSuffix(s, chains.Discipline()) }
 
 func TestRenderSystemOverrideAndFallback(t *testing.T) {
 	t.Cleanup(func() { PromptOverride = nil })
 
-	// no override → built-in default
+	// no override → built-in default（planner/worker 会再追加 chains L2 固定尾，比对前剥掉）
 	PromptOverride = nil
-	if got := renderSystem("planner", "DEFAULT", PlannerVars{Goal: "g"}); got != "DEFAULT" {
+	if got := stripChainsDiscipline(renderSystem("planner", "DEFAULT", PlannerVars{Goal: "g"})); got != "DEFAULT" {
 		t.Fatalf("no override should give default, got %q", got)
 	}
 
@@ -21,13 +26,13 @@ func TestRenderSystemOverrideAndFallback(t *testing.T) {
 		}
 		return "", false
 	}
-	if got := renderSystem("planner", "DEFAULT", PlannerVars{Goal: "拿下X", Scope: "*.x.com"}); got != "目标:拿下X 范围:*.x.com" {
+	if got := stripChainsDiscipline(renderSystem("planner", "DEFAULT", PlannerVars{Goal: "拿下X", Scope: "*.x.com"})); got != "目标:拿下X 范围:*.x.com" {
 		t.Fatalf("override render: %q", got)
 	}
 
 	// override referencing a non-catalog var → execution error → fallback to default
 	PromptOverride = func(k string) (string, bool) { return "{{.NotInCatalog}}", true }
-	if got := renderSystem("planner", "DEFAULT", PlannerVars{Goal: "x"}); got != "DEFAULT" {
+	if got := stripChainsDiscipline(renderSystem("planner", "DEFAULT", PlannerVars{Goal: "x"})); got != "DEFAULT" {
 		t.Fatalf("bad var should fall back to default, got %q", got)
 	}
 
