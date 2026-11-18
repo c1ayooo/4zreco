@@ -10,6 +10,7 @@ import {
   RotateCcwIcon,
   TriangleAlertIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -246,9 +247,19 @@ export function UpdateCard() {
         {info?.error && (
           <Alert variant="destructive">
             <TriangleAlertIcon />
-            <AlertDescription>无法连接 GitHub：{info.error}　可在上方配置全局代理后重试。</AlertDescription>
+            <AlertDescription>检查更新失败：{info.error}</AlertDescription>
           </Alert>
         )}
+
+        <p className="text-muted-foreground text-xs">
+          检查和下载更新优先使用「
+          <Link href="/system/hostenv#install-proxy-settings" className="underline underline-offset-4">
+            宿主环境 → 装机代理
+          </Link>
+          」（也可由 <code>ZRECO_INSTALL_PROXY</code> 提供）。未配置装机代理时才使用全局代理，两者都未配置时直连。
+          {info?.mode === "docker" &&
+            "Docker 桥接网络下，127.0.0.1 指向容器自身。代理若运行在宿主机上，请填容器可访问的地址。"}
+        </p>
 
         {info && !info.comparable && info.reason && <p className="text-muted-foreground text-xs">{info.reason}</p>}
 

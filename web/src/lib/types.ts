@@ -1965,6 +1965,13 @@ export interface HostTool {
 }
 
 /** 一键安装是否可用，取决于特权助手 4zreco-hostd 是否在线（Docker 部署下不在线）。 */
+export type InstallSourcePreset = "" | "tencent" | "tuna";
+
+export interface HostInstallSources {
+  apt: InstallSourcePreset;
+  pypi: InstallSourcePreset;
+}
+
 export interface HostenvInstaller {
   available: boolean;
   reason: string;
@@ -1974,6 +1981,10 @@ export interface HostenvInstaller {
   upgrade_required?: boolean;
   socket: string;
   proxy: string;
+  /** 当前安装源预设（T1，上游 v0.4.86）；空 = 系统默认源。 */
+  sources?: HostInstallSources;
+  /** 助手是否支持安装源选项（/version 能力位）；老助手=false。 */
+  sources_supported?: boolean;
 }
 
 export interface HostenvStatus {

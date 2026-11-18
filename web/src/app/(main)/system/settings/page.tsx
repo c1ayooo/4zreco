@@ -705,6 +705,7 @@ export default function SystemSettingsPage() {
               </CardTitle>
               <CardDescription>
                 所有 Agent 的目标流量经此代理出网，支持 http / https / socks5，留空直连。
+                检查和下载程序更新优先使用宿主环境中的「装机代理」，未配置时才使用全局代理。
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-2">

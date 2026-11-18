@@ -136,7 +136,7 @@ func fetchRelease(ctx context.Context, c *http.Client, apiURL, what string) (*Re
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("访问 GitHub 失败（可在系统设置里配置全局代理）: %w", err)
+		return nil, fmt.Errorf("访问 GitHub 失败: %w", err)
 	}
 	defer resp.Body.Close()
 

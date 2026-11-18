@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/c1ayooo/4zreco/internal/hostd"
+	"github.com/c1ayooo/4zreco/internal/hosttools"
 )
 
 // startFakeHostd 在临时 unix socket 上起一个最小 hostd 替身：
@@ -103,6 +107,24 @@ func TestHostenvInstallBatch(t *testing.T) {
 	}
 	if reasons["sqlmap"] == "" {
 		t.Fatal("sqlmap 被助手拒绝时应带回原因")
+	}
+}
+
+// T1（上游 v0.4.86）：选中镜像预设时，老助手没有 /jobs/with-sources 路由 →
+// 主服务必须翻译成 409 显式失败（fail-closed），不能静默退回默认源下载；
+// 系统默认源（空预设）仍走 /jobs 老路由照常工作。本地 fake hostd 只挂了
+// POST /jobs，with-sources 天然 404，正好命中 409 翻译路径。
+func TestHostenvMirror(t *testing.T) {
+	t.Setenv("ZRECO_HOSTD_SOCKET", startFakeHostd(t))
+	s := &Server{}
+	tool := hosttools.Tool{ID: "nmap", Kind: hosttools.KindApt}
+	_, code, err := s.forwardHostInstall(context.Background(), tool, "", hostd.InstallSources{APT: "tencent"})
+	if err != nil || code != http.StatusConflict {
+		t.Fatalf("选中镜像应要求助手支持(409): %d %v", code, err)
+	}
+	_, code, err = s.forwardHostInstall(context.Background(), tool, "", hostd.InstallSources{})
+	if err != nil || code != http.StatusOK {
+		t.Fatalf("默认源安装应照常走老路由: %d %v", code, err)
 	}
 }
 

@@ -1048,6 +1048,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tools/inventory", s.toolsInventory)
 	// 宿主环境:体检(含一键安装可用性)+ 一键安装(经特权助手 4zreco-hostd)
 	mux.HandleFunc("GET /api/hostenv/status", s.hostenvStatus)
+	mux.HandleFunc("PUT /api/hostenv/sources", s.hostenvSaveSources)
 	mux.HandleFunc("GET /api/c2/config", s.c2ConfigGet)
 	mux.HandleFunc("PUT /api/c2/config", s.c2ConfigPut)
 	mux.HandleFunc("GET /api/listeners", s.listenerList)
@@ -3804,7 +3805,7 @@ func (s *Server) settingsPayload() map[string]any {
 		"tavily_key_set":            strings.TrimSpace(tavilyKey) != "",
 		"web_search_proxy":          proxy,                       // 独立出口代理(http/https/socks5)，空=直连
 		"global_proxy":              s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
-		"install_proxy":             s.installProxy(),            // 装机代理：只用于宿主工具安装(apt/GitHub下载)，与目标流量无关
+		"install_proxy":             s.installProxy(),            // 装机代理：用于宿主工具安装和程序更新等维护请求
 		"python_interpreter":        strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
 		"workers":                   s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
 		// 冷节点压缩的输出预算与墙钟上限。0 = 用默认值(32768 token / 20 分钟)。
@@ -3918,7 +3919,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		TavilyKey        *string `json:"tavily_search_api_key"`
 		WebSearchProxy   *string `json:"web_search_proxy"`   // 独立出口代理(http/https/socks5)；null=不改，""=清空
 		GlobalProxy      *string `json:"global_proxy"`       // 全局出口代理(http/https/socks5)；null=不改，""=清空(直连)
-		InstallProxy     *string `json:"install_proxy"`      // 装机代理：宿主工具安装用；null=不改，""=清空(直连)。不触发 agent 重建
+		InstallProxy     *string `json:"install_proxy"`      // 装机代理：null=不改，""=清空设置。不触发 agent 重建
 		PythonInterp     *string `json:"python_interpreter"` // 自定义脚本工具的 python 解释器路径
 		Workers          *int    `json:"workers"`            // 并发工作 agent 数(>0)；对之后启动的任务生效
 		// 冷节点压缩的输出预算与墙钟上限。null=不改，<=0=恢复默认。

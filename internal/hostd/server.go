@@ -142,6 +142,15 @@ func newID() string {
 // Start 发起一次安装。toolID 必须命中 hosttools 白名单,否则拒绝。
 // parent 必须是进程级 ctx,不能传 HTTP 请求的 ctx(见 Server.base 注释)。
 func (s *Server) Start(parent context.Context, toolID, proxy string) (*Job, error) {
+	return s.start(parent, toolID, proxy, InstallSources{})
+}
+
+// start 支持安装源镜像预设（T1，上游 v0.4.86）：sources 只收预设 ID（Validate
+// 拒绝任意 URL——特权助手不接受 web 服务传来的任意软件源地址）。
+func (s *Server) start(parent context.Context, toolID, proxy string, sources InstallSources) (*Job, error) {
+	if err := sources.Validate(); err != nil {
+		return nil, err
+	}
 	tool, ok := hosttools.Lookup(toolID)
 	if !ok {
 		return nil, fmt.Errorf("未知工具 id: %q(不在白名单内)", toolID)
@@ -177,7 +186,7 @@ func (s *Server) Start(parent context.Context, toolID, proxy string) (*Job, erro
 			return
 		}
 		j.setState(StateRunning)
-		code, err := s.run(ctx, j, tool, cleanProxy)
+		code, err := s.run(ctx, j, tool, cleanProxy, sources)
 		j.mu.Lock()
 		j.ExitCode = code
 		j.EndedAt = time.Now()
@@ -237,14 +246,14 @@ func (s *Server) Cancel(id string) bool {
 // ── 执行 ─────────────────────────────────────────
 
 // run 按配方执行,返回退出码与错误。
-func (s *Server) run(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
+func (s *Server) run(ctx context.Context, j *Job, tool hosttools.Tool, proxy string, sources InstallSources) (int, error) {
 	switch tool.Kind {
 	case hosttools.KindApt:
-		return s.runApt(ctx, j, tool, proxy)
+		return s.runApt(ctx, j, tool, proxy, sources.APT)
 	case hosttools.KindGitHub:
 		return s.runGitHub(ctx, j, tool, proxy)
 	case hosttools.KindPip:
-		return s.runPip(ctx, j, tool, proxy)
+		return s.runPip(ctx, j, tool, proxy, sources.PyPI)
 	case hosttools.KindScript:
 		// 所有 script 类安装统一套 wall-clock 超时：catalog 的脚本里包含 GitHub/
 		// 镜像下载，网络窗口差时 curl 没有内建超时会无限等待，把串行安装队列卡死
@@ -286,25 +295,47 @@ func (w *logWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (s *Server) runApt(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
+func (s *Server) runApt(ctx context.Context, j *Job, tool hosttools.Tool, proxy, preset string) (int, error) {
 	if s.pkgMgr == PkgNone {
 		return 1, fmt.Errorf("本机未检测到 apt/dnf")
 	}
+	var sourceArgs []string
+	if s.pkgMgr == PkgApt && preset != "" {
+		args, cleanup, err := aptSourceArgs("/etc/apt", preset)
+		if err != nil {
+			return 1, fmt.Errorf("准备 APT 镜像: %w", err)
+		}
+		defer cleanup()
+		sourceArgs = args
+		j.append(fmt.Sprintf("[*] APT 镜像: %s\n", preset))
+	}
 	// 先刷新索引;失败不致命(可能只是某个源不可达),继续尝试安装
-	if code, err := s.execLogged(ctx, j, firstWord(aptUpdateArgv(s.pkgMgr, proxy)),
-		aptUpdateArgv(s.pkgMgr, proxy)[1:], []string{"DEBIAN_FRONTEND=noninteractive"}); err != nil {
+	update := aptUpdateArgv(s.pkgMgr, proxy)
+	updateArgs := update[1:]
+	if len(sourceArgs) > 0 {
+		// 保留宿主的默认索引文件：镜像源只服务本次任务，任务后宿主 apt 仍能走原源。
+		updateArgs = append(updateArgs, "-o", "APT::Get::List-Cleanup=false")
+		updateArgs = append(updateArgs, sourceArgs...)
+	}
+	env := []string{"DEBIAN_FRONTEND=noninteractive"}
+	if code, err := s.execLogged(ctx, j, update[0], updateArgs, env); err != nil {
 		j.append(fmt.Sprintf("[warn] 索引刷新失败(退出码 %d),继续尝试安装\n", code))
 	}
 	argv, err := aptArgv(tool, s.pkgMgr, proxy)
 	if err != nil {
 		return 1, err
 	}
-	return s.execLogged(ctx, j, argv[0], argv[1:], []string{"DEBIAN_FRONTEND=noninteractive"})
+	return s.execLogged(ctx, j, argv[0], append(sourceArgs, argv[1:]...), env)
 }
 
-func (s *Server) runPip(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
+func (s *Server) runPip(ctx context.Context, j *Job, tool hosttools.Tool, proxy, preset string) (int, error) {
 	argv := pipArgv(tool, proxy)
-	return s.execLogged(ctx, j, argv[0], argv[1:], []string{"PIP_DISABLE_PIP_VERSION_CHECK=1"})
+	env := []string{"PIP_DISABLE_PIP_VERSION_CHECK=1"}
+	if index := pypiIndex(preset); index != "" {
+		env = append(env, "PIP_INDEX_URL="+index)
+		j.append(fmt.Sprintf("[*] PyPI 镜像: %s\n", preset))
+	}
+	return s.execLogged(ctx, j, argv[0], argv[1:], env)
 }
 
 // proxyEnv 把已校验的代理注入子进程环境，供 curl/git/pip/gem 等脚本使用。
@@ -552,13 +583,6 @@ func installFromZip(j *Job, zr *zip.Reader, tool hosttools.Tool) (int, error) {
 
 // ── 辅助 ─────────────────────────────────────────
 
-func firstWord(argv []string) string {
-	if len(argv) == 0 {
-		return ""
-	}
-	return argv[0]
-}
-
 // httpClient 构造带代理的 HTTP 客户端。
 //
 // socks5 必须走 golang.org/x/net/proxy 的 SOCKS5 dialer：
@@ -665,7 +689,7 @@ func (s *Server) Handler() http.Handler {
 	// /version 供主服务做版本对齐：主程序自我升级后会拿自己的版本号来敲门，
 	// 助手发现自己落后就自我换装（见 UpgradeSelf 的注释：只能由它自己来做）。
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"service": "4zreco-hostd", "version": s.Version})
+		writeJSON(w, 200, map[string]any{"service": "4zreco-hostd", "version": s.Version, "install_sources": true})
 	})
 
 	mux.HandleFunc("POST /self-upgrade", func(w http.ResponseWriter, r *http.Request) {
@@ -709,22 +733,27 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"tools": hosttools.Inventory()})
 	})
 
-	mux.HandleFunc("POST /jobs", func(w http.ResponseWriter, r *http.Request) {
+	startJob := func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ToolID string `json:"tool_id"`
-			Proxy  string `json:"proxy"`
+			ToolID  string         `json:"tool_id"`
+			Proxy   string         `json:"proxy"`
+			Sources InstallSources `json:"sources"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
 			writeJSON(w, 400, map[string]any{"error": "请求体不是合法 JSON"})
 			return
 		}
-		job, err := s.Start(s.base, req.ToolID, req.Proxy)
+		job, err := s.start(s.base, req.ToolID, req.Proxy, req.Sources)
 		if err != nil {
 			writeJSON(w, 400, map[string]any{"error": err.Error()})
 			return
 		}
 		writeJSON(w, 201, job)
-	})
+	}
+	mux.HandleFunc("POST /jobs", startJob)
+	// 带安装源预设的安装走别名路由：老助手没有该路由,404 由主服务翻译成 409
+	// 显式失败——绝不能静默忽略预设、退回默认源下载。
+	mux.HandleFunc("POST /jobs/with-sources", startJob)
 
 	mux.HandleFunc("GET /jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		job, ok := s.Get(r.PathValue("id"))
