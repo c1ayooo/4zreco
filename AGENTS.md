@@ -100,7 +100,8 @@ DSN 已落 `config.json`（.gitignore 已覆盖该文件），启动**不需要*
    Windows 本地仍按 §1 用环境变量前缀形式，不要用该 script）。
 4. **提示词改动会随 `SeedPromptVersioned` 自动下发**已部署实例（用户手改过的不受影响）——改 worker/planner 默认模板不用写迁移。
 5. **拦截规则新增走 seed 批次**（v1…v6 先例，v6=zombie/proton 审批规则，`internal/db/db.go:713-750` 一带）：除 `seedBuiltinInterceptRulesBatch` 外**必须**配按名补种 + enabled 工具集合并（v4/v5 有真实升级路径缺陷教训：flag 早退会吞掉新规则）。
-6. git push 对 github.com 常因本机代理抖动失败——`git -c http.proxy= -c https.proxy= push` 直连 + 重试循环（30-45s 间隔）+ `git ls-remote` 确认落地。
+6. git push 对 github.com 常因本机代理抖动失败——`git -c http.proxy= -c https.proxy= push` 直连 + 重试循环（30-45s 间隔）+ `git ls-remote` 确认落地。⚠️ HTTPS remote（upstream/upstream-jw）还要加 `-c http.https://github.com.proxy=`——`~/.gitconfig` 里的 `http.https://github.com.proxy` 是 URL 域限定键，`-c http.proxy=` 压不住它（2026-11-19 实证：不加就一直连 127.0.0.1:7897）。
+7. **release tag 命名空间**：上游 Pojun 历史版本占满 `v0.3.16`–`v0.3.99` 和现役 `v0.4.x`（Jingwei 占 `v1.x`），且上游雷达按 refspec 受限追踪（`~/.zcode/upstream-watch/run.sh`，只拉 v0.4.*/v1.*）。若 `git tag v0.3.x` 报 already exists，是上游 fetch 带进来的同名旧标记——`git tag -d` 后重建以 origin 为准；origin 的 tags/Releases 始终是我们自己的（v0.3.19=5893f517 实证）。给 upstream 手动 fetch 建议 `--no-tags` 防再污染。
 
 ## 4. 关键坑（真实踩过的）
 
