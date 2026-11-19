@@ -1055,7 +1055,7 @@ export default function TasksPage() {
                   </EmptyHeader>
                 </Empty>
               ) : (
-                <Table className="min-w-[80rem] table-fixed">
+                <Table className="min-w-[108rem] table-fixed">
                   <TableHeader className="[&_tr]:border-t">
                     <TableRow>
                       <TableHead className="w-10">
@@ -1070,7 +1070,7 @@ export default function TasksPage() {
                         label="ID"
                         activeField={sortField}
                         direction={sortDirection}
-                        className="font-mono"
+                        className="w-20 font-mono"
                         onSort={sortTasksBy}
                       />
                       <TableHead
@@ -1124,19 +1124,21 @@ export default function TasksPage() {
                         label="状态"
                         activeField={sortField}
                         direction={sortDirection}
+                        className="w-24"
                         onSort={sortTasksBy}
                       />
-                      <TableHead className="text-center">目标进度</TableHead>
-                      <TableHead className="text-center" title="严重 / 高 / 中 / 低">
+                      <TableHead className="w-20 text-center">目标进度</TableHead>
+                      <TableHead className="w-20 text-center" title="严重 / 高 / 中 / 低">
                         漏洞
                       </TableHead>
-                      <TableHead className="text-center">运行中 Worker</TableHead>
+                      <TableHead className="w-32 text-center">运行中 Worker</TableHead>
                       <SortableTaskHead
                         field="created"
                         label="创建时间"
                         activeField={sortField}
                         direction={sortDirection}
                         align="right"
+                        className="w-28"
                         onSort={sortTasksBy}
                       />
                       <SortableTaskHead
@@ -1145,6 +1147,7 @@ export default function TasksPage() {
                         activeField={sortField}
                         direction={sortDirection}
                         align="right"
+                        className="w-28"
                         onSort={sortTasksBy}
                       />
                       <TableHead
