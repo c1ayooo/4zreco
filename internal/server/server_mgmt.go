@@ -130,6 +130,33 @@ func (s *Server) abortTaskDelete(taskID string) {
 	s.engine.AbortDelete(taskID, keepPaused)
 }
 
+// Delete-rejection sentinels shared by the single-task endpoint and project
+// deletion, so both surfaces report identical causes.
+var (
+	errTaskDeleteBarrier = errors.New("任务正在删除")
+	errTaskDeleteBusy    = errors.New("任务仍有运行中的 Agent，删除已取消")
+)
+
+// taskDeleteDrainError means side-question drains did not settle before the
+// deadline; the deletion was cancelled and is retryable (→ 409, 同原单任务端点).
+type taskDeleteDrainError struct{ err error }
+
+func (e *taskDeleteDrainError) Error() string { return e.err.Error() }
+func (e *taskDeleteDrainError) Unwrap() error { return e.err }
+
+// taskDeleteErrStatus reports whether a deleteTaskFully rejection maps onto the
+// single-task endpoint's retryable 409（屏障占用 / Agent 未静默 / 旁路未落盘）.
+func taskDeleteErrStatus(err error) (int, bool) {
+	if errors.Is(err, errTaskDeleteBarrier) || errors.Is(err, errTaskDeleteBusy) {
+		return http.StatusConflict, true
+	}
+	var drain *taskDeleteDrainError
+	if errors.As(err, &drain) {
+		return http.StatusConflict, true
+	}
+	return 0, false
+}
+
 func (s *Server) pgDeleteTask(w http.ResponseWriter, r *http.Request) {
 	id, ok := canonicalTaskID(r.PathValue("id"))
 	if !ok {
@@ -141,57 +168,76 @@ func (s *Server) pgDeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if !s.beginTaskDelete(id) {
-		writeErr(w, http.StatusConflict, "任务正在删除")
-		return
-	}
-	deleted := false
-	defer func() {
-		if !deleted {
-			s.abortTaskDelete(id)
-		}
-	}()
-
-	// Main-agent runs use a separate context from planner/workers. Cancel it, then
-	// wait until both execution domains have returned before removing transcripts.
-	s.cancelTaskChat(id, agent.AbortTaskDeleted)
-	drainCtx, cancelDrain := context.WithTimeout(r.Context(), taskDeleteDrainTimeout)
-	defer cancelDrain()
-	if err := s.waitTaskQuiescent(drainCtx, id); err != nil {
-		writeErr(w, http.StatusConflict, "任务仍有运行中的 Agent，删除已取消")
-		return
-	}
-
-	if err := s.drainTaskSideQuestions(drainCtx, id); err != nil {
-		writeErr(w, http.StatusConflict, err.Error())
-		return
-	}
-	result, err := s.m.DeleteTask(id, opts)
+	result, err := s.deleteTaskFully(r.Context(), id, opts)
 	if err != nil {
 		var committed *taskDeleteCommittedError
 		if errors.As(err, &committed) {
-			// PostgreSQL is already gone. Complete runtime teardown and return the
-			// auditable counts together with the post-commit cleanup warning.
-			s.engine.StopTask(id)
-			s.taskAgentMu.Lock()
-			delete(s.taskAgents, id)
-			s.taskAgentMu.Unlock()
-			deleted = true
+			// PostgreSQL is already gone. Return the auditable counts together with
+			// the post-commit cleanup warning.
 			writeCommittedTaskDelete(w, result, err)
+			return
+		}
+		if status, ok := taskDeleteErrStatus(err); ok {
+			writeErr(w, status, err.Error())
 			return
 		}
 		writeErr(w, 500, err.Error())
 		return
 	}
-	// Manager has removed the task from the registry, so no new API operation can
-	// resolve it. Now stop and join every task-owned Engine goroutine and clear its
-	// lifecycle maps before releasing the delete barrier.
-	s.engine.StopTask(id)
-	s.taskAgentMu.Lock()
-	delete(s.taskAgents, id)
-	s.taskAgentMu.Unlock()
-	deleted = true
 	writeJSON(w, 200, result)
+}
+
+// deleteTaskFully runs the full single-task teardown shared by the HTTP delete
+// endpoint and project deletion: delete barrier, main-agent chat cancel, agent
+// quiesce drain, side-question drain, database cascade, runtime teardown. ctx
+// bounds the quiesce/side-question drains — the endpoint passes r.Context()
+// (client disconnect cancels the wait, as it always has), while the project
+// cascade passes context.Background() so a disconnect can't leave the project
+// half-deleted. On a *taskDeleteCommittedError the task stays deleted and
+// result carries the auditable counts — callers must treat it as success with
+// a warning.
+func (s *Server) deleteTaskFully(ctx context.Context, taskID string, opts DeleteTaskOptions) (DeleteTaskResult, error) {
+	result := DeleteTaskResult{Deleted: taskID}
+	if !s.beginTaskDelete(taskID) {
+		return result, errTaskDeleteBarrier
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			s.abortTaskDelete(taskID)
+		}
+	}()
+
+	// Main-agent runs use a separate context from planner/workers. Cancel it, then
+	// wait until both execution domains have returned before removing transcripts.
+	s.cancelTaskChat(taskID, agent.AbortTaskDeleted)
+	drainCtx, cancelDrain := context.WithTimeout(ctx, taskDeleteDrainTimeout)
+	defer cancelDrain()
+	if err := s.waitTaskQuiescent(drainCtx, taskID); err != nil {
+		return result, errTaskDeleteBusy
+	}
+
+	if err := s.drainTaskSideQuestions(drainCtx, taskID); err != nil {
+		return result, &taskDeleteDrainError{err: err}
+	}
+	result, err := s.m.DeleteTask(taskID, opts)
+	if err != nil {
+		var committedErr *taskDeleteCommittedError
+		if !errors.As(err, &committedErr) {
+			return result, err
+		}
+		// PostgreSQL is already gone. Fall through to runtime teardown and surface
+		// the auditable counts together with the post-commit cleanup warning.
+	}
+	// Manager has removed the task from the registry (or its DB row is gone), so
+	// no new API operation can resolve it. Now stop and join every task-owned
+	// Engine goroutine and clear the lifecycle maps before releasing the barrier.
+	s.engine.StopTask(taskID)
+	s.taskAgentMu.Lock()
+	delete(s.taskAgents, taskID)
+	s.taskAgentMu.Unlock()
+	committed = true
+	return result, err
 }
 
 func writeCommittedTaskDelete(w http.ResponseWriter, result DeleteTaskResult, err error) {

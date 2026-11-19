@@ -1440,7 +1440,10 @@ export const api = {
   createProject: (name: string, description = "") => post<Project>("/projects", { name, description }),
   updateProject: (id: number, input: { name: string; description: string; status?: string }) =>
     patch<Project>(`/projects/${id}`, input),
-  deleteProject: (id: number) => del<{ ok: boolean }>(`/projects/${id}`),
+  deleteProject: (id: number) =>
+    del<{ ok: boolean; tasks_deleted: number; conversations_deleted: number; cleanup_warning?: string }>(
+      `/projects/${id}`,
+    ),
   addProjectScope: (id: number, scope: string, reason = "") =>
     post<{ added: number; skipped: number; invalid: number; errors: string[]; project: Project }>(
       `/projects/${id}/scope`,

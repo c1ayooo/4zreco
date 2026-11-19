@@ -180,8 +180,13 @@ export default function ProjectsPage() {
     if (!deleteTarget || deleting) return;
     setDeleting(true);
     try {
-      await api.deleteProject(deleteTarget.id);
-      toast.success(`项目「${deleteTarget.name}」已删除，关联任务/对话已解除挂载`);
+      const r = await api.deleteProject(deleteTarget.id);
+      const summary = `项目「${deleteTarget.name}」已删除，${r.tasks_deleted} 个任务与 ${r.conversations_deleted} 个对话一并删除`;
+      if (r.cleanup_warning) {
+        toast.warning(`${summary}；部分外部数据清理未完成：${r.cleanup_warning}`);
+      } else {
+        toast.success(summary);
+      }
       setDeleteTarget(null);
       await load();
     } catch (e) {
@@ -425,7 +430,7 @@ export default function ProjectsPage() {
             <DialogTitle>删除项目「{deleteTarget?.name}」？</DialogTitle>
             <DialogDescription>
               项目范围随之删除；挂在本项目下的 {deleteTarget?.task_count ?? 0} 个任务与{" "}
-              {deleteTarget?.conversation_count ?? 0} 个对话会解除挂载（本身不被删除）。此操作不可撤销。
+              {deleteTarget?.conversation_count ?? 0} 个对话会一并删除。此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

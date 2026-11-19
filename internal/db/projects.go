@@ -65,11 +65,44 @@ WHERE id=$1
 RETURNING `+projectCols, id, name, description, status))
 }
 
-// DeleteProject removes a project. Scope rows cascade; tasks/conversations keep
-// existing with project_id set to NULL (FK ON DELETE SET NULL).
+// DeleteProject removes a project. Scope rows cascade; any task/conversation
+// still pointing at the project (e.g. archived cold tasks) keeps existing with
+// project_id set to NULL (FK ON DELETE SET NULL). Live tasks and conversations
+// are deleted by the server layer before this runs — see Server.deleteProject.
 func (s *ProjectStore) DeleteProject(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM projects WHERE id=$1`, id)
 	return err
+}
+
+// queryIDList scans a single bigint id column (shared shape of the two project
+// cascade lookups below).
+func (s *ProjectStore) queryIDList(query string, args ...any) ([]int64, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ProjectLiveTaskIDs returns the ids of a project's live (non-archived) tasks,
+// i.e. the ones the server layer deletes together with the project. Archived
+// cold tasks are excluded: their archive stubs must survive for restore.
+func (s *ProjectStore) ProjectLiveTaskIDs(projectID int64) ([]int64, error) {
+	return s.queryIDList(`SELECT id FROM tasks WHERE project_id=$1 AND deleted_at IS NULL ORDER BY id`, projectID)
+}
+
+// ProjectConversationIDs returns the ids of a project's conversations.
+func (s *ProjectStore) ProjectConversationIDs(projectID int64) ([]int64, error) {
+	return s.queryIDList(`SELECT id FROM conversations WHERE project_id=$1 ORDER BY id`, projectID)
 }
 
 // GetProject returns one project enriched with counts and scope (empty Project

@@ -1516,28 +1516,6 @@ func (m *Manager) UpdateTaskMetadata(taskID string, patch pgdb.TaskPatch) (*Task
 	return task, nil
 }
 
-// DetachProjectFromTasks clears the in-memory project association of a deleted
-// project's tasks. The DB side is the FK ON DELETE SET NULL; this keeps the
-// manager's lifecycle snapshots consistent without a restart.
-func (m *Manager) DetachProjectFromTasks(projectID int64) {
-	if projectID <= 0 {
-		return
-	}
-	m.mu.RLock()
-	live := make([]*Task, 0, 4)
-	for _, t := range m.tasks {
-		if t.ProjectID != nil && *t.ProjectID == projectID {
-			live = append(live, t)
-		}
-	}
-	m.mu.RUnlock()
-	for _, t := range live {
-		t.updateLifecycle(func(state *taskLifecycleState) {
-			state.ProjectID = nil
-		})
-	}
-}
-
 // CreateTask creates a task + its exploration and makes it active.
 // timeoutSeconds is the task-level wall-clock budget (0 = 不限时).
 func (m *Manager) CreateTask(description, goal string, llmProfileID *int64, timeoutSeconds, planHeartbeatSeconds int) (*Task, error) {

@@ -1,9 +1,15 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/c1ayooo/4zreco/internal/sidequestion"
 )
 
 // ---------- projects (任务/对话的归属主轴) ----------
@@ -107,13 +113,83 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	p, err := pg.Projects().GetProject(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if p.ID == 0 {
+		writeErr(w, 404, "项目不存在")
+		return
+	}
+	taskIDs, err := pg.Projects().ProjectLiveTaskIDs(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	convIDs, err := pg.Projects().ProjectConversationIDs(id)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+
+	// 任务先删：逐个走完整 teardown（删除屏障 + 主对话取消 + Agent 静默等待 +
+	// 级联），与单任务删除端点同一契约——静默等待覆盖建任务后的异步目标拆解，
+	// 真正在跑的任务静默超时后按 busy 拒绝。这里用 Background：级联要么删完要么
+	// 明确报错，客户端断连不留半个删了一半的项目。归档冷任务不在此列
+	// （ProjectLiveTaskIDs 已排除），其归档包保留、仅随项目行解除挂载。
+	tasksDeleted := 0
+	var warnings []string
+	for _, tid := range taskIDs {
+		_, err := s.deleteTaskFully(context.Background(), strconv.FormatInt(tid, 10), DeleteTaskOptions{})
+		if err != nil {
+			var committed *taskDeleteCommittedError
+			if errors.As(err, &committed) {
+				// DB 已删、仅外部清理未竟：任务视为已删，警告随响应带回。
+				tasksDeleted++
+				warnings = append(warnings, fmt.Sprintf("#%d：%v", tid, err))
+				continue
+			}
+			msg := fmt.Sprintf("#%d：%v", tid, err)
+			if tasksDeleted > 0 {
+				// 4xx 文案原样透传给前端，把部分进度说清楚；500 走 writeErr 的
+				// U8 脱敏固定文案，丢进度可接受（重试自愈：已删任务退出 live 列表）。
+				msg = fmt.Sprintf("已删 %d 个任务后中止：%s", tasksDeleted, msg)
+			}
+			if status, ok := taskDeleteErrStatus(err); ok {
+				writeErr(w, status, msg)
+			} else {
+				writeErr(w, 500, msg)
+			}
+			return
+		}
+		tasksDeleted++
+	}
+
+	// 对话：先取消在途 chat 与旁路提问（与批量删除端点同款），再一把删。
+	for _, cid := range convIDs {
+		s.cancelConversation(cid)
+		s.cancelSideWhere(func(p sidequestion.Parent) bool { return p.ConversationID == cid })
+	}
+	convDeleted, err := pg.DeleteConversations(convIDs)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+
 	if err := pg.Projects().DeleteProject(id); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	// DB 侧 FK 已置空；内存里的任务快照同步解除挂载（不然 DTO 显示旧项目直到重启）。
-	s.m.DetachProjectFromTasks(id)
-	writeJSON(w, 200, map[string]any{"ok": true})
+	resp := map[string]any{
+		"ok":                    true,
+		"tasks_deleted":         tasksDeleted,
+		"conversations_deleted": len(convDeleted),
+	}
+	if len(warnings) > 0 {
+		resp["cleanup_warning"] = strings.Join(warnings, "; ")
+	}
+	writeJSON(w, 200, resp)
 }
 
 func (s *Server) addProjectScope(w http.ResponseWriter, r *http.Request) {
