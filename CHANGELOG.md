@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-11-19
+
+### 变更：删除项目改为级联删除挂载的任务与对话（行为变更）
+
+- `DELETE /api/projects/{id}` 不再把挂载的任务/对话「解除挂载」，而是**一并删除**：任务逐个走与
+  单任务删除端点同一套 teardown（`Server.deleteTaskFully`：删除屏障→取消主对话→Agent 静默等待
+  →探索子图级联；正在运行的任务静默超时后按 busy 409 拒绝并指明任务号），对话走批量删除同款
+  （取消在途 chat/旁路提问后一把删）。归档冷任务不在级联范围（归档包保留可恢复，仅随项目行
+  解除挂载）。任务默认只删探索子图，全局资产/流量/文件/漏洞/LLM 记录保留——深度清理仍在任务页
+  勾选完成。
+- 响应新增 `tasks_deleted` / `conversations_deleted` 计数与可选 `cleanup_warning`；项目页确认
+  弹窗文案与成功 toast 同步改口径。
+- 单任务删除流程抽成 `Server.deleteTaskFully` 供两处复用，原 `DELETE /api/tasks/{id}` 行为与
+  状态码映射不变（静默等待仍随请求上下文取消）；项目级联则用独立超时上下文跑完——客户端断连
+  不留删了一半的项目。新增 server 测试 `project_delete_cascade_test.go`（真 PG：级联删任务/对话、
+  未挂任务存活）。
+
 ### 新增：Jingwei 第三批 J2/J3/J4/J7 + U7 提示词三段 + U8 两项收口
 
 - **`assess_nuclei_hit` 判定工具（J2，Jingwei v1.6.5 `verdict`）**：把「模板命中 ≠
